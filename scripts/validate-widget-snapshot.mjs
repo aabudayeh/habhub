@@ -380,6 +380,63 @@ assert.equal(
   "Featured widgets must follow a Today filter that hides To-Dos",
 );
 
+const labelFilteredState = {
+  ...state,
+  settings: {
+    ...state.settings,
+    showTodosToday: true,
+    activeTodayTrackerViewFilterId: "widget-label-filter",
+    trackerViewFilters: [
+      {
+        id: "widget-label-filter",
+        name: "Work",
+        metricIds: [],
+        includeTodos: true,
+        todoLabels: ["work"],
+      },
+    ],
+  },
+  todos: [
+    {
+      id: "widget-work-todo",
+      title: "Draft #Work plan",
+      createdAt: `${today}T08:00:00.000Z`,
+      priority: "normal",
+      reminders: [],
+      completedDates: [],
+    },
+    {
+      id: "widget-home-todo",
+      title: "Tidy #Home",
+      createdAt: `${today}T09:00:00.000Z`,
+      priority: "normal",
+      reminders: [],
+      completedDates: [],
+    },
+  ],
+};
+const labelFilteredHero = todayHeroSummary(
+  labelFilteredState,
+  state.currentUserId,
+  today,
+);
+assert.deepEqual(
+  labelFilteredHero.todos.map((todo) => todo.id),
+  ["widget-work-todo"],
+  "a persisted Today label rule must dynamically select matching To-Dos",
+);
+assert.equal(
+  featuredWidgetSnapshot(
+    labelFilteredState,
+    today,
+    state.settings.language ?? "en",
+    identity,
+    theme,
+  ).todoSummary,
+  "0/1 To-Dos",
+  "Featured widget counts must use the same persisted label filter as Today",
+);
+
 const googleEntry = {
   id: "google-health:widget-private-steps",
   metricId: "steps",

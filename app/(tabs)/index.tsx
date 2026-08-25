@@ -66,6 +66,10 @@ import {
 } from "@/src/domain/date";
 import { memberDisplayName } from "@/src/domain/members";
 import { isGoogleHealthEntry } from "@/src/domain/googleHealthLocalPrivacy";
+import {
+  GoalLiquidProgressSnapshot,
+  increasingGoalLiquidAnimationStarts,
+} from "@/src/domain/goalLiquid";
 import { isFoodNutrientTrackerId } from "@/src/domain/food";
 import {
   canBeTrackedGoal,
@@ -143,17 +147,14 @@ const GOAL_DOT_SIZE = 23;
 const GOAL_LIQUID_REVEAL_MS = 2200;
 const TRACKER_DOUBLE_TAP_MS = 210;
 
-type GoalLiquidSnapshot = Record<
-  string,
-  { progress: number; signature: string }
->;
-
-function parseGoalLiquidSnapshot(saved: string | null): GoalLiquidSnapshot {
+function parseGoalLiquidSnapshot(
+  saved: string | null,
+): GoalLiquidProgressSnapshot {
   if (!saved) return {};
   try {
     const parsed = JSON.parse(saved) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    return parsed as GoalLiquidSnapshot;
+    return parsed as GoalLiquidProgressSnapshot;
   } catch {
     return {};
   }
@@ -401,6 +402,7 @@ function Today() {
     : undefined;
   const customTodoVisible = todayHero.todoVisible;
   const customTodoIds = todayHero.todoIds;
+  const customTodoLabels = todayHero.todoLabels;
   const todayTodos = todayHero.todos;
   const completedTodayTodos = todayHero.completedTodos;
   const heroUsesGoals = todayHero.usesGoals;
@@ -497,9 +499,9 @@ function Today() {
   >("pending");
   const goalLiquidReveal = useRef(new Animated.Value(0)).current;
   const goalLiquidMotion = useRef(new Animated.Value(0)).current;
-  const [liquidAnimatedGoalIds, setLiquidAnimatedGoalIds] = useState<string[]>(
-    [],
-  );
+  const [liquidAnimationStarts, setLiquidAnimationStarts] = useState<
+    Record<string, number>
+  >({});
   const [reduceMotion, setReduceMotion] = useState(false);
   const featuredGoalProgress = todayHero.goalProgress.map((item) => {
     const roundedValue = Math.round(item.value * 10_000) / 10_000;
@@ -525,7 +527,7 @@ function Today() {
   );
   const goalLiquidSnapshotKey = JSON.stringify(goalLiquidSnapshot);
   const goalLiquidStorageKey = `metric-rally-goal-liquid-v3:${state.currentUserId}:${today}`;
-  const liquidAnimatedGoalIdSet = new Set(liquidAnimatedGoalIds);
+  const liquidAnimatedGoalIdSet = new Set(Object.keys(liquidAnimationStarts));
   // Start neutral until the persisted completion snapshot tells us whether
   // this is a new Perfect Day or one that was already celebrated. Initializing
   // as gold caused a visible gold -> green -> gold flash on cold return.
@@ -623,7 +625,7 @@ function Today() {
       goalLiquidMotion.setValue(0);
 
       if (!showGoalsToday) {
-        setLiquidAnimatedGoalIds([]);
+        setLiquidAnimationStarts({});
         return () => {
           cancelled = true;
           goalLiquidReveal.stopAnimation();
@@ -632,7 +634,7 @@ function Today() {
       }
 
       if (tutorialSandbox) {
-        setLiquidAnimatedGoalIds([]);
+        setLiquidAnimationStarts({});
         return () => {
           cancelled = true;
           goalLiquidReveal.stopAnimation();
@@ -643,7 +645,7 @@ function Today() {
         void AsyncStorage.removeItem(goalLiquidStorageKey).catch(
           () => undefined,
         );
-        setLiquidAnimatedGoalIds([]);
+        setLiquidAnimationStarts({});
         return () => {
           cancelled = true;
           goalLiquidReveal.stopAnimation();
@@ -655,12 +657,11 @@ function Today() {
           if (cancelled) return;
           const previous = parseGoalLiquidSnapshot(saved);
           const current = parseGoalLiquidSnapshot(goalLiquidSnapshotKey);
-          const changedGoalIds = Object.entries(current)
-            .filter(([id, snapshot]) => {
-              if (snapshot.progress <= 0) return false;
-              return previous[id]?.signature !== snapshot.signature;
-            })
-            .map(([id]) => id);
+          const animationStarts = increasingGoalLiquidAnimationStarts(
+            previous,
+            current,
+          );
+          const changedGoalIds = Object.keys(animationStarts);
 
           if (!tutorialSandbox)
             AsyncStorage.setItem(
@@ -669,11 +670,11 @@ function Today() {
             ).catch(() => undefined);
 
           if (reduceMotion || !changedGoalIds.length) {
-            setLiquidAnimatedGoalIds([]);
+            setLiquidAnimationStarts({});
             return;
           }
 
-          setLiquidAnimatedGoalIds(changedGoalIds);
+          setLiquidAnimationStarts(animationStarts);
           goalLiquidReveal.setValue(0);
           goalLiquidMotion.setValue(0);
 
@@ -710,12 +711,12 @@ function Today() {
               ),
             ]);
             animation.start(({ finished }) => {
-              if (!cancelled && finished) setLiquidAnimatedGoalIds([]);
+              if (!cancelled && finished) setLiquidAnimationStarts({});
             });
           });
         })
         .catch(() => {
-          if (!cancelled) setLiquidAnimatedGoalIds([]);
+          if (!cancelled) setLiquidAnimationStarts({});
         });
 
       return () => {
@@ -1322,6 +1323,7 @@ function Today() {
                     liquidReveal={goalLiquidReveal}
                     liquidMotion={goalLiquidMotion}
                     animateLiquid={liquidAnimatedGoalIdSet.has(item.id)}
+                    liquidStartProgress={liquidAnimationStarts[item.id]}
                     onPress={() =>
                       router.navigate({
                         pathname: "/metric-detail",
@@ -1383,6 +1385,7 @@ function Today() {
             onRequestEdit={beginEditing}
             visibleOverride={customTodoVisible}
             todoIds={customTodoIds}
+            todoLabels={customTodoLabels}
           />
           </TutorialTarget>
         ) : null}
@@ -1690,6 +1693,7 @@ function Today() {
                 onRequestEdit={beginEditing}
                 visibleOverride={customTodoVisible}
                 todoIds={customTodoIds}
+                todoLabels={customTodoLabels}
               />
             </View>
           </TutorialTarget>
@@ -2237,6 +2241,7 @@ function GoalCompletionDot({
   liquidReveal,
   liquidMotion,
   animateLiquid,
+  liquidStartProgress,
   onPress,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
@@ -2250,6 +2255,7 @@ function GoalCompletionDot({
   liquidReveal: Animated.Value;
   liquidMotion: Animated.Value;
   animateLiquid: boolean;
+  liquidStartProgress?: number;
   onPress: () => void;
 }) {
   const gold = useRef(new Animated.Value(0)).current;
@@ -2301,9 +2307,17 @@ function GoalCompletionDot({
   // the bottom after clipping, especially at fractional progress heights.
   const liquidExtent = GOAL_DOT_SIZE + 2;
   const fillHeight = liquidExtent * normalized;
+  const normalizedStart = Math.max(
+    0,
+    Math.min(
+      normalized,
+      Number.isFinite(liquidStartProgress) ? liquidStartProgress! : 0,
+    ),
+  );
+  const hiddenFillAtStart = liquidExtent * (normalized - normalizedStart);
   const liquidTranslateY = liquidReveal.interpolate({
     inputRange: [0, 1],
-    outputRange: [fillHeight + 1, 0],
+    outputRange: [hiddenFillAtStart + (normalizedStart === 0 ? 1 : 0), 0],
   });
   return (
     <Pressable

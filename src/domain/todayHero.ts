@@ -8,6 +8,7 @@ import {
   trackedGoalSummary,
 } from "./metrics";
 import { todoAppearsOnDate, todoResolvedOnDate } from "./schedule";
+import { todoMatchesViewFilter } from "./todos";
 
 export type TodayHeroGoalProgress = {
   id: string;
@@ -25,6 +26,7 @@ export type TodayHeroSummary = {
   met: number;
   progress: number;
   todoIds?: string[];
+  todoLabels?: string[];
   todos: TodoItem[];
   todoVisible: boolean;
   total: number;
@@ -52,12 +54,13 @@ export function todayHeroSummary(
   );
   const todoVisible = activeView?.includeTodos !== false;
   const todoIds = activeView?.todoIds;
+  const todoLabels = activeView?.todoLabels;
   const todos =
     state.settings.showTodosToday === false || !todoVisible
       ? []
       : (state.todos ?? []).filter(
           (todo) =>
-            (todoIds === undefined || todoIds.includes(todo.id)) &&
+            todoMatchesViewFilter(todo, { todoIds, todoLabels }) &&
             todoAppearsOnDate(todo, localDate),
         );
   const completedTodos = todos.filter((todo) =>
@@ -106,6 +109,7 @@ export function todayHeroSummary(
     met,
     progress,
     todoIds,
+    todoLabels,
     todos,
     todoVisible,
     total,

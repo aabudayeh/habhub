@@ -428,8 +428,33 @@ assert.match(hook, /respondToGroupChallenge\(sourceId, response\)/);
 assert.match(hook, /discoverActive \? loadActiveGroupChallenges : loadGroupChallenges/);
 assert.match(
   hook,
-  /!discoverActive[\s\S]{0,700}setInterval\(\(\) => void refresh\(\), 30_000\)/,
-  "active discovery must refresh without widening participant Realtime RLS",
+  /!discoverActive[\s\S]{0,100}!discoveryPollingEnabled/,
+  "active discovery polling must require a focused route",
+);
+assert.match(
+  hook,
+  /document\.visibilityState !== "hidden"[\s\S]{0,180}NativeAppState\.currentState === "active"/,
+  "active discovery polling must require a visible runtime",
+);
+assert.match(
+  hook,
+  /const resumePolling = \(\) => \{[\s\S]{0,300}void refresh\(\)[\s\S]{0,180}setInterval\(\(\) => \{/,
+  "returning to active discovery must refresh once before restarting its bounded poll",
+);
+assert.match(
+  hook,
+  /NativeAppState\.addEventListener\([\s\S]{0,100}"change"[\s\S]{0,180}resumePolling\(\)[\s\S]{0,180}stopPolling\(\)/,
+  "native discovery polling must stop in the background and resume on foreground",
+);
+assert.match(
+  hook,
+  /document\.addEventListener\("visibilitychange", onVisibilityChange\)[\s\S]{0,350}document\.removeEventListener\("visibilitychange", onVisibilityChange\)/,
+  "web discovery polling must follow document visibility without leaking listeners",
+);
+assert.match(
+  hook,
+  /subscribePrivateBroadcast\([\s\S]{0,100}`group:\$\{groupId\}:challenges`/,
+  "focus-gating discovery polling must preserve challenge realtime invalidation",
 );
 assert.match(
   hook,
@@ -880,6 +905,11 @@ assert.match(
 assert.match(groupSettings, /accessibilityState=\{\{ expanded: groupColorOpen \}\}/);
 assert.match(groupSettings, /setGroupTheme\(groupColorDraft\)/);
 assert.match(groupSettings, /discoverActive: true/);
+assert.match(
+  groupSettings,
+  /const routeFocused = useIsFocused\(\)[\s\S]{0,160}discoveryPollingEnabled: routeFocused/,
+  "Group Settings must expose route focus to its discovery-only poll",
+);
 assert.match(groupSettings, /availability === "active" \? "LIVE" : "UPCOMING"/);
 assert.match(groupSettings, /await challengeCloud\.respond\(sourceId, "accepted"\)/);
 assert.match(groupSettings, />Joined<\/Text>/);

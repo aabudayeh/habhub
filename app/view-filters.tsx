@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 
 import {
@@ -10,6 +10,12 @@ import {
 import { LocalizedAlert as Alert } from "@/src/i18n";
 import { Card, IconButton, PageHeader, Screen } from "@/src/components/ui";
 import { TutorialTarget } from "@/src/components/TutorialSpotlight";
+import {
+  formatTodoLabel,
+  normalizeTodoLabel,
+  todoLabels,
+  todoMatchesViewFilter,
+} from "@/src/domain/todos";
 import { isInternalTracker } from "@/src/domain/trackerCatalog";
 import { useApp } from "@/src/state/AppProvider";
 import { useAppColors, useGroupAccent } from "@/src/theme";
@@ -36,6 +42,15 @@ export default function ViewFilters() {
   const colors = useAppColors();
   const accent = useGroupAccent();
   const filters = state.settings.trackerViewFilters ?? [];
+  const todos = state.todos ?? [];
+  const todoIds = todos.map((todo) => todo.id);
+  const availableTodoLabels = useMemo(
+    () =>
+      [...new Set((state.todos ?? []).flatMap((todo) => todoLabels(todo)))].sort(
+        (a, b) => a.localeCompare(b),
+      ),
+    [state.todos],
+  );
   const trackers = state.metrics
     .filter(
       (metric) =>
@@ -51,14 +66,22 @@ export default function ViewFilters() {
   const [selected, setSelected] = useState<string[]>([]);
   const [includeTodos, setIncludeTodos] = useState(true);
   const [selectedTodoIds, setSelectedTodoIds] = useState<string[]>([]);
+  const [selectedTodoLabels, setSelectedTodoLabels] = useState<string[]>([]);
   const begin = (filter?: TrackerViewFilter) => {
     setEditingId(filter?.id ?? "new");
     setName(filter?.name ?? "");
     setSelected(filter?.metricIds ?? []);
     setIncludeTodos(scope === "today" ? filter?.includeTodos !== false : false);
-    setSelectedTodoIds(
+    setSelectedTodoIds(scope === "today" ? filter?.todoIds ?? todoIds : []);
+    setSelectedTodoLabels(
       scope === "today"
-        ? filter?.todoIds ?? (state.todos ?? []).map((todo) => todo.id)
+        ? [
+            ...new Set(
+              (filter?.todoLabels ?? [])
+                .map(normalizeTodoLabel)
+                .filter(Boolean),
+            ),
+          ]
         : [],
     );
   };
@@ -68,12 +91,20 @@ export default function ViewFilters() {
     setSelected([]);
     setIncludeTodos(true);
     setSelectedTodoIds([]);
+    setSelectedTodoLabels([]);
   };
   const save = () => {
+    const normalizedTodoLabels = [
+      ...new Set(selectedTodoLabels.map(normalizeTodoLabel).filter(Boolean)),
+    ];
     if (
       !name.trim() ||
       (!selected.length &&
-        !(scope === "today" && includeTodos && selectedTodoIds.length))
+        !(
+          scope === "today" &&
+          includeTodos &&
+          (selectedTodoIds.length || normalizedTodoLabels.length)
+        ))
     )
       return Alert.alert(
         "Complete this view",
@@ -84,6 +115,9 @@ export default function ViewFilters() {
         ? `view-${Date.now().toString(36)}`
         : editingId!;
     const existing = filters.find((filter) => filter.id === id);
+    const allTodosSelected =
+      selectedTodoIds.length === todoIds.length &&
+      todoIds.every((todoId) => selectedTodoIds.includes(todoId));
     const next = [
       ...filters.filter((filter) => filter.id !== id),
       {
@@ -93,8 +127,15 @@ export default function ViewFilters() {
         includeTodos: scope === "today" ? includeTodos : existing?.includeTodos,
         todoIds:
           scope === "today" && includeTodos
-            ? selectedTodoIds
+            ? normalizedTodoLabels.length &&
+              (!selectedTodoIds.length || allTodosSelected)
+              ? undefined
+              : selectedTodoIds
             : existing?.todoIds,
+        todoLabels:
+          scope === "today" && includeTodos
+            ? normalizedTodoLabels
+            : existing?.todoLabels,
         visible: existing?.visible ?? true,
       },
     ];
@@ -215,24 +256,98 @@ export default function ViewFilters() {
               </Pressable>
               {includeTodos ? (
                 <>
+                  {availableTodoLabels.length || selectedTodoLabels.length ? (
+                    <View style={styles.todoLabelSection}>
+                      <View style={styles.todoLabelHeading}>
+                        <Ionicons
+                          name="pricetag-outline"
+                          size={14}
+                          color={accent}
+                        />
+                        <View style={styles.copy}>
+                          <Text
+                            style={[styles.todoLabelTitle, { color: colors.ink }]}
+                          >
+                            Labels
+                          </Text>
+                          <Text
+                            style={[styles.filterMeta, { color: colors.muted }]}
+                          >
+                            Selected labels narrow the To-Dos below.
+                          </Text>
+                        </View>
+                      </View>
+                      <View style={styles.trackerList}>
+                        {[
+                          ...new Set([
+                            ...availableTodoLabels,
+                            ...selectedTodoLabels,
+                          ]),
+                        ].map((label) => {
+                          const checked = selectedTodoLabels.includes(label);
+                          return (
+                            <Pressable
+                              key={label}
+                              onPress={() =>
+                                setSelectedTodoLabels((current) =>
+                                  checked
+                                    ? current.filter((item) => item !== label)
+                                    : [...current, label],
+                                )
+                              }
+                              style={[
+                                styles.labelRule,
+                                {
+                                  borderColor: checked ? accent : colors.border,
+                                  backgroundColor: checked
+                                    ? colors.primarySoft
+                                    : colors.card,
+                                },
+                              ]}
+                            >
+                              <Ionicons
+                                name={
+                                  checked
+                                    ? "checkmark-circle"
+                                    : "ellipse-outline"
+                                }
+                                size={15}
+                                color={checked ? accent : colors.muted}
+                              />
+                              <Text
+                                translate={false}
+                                numberOfLines={1}
+                                style={[
+                                  styles.labelRuleText,
+                                  { color: checked ? accent : colors.ink },
+                                ]}
+                              >
+                                {formatTodoLabel(label)}
+                              </Text>
+                            </Pressable>
+                          );
+                        })}
+                      </View>
+                    </View>
+                  ) : null}
                   <Pressable
                     onPress={() =>
                       setSelectedTodoIds(
-                        selectedTodoIds.length === (state.todos ?? []).length
+                        selectedTodoIds.length === todos.length
                           ? []
-                          : (state.todos ?? []).map((todo) => todo.id),
+                          : todoIds,
                       )
                     }
                     style={styles.todoSelectAll}
                   >
                     <Text style={[styles.link, { color: accent }]}>
-                      {selectedTodoIds.length === (state.todos ?? []).length
+                      {selectedTodoIds.length === todos.length
                         ? "Deselect all"
                         : "Select all"}
                     </Text>
                   </Pressable>
                   <View style={styles.trackerList}>
-                    {(state.todos ?? []).map((todo) => {
+                    {todos.map((todo) => {
                       const checked = selectedTodoIds.includes(todo.id);
                       return (
                         <Pressable
@@ -342,7 +457,11 @@ export default function ViewFilters() {
                   <Text style={[styles.filterMeta, { color: colors.muted }]}>
                     {filter.metricIds.length} trackers
                     {scope === "today" && filter.includeTodos !== false
-                      ? ` · ${filter.todoIds?.length ?? (state.todos ?? []).length} to-dos`
+                      ? ` · ${
+                          todos.filter((todo) =>
+                            todoMatchesViewFilter(todo, filter),
+                          ).length
+                        } to-dos`
                       : ""}
                   </Text>
                 </View>
@@ -426,6 +545,19 @@ const styles = StyleSheet.create({
   trackerName: { flex: 1, fontSize: 8, fontWeight: "800" },
   todoSection: { borderTopWidth: 1, paddingTop: 9, gap: 7 },
   todoHeading: { flexDirection: "row", alignItems: "center", gap: 8 },
+  todoLabelSection: { gap: 6 },
+  todoLabelHeading: { flexDirection: "row", alignItems: "center", gap: 7 },
+  todoLabelTitle: { fontSize: 9, fontWeight: "900" },
+  labelRule: {
+    minHeight: 34,
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  labelRuleText: { fontSize: 8, fontWeight: "900" },
   todoSelectAll: { alignSelf: "flex-end" },
   editorButtons: { flexDirection: "row", gap: 8 },
   secondaryButton: {

@@ -14,7 +14,13 @@ import {
   todoCompletedOnDate,
   todoSkippedOnDate,
 } from "@/src/domain/schedule";
-import { flattenTodoHierarchy, todoLabels } from "@/src/domain/todos";
+import {
+  flattenTodoHierarchy,
+  formatTodoLabel,
+  formatTodoLabelText,
+  todoLabels as labelsForTodo,
+  todoMatchesViewFilter,
+} from "@/src/domain/todos";
 import { LocalizedAlert as Alert, useTranslation } from "@/src/i18n";
 import { useApp } from "@/src/state/AppProvider";
 import { useAppColors, useGroupAccent } from "@/src/theme";
@@ -34,6 +40,7 @@ export function TodoTodayList({
   onRequestEdit,
   visibleOverride = true,
   todoIds,
+  todoLabels,
 }: {
   localDate: string;
   onComplete?: (todoId: string) => void;
@@ -42,6 +49,8 @@ export function TodoTodayList({
   visibleOverride?: boolean;
   /** Undefined keeps every To-Do; an empty list intentionally shows none. */
   todoIds?: string[];
+  /** Normalized labels further narrow the saved Today view. */
+  todoLabels?: string[];
 }) {
   const {
     state,
@@ -61,9 +70,8 @@ export function TodoTodayList({
   );
   const visible = state.settings.showTodosToday !== false;
   const [activeLabel, setActiveLabel] = useState<string>();
-  const allowedIds = todoIds ? new Set(todoIds) : undefined;
   const baseItems = (state.todos ?? [])
-    .filter((todo) => !allowedIds || allowedIds.has(todo.id))
+    .filter((todo) => todoMatchesViewFilter(todo, { todoIds, todoLabels }))
     .filter((todo) => todoAppearsOnDate(todo, localDate))
     .filter((todo) => editing || itemVisibility.isVisible(todo.id))
     .sort(
@@ -86,7 +94,7 @@ export function TodoTodayList({
   const allLabels = useMemo(
     () =>
       [...new Set(
-        baseItems.flatMap((todo) => todoLabels(todo)),
+        baseItems.flatMap((todo) => labelsForTodo(todo)),
       )].sort((a, b) => a.localeCompare(b)),
     [baseItems],
   );
@@ -94,7 +102,7 @@ export function TodoTodayList({
     if (activeLabel && !allLabels.includes(activeLabel)) setActiveLabel(undefined);
   }, [activeLabel, allLabels]);
   const items = activeLabel
-    ? baseItems.filter((todo) => todoLabels(todo).includes(activeLabel))
+    ? baseItems.filter((todo) => labelsForTodo(todo).includes(activeLabel))
     : baseItems;
   const visiblePersonalItems =
     !editing && state.settings.completedTodayBehavior === "hide"
@@ -264,7 +272,15 @@ export function TodoTodayList({
                 },
               ]}
             >
-              <Text translate={false} style={[styles.labelChipText, { color: activeLabel === label ? accent : colors.muted }]}>#{label}</Text>
+              <Text
+                translate={false}
+                style={[
+                  styles.labelChipText,
+                  { color: activeLabel === label ? accent : colors.muted },
+                ]}
+              >
+                {formatTodoLabel(label)}
+              </Text>
             </Pressable>
           ))}
         </View>
@@ -409,7 +425,7 @@ function TodoRow({
             (complete || skipped) && styles.complete,
           ]}
         >
-          {todo.title}
+          {formatTodoLabelText(todo.title)}
         </Text>
         <View style={styles.metaRow}>
           <Ionicons

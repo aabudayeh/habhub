@@ -1,4 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  AppState as NativeAppState,
+  Platform,
+} from "react-native";
 
 import {
   deleteGroupChallenge,
@@ -22,6 +26,8 @@ import { subscribePrivateBroadcast } from "@/src/cloud/privateBroadcast";
 type UseGroupChallengesOptions = {
   /** Group-settings discovery only; never use this for Leaderboard history. */
   discoverActive?: boolean;
+  /** Keep discovery polling scoped to the currently focused route. */
+  discoveryPollingEnabled?: boolean;
 };
 
 /** A small, screen-scoped read model; realtime bursts coalesce into one request. */
@@ -32,6 +38,8 @@ export function useGroupChallenges(
   const tutorial = useTutorialSandbox();
   const { state } = useApp();
   const discoverActive = options.discoverActive === true;
+  const discoveryPollingEnabled =
+    options.discoveryPollingEnabled !== false;
   const [challenges, setChallenges] = useState<GroupChallenge[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
@@ -98,6 +106,7 @@ export function useGroupChallenges(
   useEffect(() => {
     if (
       !discoverActive ||
+      !discoveryPollingEnabled ||
       tutorial.active ||
       !supabase ||
       !isCloudGroupId(groupId)
@@ -106,9 +115,64 @@ export function useGroupChallenges(
     // Non-participants cannot subscribe directly to participant-scoped table
     // changes. Keep the small discovery list fresh without widening RLS or
     // changing the Leaderboard's normal realtime/read path.
-    const timer = setInterval(() => void refresh(), 30_000);
-    return () => clearInterval(timer);
-  }, [discoverActive, groupId, refresh, tutorial.active]);
+    let timer: ReturnType<typeof setInterval> | undefined;
+    let visible = false;
+    const documentVisible = () =>
+      Platform.OS !== "web" ||
+      typeof document === "undefined" ||
+      document.visibilityState !== "hidden";
+    const runtimeVisible = () =>
+      NativeAppState.currentState === "active" && documentVisible();
+    const stopPolling = () => {
+      if (timer) clearInterval(timer);
+      timer = undefined;
+      visible = false;
+    };
+    const resumePolling = () => {
+      if (!runtimeVisible()) {
+        stopPolling();
+        return;
+      }
+      if (visible) return;
+      visible = true;
+      // A focused route should never wait for the next 30-second tick after
+      // returning from the background or a hidden browser tab.
+      void refresh();
+      timer = setInterval(() => {
+        if (!runtimeVisible()) {
+          stopPolling();
+          return;
+        }
+        void refresh();
+      }, 30_000);
+    };
+    const appStateSubscription = NativeAppState.addEventListener(
+      "change",
+      (next) => {
+        if (next === "active") resumePolling();
+        else stopPolling();
+      },
+    );
+    const onVisibilityChange = () => {
+      if (documentVisible()) resumePolling();
+      else stopPolling();
+    };
+    if (Platform.OS === "web" && typeof document !== "undefined")
+      document.addEventListener("visibilitychange", onVisibilityChange);
+    resumePolling();
+    return () => {
+      stopPolling();
+      appStateSubscription.remove();
+      if (Platform.OS === "web" && typeof document !== "undefined")
+        document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [
+    discoverActive,
+    discoveryPollingEnabled,
+    groupId,
+    refresh,
+    tutorial.active,
+  ]);
 
   useEffect(() => {
     if (tutorial.active || !supabase || !isCloudGroupId(groupId)) return;

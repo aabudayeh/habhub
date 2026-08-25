@@ -78,6 +78,31 @@ assert.match(
   /\{`\$\{run\.text\}\$\{EMPTY_RUN\}`\}/,
   "The measurement sentinel must follow the run text so trailing spaces contribute to layout",
 );
+assert.doesNotMatch(
+  source,
+  /runMeasure:\s*\{[^}]*padding(?:Right|Horizontal):/,
+  "Formatting boundaries must not insert visual padding between adjacent runs",
+);
+assert.match(
+  source,
+  /selections\.current\[key\]\s*=\s*selectionAfterRichNoteTextChange/,
+  "Text mutations must synchronously advance the cached caret before formatting can use it",
+);
+assert.match(
+  source,
+  /readInputSelection\([\s\S]*?inputs\.current\[key\]/,
+  "Web formatting actions must prefer the live textarea selection over a delayed event cache",
+);
+assert.match(
+  source,
+  /measuredFontSize\s*=\s*resolveWebEditorFontSize\([\s\S]*?fontSize:\s*measuredFontSize/,
+  "The invisible measure must use the same iOS Web focus-safe font size as the editable input",
+);
+assert.match(
+  source,
+  /isEditingTailRun[\s\S]*?styles\.editingTailRun/,
+  "The active trailing run must reserve the remaining row without spacing adjacent formatted runs",
+);
 assert.match(
   source,
   /multiline\s+scrollEnabled=\{false\}/,
@@ -109,6 +134,36 @@ assert.match(journal, /drawingOnlyPreview/);
 
 const drawingModule = await import(
   "../src/domain/journalDrawing.ts"
+);
+const selectionModule = await import(
+  "../src/domain/richNoteSelection.ts"
+);
+assert.deepEqual(
+  selectionModule.selectionAfterRichNoteTextChange(
+    "hello",
+    "hello!",
+    { start: 0, end: 0 },
+  ),
+  { start: 6, end: 6 },
+  "Typing must advance the cached caret even when the selection event is stale",
+);
+assert.deepEqual(
+  selectionModule.selectionAfterRichNoteTextChange(
+    "abcdef",
+    "abcXdef",
+    { start: 3, end: 3 },
+  ),
+  { start: 4, end: 4 },
+  "Mid-word formatting must retain the caret immediately after inserted text",
+);
+assert.deepEqual(
+  selectionModule.selectionAfterRichNoteTextChange(
+    "abcXdef",
+    "abcdef",
+    { start: 4, end: 4 },
+  ),
+  { start: 3, end: 3 },
+  "Deleting at a formatting boundary must keep the caret at that boundary",
 );
 const first = drawingModule.createJournalDrawingStroke(
   "first",

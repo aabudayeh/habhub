@@ -100,6 +100,32 @@ export function calculateDailyEnergy(profile: EnergyProfile): number {
   return calculateBmr(profile) + calculateDailyActivity(profile);
 }
 
+/**
+ * Full-day burn used by the planned Daily deficit/surplus calculation.
+ *
+ * Food allowance starts from the profile's full-day energy estimate and can
+ * add today's active energy. Use the same baseline here so a cold start does
+ * not temporarily compare that allowance with only the BMR accrued so far.
+ * A larger connected-health total still wins when the provider has observed
+ * more energy than the profile projection.
+ */
+export function projectedDailyEnergyBurned(
+  profile: EnergyProfile,
+  fallbackBaseline: number,
+  activeEnergy: number,
+  observedEnergyBurned: number,
+): number {
+  const plannedBaseline = energyFormulaVariables(
+    profile,
+    fallbackBaseline,
+  ).daily_energy;
+  const active = Number.isFinite(activeEnergy) ? Math.max(0, activeEnergy) : 0;
+  const observed = Number.isFinite(observedEnergyBurned)
+    ? Math.max(0, observedEnergyBurned)
+    : 0;
+  return Math.max(observed, plannedBaseline + active);
+}
+
 export const KCAL_PER_KG_ESTIMATE = 7700;
 
 export function recommendedDailyDeficit(profile: EnergyProfile): number {

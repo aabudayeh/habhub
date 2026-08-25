@@ -504,6 +504,8 @@ export type TrackerViewFilter = {
   includeTodos?: boolean;
   /** Today-only: explicit To-Dos to include; undefined preserves legacy all. */
   todoIds?: string[];
+  /** Today-only: normalized labels that included To-Dos must match. */
+  todoLabels?: string[];
   /** Hidden saved views remain editable without cluttering quick selectors. */
   visible?: boolean;
 };

@@ -2,11 +2,18 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 
 import { dateKey, dateWithOffsetFrom } from "../src/domain/date.ts";
-import { calculateBmr } from "../src/domain/energy.ts";
+import {
+  calculateBmr,
+  calculateDailyEnergy,
+  recommendedDailyDeficit,
+  recommendedDailyIntake,
+} from "../src/domain/energy.ts";
+import { increasingGoalLiquidAnimationStarts } from "../src/domain/goalLiquid.ts";
 import { unrecordedStepActivity } from "../src/domain/health.ts";
 import {
   metricValue,
   metricVisualProgress,
+  effectiveGoalTarget,
   weeklyBalancePeriodReport,
 } from "../src/domain/metrics.ts";
 
@@ -257,6 +264,7 @@ const defaults = {
 const energyDate = "2026-08-20";
 const profile = defaults.energyProfiles[energyUserId];
 const baseline = calculateBmr(profile);
+const plannedEnergy = calculateDailyEnergy(profile);
 const energyState = {
   ...defaults,
   entries: [
@@ -289,7 +297,8 @@ assert.equal(
 );
 assert.equal(
   metricValue(energyState, dailyDeficitMetric, energyUserId, energyDate),
-  baseline + 300 - 2_000,
+  plannedEnergy + 300 - 2_000,
+  "Daily deficit must use the same full-day profile baseline as Food allowance",
 );
 const providerEnergyState = {
   ...energyState,
@@ -315,7 +324,8 @@ assert.equal(
 );
 assert.equal(
   metricValue(providerEnergyState, dailyDeficitMetric, energyUserId, energyDate),
-  500,
+  Math.max(2_500, plannedEnergy + 300) - 2_000,
+  "Daily deficit must retain its planned baseline while accepting a larger provider total",
 );
 assert.equal(
   metricVisualProgress(providerEnergyState, foodMetric, energyUserId, energyDate, 500, 2_000),
@@ -430,6 +440,159 @@ assert.equal(
   metricValue(stepAwareState, energyMetric, energyUserId, energyDate),
   baseline + expectedActiveEnergy,
   "total energy must combine BMR, measured workout calories, and uncovered-step activity",
+);
+
+const coldStartProfile = {
+  age: 61,
+  sex: "male",
+  heightCm: 175,
+  weightKg: 80,
+  targetWeightKg: 75,
+  activityLevel: "moderate",
+  dailyActivityCaloriesOverride: 903,
+  desiredWeeklyLossKg: 2,
+};
+const coldStartFoodTarget = recommendedDailyIntake(coldStartProfile);
+const coldStartDeficitTarget = recommendedDailyDeficit(coldStartProfile);
+const coldStartFoodMetric = {
+  ...foodMetric,
+  goal: { kind: "at_most", target: coldStartFoodTarget },
+};
+const coldStartDeficitMetric = {
+  ...dailyDeficitMetric,
+  goal: { kind: "at_least", target: coldStartDeficitTarget },
+};
+const coldStartState = {
+  ...defaults,
+  metrics: [
+    energyMetric,
+    exerciseMetric,
+    coldStartFoodMetric,
+    coldStartDeficitMetric,
+  ],
+  entries: [],
+  energyProfiles: { [energyUserId]: coldStartProfile },
+  settings: {
+    ...defaults.settings,
+    energyProfile: coldStartProfile,
+    foodGoalMode: "activity_adjusted",
+  },
+};
+const coldStartNow = new Date("2026-08-25T10:00:00.000Z");
+const coldStartDate = "2026-08-25";
+const accruedEnergy = metricValue(
+  coldStartState,
+  energyMetric,
+  energyUserId,
+  coldStartDate,
+  [],
+  coldStartNow,
+);
+assert.equal(
+  Math.round(accruedEnergy),
+  797,
+  "standalone Total energy must remain the BMR accrued through noon",
+);
+assert.equal(coldStartFoodTarget, 297);
+assert.equal(coldStartDeficitTarget, 2_200);
+assert.equal(
+  effectiveGoalTarget(
+    coldStartState,
+    coldStartFoodMetric,
+    energyUserId,
+    coldStartDate,
+  ),
+  297,
+  "the cold-start case must retain its reported Food allowance",
+);
+assert.equal(
+  Math.round(
+    metricValue(
+      coldStartState,
+      coldStartDeficitMetric,
+      energyUserId,
+      coldStartDate,
+      [],
+      coldStartNow,
+    ),
+  ),
+  2_497,
+  "Daily deficit must paint the projected 2497 kcal immediately instead of the accrued BMR",
+);
+const providerAheadState = {
+  ...coldStartState,
+  entries: [
+    {
+      id: "cold-start-provider-total",
+      metricId: "energy_burned",
+      userId: energyUserId,
+      value: 3_000,
+      localDate: coldStartDate,
+      recordedAt: "2026-08-25T09:30:00.000Z",
+      visibility: "private",
+      source: "imported",
+      sourceProvider: "health_connect",
+    },
+  ],
+};
+assert.equal(
+  metricValue(
+    providerAheadState,
+    coldStartDeficitMetric,
+    energyUserId,
+    coldStartDate,
+    [],
+    coldStartNow,
+  ),
+  3_000,
+  "a connected-health total above the full-day projection must still improve Daily deficit",
+);
+const allowanceConsumedState = {
+  ...coldStartState,
+  entries: [
+    {
+      id: "cold-start-food",
+      metricId: "food",
+      userId: energyUserId,
+      value: coldStartFoodTarget,
+      localDate: coldStartDate,
+      recordedAt: "2026-08-25T09:00:00.000Z",
+      visibility: "private",
+      source: "manual",
+    },
+  ],
+};
+assert.equal(
+  Math.round(
+    metricValue(
+      allowanceConsumedState,
+      coldStartDeficitMetric,
+      energyUserId,
+      coldStartDate,
+      [],
+      coldStartNow,
+    ),
+  ),
+  coldStartDeficitTarget,
+  "consuming the Food allowance must land on the configured Daily deficit target",
+);
+
+assert.deepEqual(
+  increasingGoalLiquidAnimationStarts(
+    {
+      steps: { progress: 0.4, signature: "old-steps" },
+      water: { progress: 0.7, signature: "old-water" },
+      food: { progress: 0.5, signature: "old-food" },
+    },
+    {
+      steps: { progress: 0.65, signature: "new-steps" },
+      water: { progress: 0.6, signature: "new-water" },
+      food: { progress: 0.5, signature: "new-food-value" },
+      exercise: { progress: 0.25, signature: "new-exercise" },
+    },
+  ),
+  { steps: 0.4, exercise: 0 },
+  "featured squares must animate increases from persisted progress, ignore regressions/equal fills, and start only new trackers at zero",
 );
 
 const detail = fs.readFileSync("app/metric-detail.tsx", "utf8");

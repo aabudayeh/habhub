@@ -6,8 +6,11 @@ import {
   descendantTodoIds,
   extractTodoLabels,
   flattenTodoHierarchy,
+  formatTodoLabel,
+  formatTodoLabelText,
   groupTodoReminderFeatureEnabled,
   normalizeTodoItems,
+  todoMatchesViewFilter,
 } from "../src/domain/todos.ts";
 import {
   clearTodoEditorDraftTree,
@@ -25,6 +28,41 @@ assert.deepEqual(
   extractTodoLabels("Write #Work plan #work", "Review #Body-health and #研究"),
   ["work", "body-health", "研究"],
   "quick labels should be normalized, de-duplicated, and Unicode-safe",
+);
+assert.equal(formatTodoLabel("#wORK"), "Work");
+assert.equal(
+  formatTodoLabelText("#work plan for #body-health"),
+  "Work plan for Body-health",
+  "Today copy should hide label hashes and capitalize each displayed label",
+);
+
+const labeledTodo = {
+  id: "labeled",
+  title: "Plan #Work sprint",
+  description: "Coordinate with #Team-a",
+};
+assert.equal(
+  todoMatchesViewFilter(labeledTodo, { todoLabels: ["work"] }),
+  true,
+  "saved label rules should match normalized labels parsed from To-Do copy",
+);
+assert.equal(
+  todoMatchesViewFilter(labeledTodo, { todoLabels: ["personal", "TEAM-A"] }),
+  true,
+  "multiple saved labels should use normalized any-label matching",
+);
+assert.equal(
+  todoMatchesViewFilter(labeledTodo, {
+    todoIds: ["another"],
+    todoLabels: ["work"],
+  }),
+  false,
+  "an explicit To-Do selection should further narrow a saved label rule",
+);
+assert.equal(
+  todoMatchesViewFilter(labeledTodo, { todoLabels: ["future"] }),
+  false,
+  "unmatched saved labels must exclude the To-Do",
 );
 
 const baseTodo = {
@@ -305,10 +343,26 @@ assert.match(today, /accessibilityLabel=\{visible \? "Hide to-do" : "Show to-do"
 assert.match(today, /accessibilityLabel=\{t\("Delete"\)\}/);
 assert.match(today, /onPress: \(\) => deleteTodo\(todo\.id\)/);
 assert.match(today, /children\.length && childrenExpanded/);
+assert.match(today, /formatTodoLabelText\(todo\.title\)/);
+assert.match(today, /formatTodoLabel\(label\)/);
+assert.match(
+  today,
+  /todoMatchesViewFilter\(todo, \{ todoIds, todoLabels \}\)/,
+);
 assert.doesNotMatch(
   today,
   /useGroupTodos|Group To-Dos|group-todo-editor/,
   "group tasks belong to Leaderboard and must not leak back into Today",
+);
+const viewFilters = read("app/view-filters.tsx");
+assert.match(viewFilters, /availableTodoLabels/);
+assert.match(viewFilters, /setSelectedTodoLabels/);
+assert.match(viewFilters, /todoLabels:[\s\S]{0,160}normalizedTodoLabels/);
+assert.match(viewFilters, /formatTodoLabel\(label\)/);
+const todayHero = read("src/domain/todayHero.ts");
+assert.match(
+  todayHero,
+  /todoMatchesViewFilter\(todo, \{ todoIds, todoLabels \}\)/,
 );
 
 const leaderboardTodos = read("src/components/GroupTodoLeaderboardSection.tsx");

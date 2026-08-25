@@ -17,6 +17,7 @@ import {
   dailyFoodGoal,
   energyFormulaVariables,
   KCAL_PER_KG_ESTIMATE,
+  projectedDailyEnergyBurned,
 } from "./energy";
 import { evaluateFormula, formulaIdentifiers, FormulaError } from "./formula";
 import { cycleForecast } from "./cycle";
@@ -348,8 +349,10 @@ export function metricValue(
   if (stack.includes(metric.id))
     throw new FormulaError(`Circular formula involving “${metric.name}”`);
 
+  const profile =
+    state.energyProfiles?.[userId] ?? state.settings.energyProfile;
   const variables: Record<string, number> = energyFormulaVariables(
-    state.energyProfiles?.[userId] ?? state.settings.energyProfile,
+    profile,
     state.settings.baselineCalories,
   );
   for (const identifier of formulaIdentifiers(metric.formula)) {
@@ -367,6 +370,32 @@ export function metricValue(
         now,
       );
     }
+  }
+
+  if (
+    metric.id === "deficit" &&
+    localDate <= dateKey(now) &&
+    Number.isFinite(variables.energy_burned)
+  ) {
+    const activeEnergyMetric = state.metrics.find(
+      (candidate) => candidate.id === "exercise",
+    );
+    const activeEnergy = activeEnergyMetric
+      ? metricValue(
+          state,
+          activeEnergyMetric,
+          userId,
+          localDate,
+          [...stack, metric.id],
+          now,
+        )
+      : 0;
+    variables.energy_burned = projectedDailyEnergyBurned(
+      profile,
+      state.settings.baselineCalories,
+      activeEnergy,
+      variables.energy_burned,
+    );
   }
 
   return evaluateFormula(metric.formula, variables);

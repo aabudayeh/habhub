@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
+import { useIsFocused } from "@react-navigation/native";
 import { router, useNavigation } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -73,8 +74,10 @@ export default function GroupSettings() {
   } = useApp();
   const auth = useAuth();
   const cloud = useCloudSyncActions();
+  const routeFocused = useIsFocused();
   const challengeCloud = useGroupChallenges(state.group.id, {
     discoverActive: true,
+    discoveryPollingEnabled: routeFocused,
   });
   const navigation = useNavigation();
   const colors = useAppColors();

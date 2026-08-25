@@ -10,6 +10,7 @@ import React, {
 } from "react";
 import {
   NativeSyntheticEvent,
+  Platform,
   Pressable,
   StyleSheet,
   Text as NativeText,
@@ -23,6 +24,11 @@ import {
   AppText as Text,
   AppTextInput as TextInput,
 } from "@/src/components/AppText";
+import {
+  selectionAfterRichNoteTextChange,
+  type RichNoteSelection,
+} from "@/src/domain/richNoteSelection";
+import { resolveWebEditorFontSize } from "@/src/domain/webSafeArea";
 import { useAppColors, useFontScale, useGroupAccent } from "@/src/theme";
 
 type Block = "text" | "h1" | "h2" | "bullet" | "check" | "quote";
@@ -38,7 +44,7 @@ type ParsedLine = {
   checked?: boolean;
   runs: InlineRun[];
 };
-type TextSelection = { start: number; end: number };
+type TextSelection = RichNoteSelection;
 const EMPTY_RUN = "\u200B";
 
 function setInputSelection(
@@ -58,6 +64,20 @@ function setInputSelection(
     return;
   }
   selectionInput.setSelectionRange?.(selection.start, selection.end);
+}
+
+function readInputSelection(
+  input: NativeTextInput | null | undefined,
+  fallback: TextSelection,
+) {
+  const webInput = input as unknown as {
+    selectionStart?: number | null;
+    selectionEnd?: number | null;
+  };
+  return typeof webInput?.selectionStart === "number" &&
+    typeof webInput.selectionEnd === "number"
+    ? { start: webInput.selectionStart, end: webInput.selectionEnd }
+    : fallback;
 }
 
 export type RichNoteComposerHandle = {
@@ -288,6 +308,17 @@ export const RichNoteComposer = forwardRef<
   const colors = useAppColors();
   const accent = useGroupAccent();
   const fontScale = useFontScale();
+  const webDisplayEnvironment = useMemo(
+    () =>
+      Platform.OS === "web" && typeof navigator !== "undefined"
+        ? {
+            userAgent: navigator.userAgent,
+            platform: navigator.platform,
+            maxTouchPoints: navigator.maxTouchPoints,
+          }
+        : undefined,
+    [],
+  );
   const [active, setActive] = useState({ line: 0, run: 0 });
   const [draft, setDraft] = useState(value);
   const draftRef = useRef(value);
@@ -369,12 +400,14 @@ export const RichNoteComposer = forwardRef<
       toggleInline: (style) => {
         const line = lines[active.line] ?? parseLine("");
         const current = line.runs[active.run] ?? parseRun("");
-        const selection = selections.current[
-          `${active.line}:${active.run}`
-        ] ?? {
-          start: current.text.length,
-          end: current.text.length,
-        };
+        const key = `${active.line}:${active.run}`;
+        const selection = readInputSelection(
+          inputs.current[key],
+          selections.current[key] ?? {
+            start: current.text.length,
+            end: current.text.length,
+          },
+        );
         const result = formatRunAtSelection(
           line,
           active.run,
@@ -393,12 +426,14 @@ export const RichNoteComposer = forwardRef<
       setTextColor: (textColor) => {
         const line = lines[active.line] ?? parseLine("");
         const current = line.runs[active.run] ?? parseRun("");
-        const selection = selections.current[
-          `${active.line}:${active.run}`
-        ] ?? {
-          start: current.text.length,
-          end: current.text.length,
-        };
+        const key = `${active.line}:${active.run}`;
+        const selection = readInputSelection(
+          inputs.current[key],
+          selections.current[key] ?? {
+            start: current.text.length,
+            end: current.text.length,
+          },
+        );
         const result = formatRunAtSelection(
           line,
           active.run,
@@ -465,6 +500,15 @@ export const RichNoteComposer = forwardRef<
     const parts = normalizedText.split("\n");
 
     if (parts.length === 1) {
+      const key = `${lineIndex}:${runIndex}`;
+      selections.current[key] = selectionAfterRichNoteTextChange(
+        activeRun.text,
+        normalizedText,
+        selections.current[key] ?? {
+          start: activeRun.text.length,
+          end: activeRun.text.length,
+        },
+      );
       const runs = [...current.runs];
       runs[runIndex] = { ...activeRun, text: normalizedText };
       replaceLine(lineIndex, { ...current, runs });
@@ -636,10 +680,22 @@ export const RichNoteComposer = forwardRef<
                 line.block === "h1" ? 20 : line.block === "h2" ? 16 : 13;
               const lineHeight =
                 line.block === "h1" ? 27 : line.block === "h2" ? 23 : 20;
+              const measuredFontSize = resolveWebEditorFontSize(
+                fontSize * fontScale,
+                webDisplayEnvironment,
+              );
+              const isEditingTailRun =
+                active.line === lineIndex &&
+                active.run === runIndex &&
+                runIndex === line.runs.length - 1;
               return (
                 <View
                   key={key}
-                  style={[styles.run, line.runs.length === 1 && styles.onlyRun]}
+                  style={[
+                    styles.run,
+                    line.runs.length === 1 && styles.onlyRun,
+                    isEditingTailRun && styles.editingTailRun,
+                  ]}
                 >
                   <NativeText
                     allowFontScaling={false}
@@ -651,7 +707,7 @@ export const RichNoteComposer = forwardRef<
                         color: run.inline.has("link")
                           ? "#2877D4"
                           : (run.textColor ?? colors.ink),
-                        fontSize: fontSize * fontScale,
+                        fontSize: measuredFontSize,
                         lineHeight: lineHeight * fontScale,
                       },
                     ]}
@@ -747,8 +803,12 @@ const styles = StyleSheet.create({
   onlyRun: { flex: 1 },
   runMeasure: {
     opacity: 0,
-    paddingRight: 3,
   },
+  // A trailing active run occupies the remaining row before the next key is
+  // painted. This prevents the native input from horizontally scrolling its
+  // caret while its measured wrapper catches up, without adding layout space
+  // at formatting boundaries in the middle of a word.
+  editingTailRun: { flexGrow: 1 },
   overlayRunInput: {
     position: "absolute",
     top: 0,

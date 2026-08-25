@@ -22,6 +22,22 @@ export function normalizeTodoLabel(value: string) {
     .slice(0, 32);
 }
 
+/** User-facing label copy is hash-free while storage remains normalized. */
+export function formatTodoLabel(value: string) {
+  return normalizeTodoLabel(value).replace(/\p{L}/u, (letter) =>
+    letter.toLocaleUpperCase(),
+  );
+}
+
+/** Preserve editable text while presenting inline #labels as friendly copy. */
+export function formatTodoLabelText(value: string) {
+  return value.replace(
+    TODO_LABEL_PATTERN,
+    (_match, leading: string, label: string) =>
+      `${leading}${formatTodoLabel(label)}`,
+  );
+}
+
 export function extractTodoLabels(...values: (string | undefined)[]) {
   const labels: string[] = [];
   const seen = new Set<string>();
@@ -54,6 +70,27 @@ export function todoLabels(
     if (labels.length >= MAX_TODO_LABELS) break;
   }
   return labels;
+}
+
+/**
+ * Saved Today views combine explicit To-Do selection with an optional label
+ * rule. Multiple labels are alternatives, while an explicit ID list further
+ * narrows the result.
+ */
+export function todoMatchesViewFilter(
+  todo: Pick<
+    TodoItem,
+    "id" | "title" | "description" | "labels"
+  >,
+  filter: { todoIds?: readonly string[]; todoLabels?: readonly string[] },
+) {
+  if (filter.todoIds !== undefined && !filter.todoIds.includes(todo.id))
+    return false;
+  const selectedLabels = new Set(
+    (filter.todoLabels ?? []).map(normalizeTodoLabel).filter(Boolean),
+  );
+  if (!selectedLabels.size) return true;
+  return todoLabels(todo).some((label) => selectedLabels.has(label));
 }
 
 /**
