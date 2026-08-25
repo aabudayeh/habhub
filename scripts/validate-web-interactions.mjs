@@ -222,7 +222,15 @@ assert.doesNotMatch(
   "focus zoom must be prevented by input sizing without disabling accessible page zoom",
 );
 assert.match(html, /@supports \(height: 100dvh\)/);
-assert.match(html, /body \{[\s\S]{0,120}position: fixed;[\s\S]{0,80}inset: 0;/);
+assert.match(html, /@media all and \(display-mode: standalone\)[\s\S]{0,160}height: 100vh;/);
+assert.doesNotMatch(
+  html,
+  /body \{[\s\S]{0,120}position: fixed;/,
+  "iOS standalone must not use WebKit's gap-producing fixed document body",
+);
+assert.match(html, /body \{[\s\S]{0,80}overscroll-behavior: none;/);
+assert.match(chat, /followOutgoingMessageLayout/);
+assert.match(chat, /onContentSizeChange=\{handleThreadContentSizeChange\}/);
 assert.match(
   today,
   /useWebBackDismiss\(screenIsFocused && editing, finishEditing\)/,

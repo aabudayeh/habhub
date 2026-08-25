@@ -3,8 +3,8 @@ import { dateKey } from '@/src/domain/date';
 import { entriesForDay, entriesForUserDay } from '@/src/domain/dataIndex';
 import {
   activeEnergyEntriesWithoutCoveredWorkoutFallbacks,
-  friendlyHealthOrigin,
   isCalculatedStepFallback,
+  isDailyActiveEnergyAggregateEntry,
   isWorkoutEnergyEntry,
   unrecordedStepActivity,
 } from '@/src/domain/health';
@@ -14,38 +14,6 @@ import { AppState, MetricEntry } from '@/src/types';
 function positive(value: unknown) {
   const number = Number(value);
   return Number.isFinite(number) ? Math.max(0, number) : 0;
-}
-
-function normalizedOrigin(entry: MetricEntry) {
-  return entry.sourceOrigin
-    ? friendlyHealthOrigin(entry.sourceOrigin).trim().toLocaleLowerCase()
-    : '';
-}
-
-function compatibleOrigin(left: MetricEntry, right: MetricEntry) {
-  const leftOrigin = normalizedOrigin(left);
-  const rightOrigin = normalizedOrigin(right);
-  return (
-    !leftOrigin ||
-    !rightOrigin ||
-    leftOrigin === 'your phone' ||
-    rightOrigin === 'your phone' ||
-    leftOrigin === rightOrigin
-  );
-}
-
-function isDailyActiveAggregate(entry: MetricEntry) {
-  const label = (entry.label ?? '').trim().toLocaleLowerCase();
-  const generic = /^(active (calories|energy)( total)?|calories burned)$/.test(
-    label,
-  );
-  return (
-    generic &&
-    (label.endsWith('total') ||
-      /(daily|aggregate|total|stream)/i.test(
-        `${entry.sourceRecordId ?? ''} ${entry.id}`,
-      ))
-  );
 }
 
 function appendNote(note: string | undefined, addition: string) {
@@ -152,22 +120,22 @@ export function totalEnergyBurnedBreakdownEntries(
           rawSourceRows,
         )
       : [];
-    const canonicalIds = new Set(canonicalSourceRows.map((entry) => entry.id));
-    const suppressedWorkoutRows = rawSourceRows.filter(
-      (entry) => isWorkoutEnergyEntry(entry) && !canonicalIds.has(entry.id),
+    const dailyAggregates = canonicalSourceRows.filter(
+      isDailyActiveEnergyAggregateEntry,
     );
-    const dailyAggregates = canonicalSourceRows.filter(isDailyActiveAggregate);
-    const displaySourceRows = canonicalSourceRows.filter(
+    const componentSourceRows = canonicalSourceRows.filter(
       (entry) =>
-        !isCalculatedStepFallback(entry) && !isDailyActiveAggregate(entry),
+        !isCalculatedStepFallback(entry) &&
+        !isDailyActiveEnergyAggregateEntry(entry),
     );
+    const displaySourceRows = [...componentSourceRows];
     const claimedWorkoutRows = new Set<string>();
     for (const aggregate of dailyAggregates) {
-      const workouts = suppressedWorkoutRows.filter(
+      const workouts = componentSourceRows.filter(
         (entry) =>
+          isWorkoutEnergyEntry(entry) &&
           !claimedWorkoutRows.has(entry.id) &&
-          entry.sourceProvider === aggregate.sourceProvider &&
-          compatibleOrigin(entry, aggregate),
+          entry.sourceProvider === aggregate.sourceProvider,
       );
       if (!workouts.length) {
         displaySourceRows.push(aggregate);
@@ -184,15 +152,19 @@ export function totalEnergyBurnedBreakdownEntries(
           : 1;
       for (const workout of workouts) {
         claimedWorkoutRows.add(workout.id);
-        displaySourceRows.push({
-          ...workout,
-          value:
-            Math.round(positive(workout.value) * allocationScale * 10) / 10,
-          note: appendNote(
-            workout.note,
-            'Reconciled to the provider active-energy total.',
-          ),
-        });
+        const existingIndex = displaySourceRows.findIndex(
+          (entry) => entry.id === workout.id,
+        );
+        if (existingIndex >= 0)
+          displaySourceRows[existingIndex] = {
+            ...workout,
+            value:
+              Math.round(positive(workout.value) * allocationScale * 10) / 10,
+            note: appendNote(
+              workout.note,
+              'Reconciled to the provider active-energy total.',
+            ),
+          };
       }
       const allocated = workouts.reduce(
         (sum, entry) => sum + positive(entry.value) * allocationScale,
@@ -227,7 +199,11 @@ export function totalEnergyBurnedBreakdownEntries(
           profile,
         )
       : undefined;
-    if (unrecordedSteps && unrecordedSteps.estimatedCalories > 0.05) {
+    if (
+      !dailyAggregates.length &&
+      unrecordedSteps &&
+      unrecordedSteps.estimatedCalories > 0.05
+    ) {
       const stepSource = entriesForDay(
         state.entries,
         stepMetric!.id,

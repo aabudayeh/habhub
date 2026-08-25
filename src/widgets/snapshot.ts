@@ -106,7 +106,9 @@ export function featuredWidgetSnapshot(
         : "To-Dos",
   );
   const todoSummary =
-    summary.usesGoals
+    summary.usesGoals &&
+    state.settings.showTodosToday !== false &&
+    summary.todoVisible
       ? `${summary.completedTodos}/${summary.todos.length} ${translate("To-Dos")}`
       : "";
   const goalSummary = featuredSubtitle(summary, translate);

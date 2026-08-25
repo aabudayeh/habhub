@@ -64,14 +64,16 @@ import {
   formatMetricValue,
   metricVisualProgress,
 } from "@/src/domain/metrics";
-import { statusForDay } from "@/src/domain/dataIndex";
-import { canUseCachedSharedRaw } from "@/src/domain/sharedMetricPrivacy";
+import { sharedLeaderboardLogEntries } from "@/src/domain/sharedLeaderboardLogs";
+import { useCloudSyncActions } from "@/src/cloud/CloudSyncProvider";
+import { isCloudGroupId } from "@/src/cloud/groupCloud";
 import { useApp } from "@/src/state/AppProvider";
 import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { AppState, MetricEntry, PhotoUpdate } from "@/src/types";
 
 const SCORE_ID = "__score";
+const SHARED_LEADERBOARD_SUMMARY_START = "2000-01-01";
 
 export default function LeaderboardDetail() {
   const params = useLocalSearchParams<{
@@ -80,7 +82,9 @@ export default function LeaderboardDetail() {
     metrics?: string;
   }>();
   const { state } = useApp();
-  const { language } = useLocalization();
+  const cloud = useCloudSyncActions();
+  const tutorialSandbox = useTutorialSandboxActive();
+  const { language, t } = useLocalization();
   const calculationStateRef = useRef(state);
   calculationStateRef.current = state;
   const colors = useAppColors();
@@ -93,6 +97,7 @@ export default function LeaderboardDetail() {
   const [showCalendar, setShowCalendar] = useState(false);
   const [openLogs, setOpenLogs] = useState<Record<string, boolean>>({});
   const [detailsReady, setDetailsReady] = useState(false);
+  const [peerDetailsAuthorized, setPeerDetailsAuthorized] = useState(false);
   useEffect(() => {
     let active = true;
     // Paint the route shell first, then calculate details on the next task.
@@ -113,67 +118,51 @@ export default function LeaderboardDetail() {
         : periodDates(period, anchor, state.settings.weekStartsOn ?? 1),
     [anchor, period, state],
   );
+  const targetedActivitySince =
+    period === "overall"
+      ? SHARED_LEADERBOARD_SUMMARY_START
+      : dates[0];
+  useEffect(() => {
+    if (
+      !detailsReady ||
+      !targetedActivitySince
+    )
+      return;
+    if (tutorialSandbox || !isCloudGroupId(state.group.id)) {
+      setPeerDetailsAuthorized(true);
+      return;
+    }
+    let active = true;
+    setPeerDetailsAuthorized(false);
+    const timer = setTimeout(() => {
+      cloud
+        .refreshActivity(targetedActivitySince)
+        .then(() => {
+          if (active) setPeerDetailsAuthorized(true);
+        })
+        .catch(() => undefined);
+    }, 0);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [
+    cloud,
+    detailsReady,
+    state.group.id,
+    targetedActivitySince,
+    tutorialSandbox,
+  ]);
   const visibleEntries = useMemo(() => {
     if (!detailsReady) return [];
-    const dateSet = new Set(dates);
-    const shared = state.entries.filter(
-      (entry) => {
-        if (!dateSet.has(entry.localDate)) return false;
-        if (entry.userId === state.currentUserId) return true;
-        if (entry.visibility !== "group") return false;
-        const authoritativeStatus = statusForDay(
-          state.dailyMetricStatuses,
-          state.group.id,
-          entry.metricId,
-          entry.userId,
-          entry.localDate,
-        );
-        const verifiedExactValue =
-          authoritativeStatus?.visibility === "group" &&
-          authoritativeStatus.privacyProjectionVersion === 2
-            ? authoritativeStatus.exactValue
-            : undefined;
-        return canUseCachedSharedRaw(
-          entry.userId,
-          state.currentUserId,
-          authoritativeStatus?.visibility,
-          verifiedExactValue,
-        );
-      },
-    );
-    const sharedKeys = new Set(
-      shared.map(
-        (entry) => `${entry.userId}\u0000${entry.metricId}\u0000${entry.localDate}`,
-      ),
-    );
-    const exactDailySnapshots: MetricEntry[] = (
-      state.dailyMetricStatuses ?? []
-    )
-      .filter(
-        (status) =>
-          status.groupId === state.group.id &&
-          status.userId !== state.currentUserId &&
-          dateSet.has(status.localDate) &&
-          status.visibility === "group" &&
-          status.privacyProjectionVersion === 2 &&
-          status.exactValue !== undefined &&
-          !sharedKeys.has(
-            `${status.userId}\u0000${status.metricId}\u0000${status.localDate}`,
-          ),
-      )
-      .map((status) => ({
-        id: `shared-total:${status.userId}:${status.metricId}:${status.localDate}`,
-        metricId: status.metricId,
-        userId: status.userId,
-        value: status.exactValue!,
-        localDate: status.localDate,
-        recordedAt:
-          status.syncedAt ?? `${status.localDate}T12:00:00.000Z`,
-        visibility: "group",
-        source: "calculated",
-        label: "Daily summary · individual log details have not synced yet",
-      }));
-    return [...shared, ...exactDailySnapshots];
+    return sharedLeaderboardLogEntries({
+      currentUserId: state.currentUserId,
+      dates,
+      entries: state.entries,
+      groupId: state.group.id,
+      peerDetailsAuthorized,
+      statuses: state.dailyMetricStatuses,
+    });
   }, [
     dates,
     detailsReady,
@@ -181,6 +170,7 @@ export default function LeaderboardDetail() {
     state.dailyMetricStatuses,
     state.entries,
     state.group.id,
+    peerDetailsAuthorized,
   ]);
   const loggedIds = useMemo(
     () => [...new Set(visibleEntries.map((entry) => entry.metricId))],
@@ -508,20 +498,7 @@ export default function LeaderboardDetail() {
               }
             >
             <Card style={styles.memberCard}>
-              <Pressable
-                onPress={() =>
-                  router.navigate({
-                    pathname: "/member/[id]",
-                    params: {
-                      id: row.member.id,
-                      period,
-                      anchor,
-                      metrics: selectedIds.join(","),
-                    },
-                  } as never)
-                }
-                style={styles.heading}
-              >
+              <View style={styles.heading}>
                 <Text
                   style={[
                     styles.rank,
@@ -531,17 +508,51 @@ export default function LeaderboardDetail() {
                 >
                   #{index + 1}
                 </Text>
-                <Avatar
-                  initials={row.member.initials}
-                  color={row.member.color}
-                  uri={row.member.avatarUri}
-                  size={44}
-                />
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`${t("Compare with")} ${memberDisplayName(state, row.member)}`}
+                  onPress={() =>
+                    router.navigate({
+                      pathname: "/member/[id]",
+                      params: {
+                        id: row.member.id,
+                        period,
+                        anchor,
+                        metrics: selectedIds.join(","),
+                      },
+                    } as never)
+                  }
+                  style={styles.memberAvatarLink}
+                >
+                  <Avatar
+                    initials={row.member.initials}
+                    color={row.member.color}
+                    uri={row.member.avatarUri}
+                    size={44}
+                  />
+                </Pressable>
                 <View style={styles.copy}>
-                  <Text style={[styles.name, { color: colors.ink }]}>
-                    <Text translate={false}>{memberDisplayName(state, row.member)}</Text>
-                    {row.member.id === state.currentUserId ? " · You" : ""}
-                  </Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`${t("Compare with")} ${memberDisplayName(state, row.member)}`}
+                    onPress={() =>
+                      router.navigate({
+                        pathname: "/member/[id]",
+                        params: {
+                          id: row.member.id,
+                          period,
+                          anchor,
+                          metrics: selectedIds.join(","),
+                        },
+                      } as never)
+                    }
+                    style={styles.memberNameLink}
+                  >
+                    <Text style={[styles.name, { color: colors.ink }]}>
+                      <Text translate={false}>{memberDisplayName(state, row.member)}</Text>
+                      {row.member.id === state.currentUserId ? " · You" : ""}
+                    </Text>
+                  </Pressable>
                   <Text style={[styles.role, { color: colors.muted }]}>
                     {memberOriginalLabel(state, row.member) ??
                       memberRoleLabel(row.member)}
@@ -560,12 +571,7 @@ export default function LeaderboardDetail() {
                     <Text style={[styles.scoreLabel, { color: colors.faint }]}>score</Text>
                   </View>
                 ) : null}
-                <Ionicons
-                  name="chevron-forward"
-                  size={16}
-                  color={colors.faint}
-                />
-              </Pressable>
+              </View>
               {includeScore ? (
                 <ProgressBar
                   progress={row.score / 100}
@@ -1125,6 +1131,8 @@ const styles = StyleSheet.create({
   },
   rank: { width: 27, color: palette.faint, fontSize: 12, fontWeight: "900" },
   podium: { color: palette.amber, fontSize: 15 },
+  memberAvatarLink: { borderRadius: 22 },
+  memberNameLink: { alignSelf: "flex-start" },
   copy: { flex: 1 },
   name: { color: palette.ink, fontSize: 14, fontWeight: "900" },
   role: { color: palette.muted, fontSize: 9, marginTop: 2 },

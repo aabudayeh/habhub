@@ -32,9 +32,21 @@ const webShellStyles = `
     }
   }
 
+  /*
+   * WebKit's installed-app viewport currently reports dvh with the safe area
+   * removed even though viewport-fit=cover gives that area to the document.
+   * That leaves a shell-coloured rectangle above bottom navigation. In
+   * standalone mode 100vh is the WebKit-supported full-screen measurement;
+   * regular Safari still needs dvh so its changing browser chrome is excluded.
+   */
+  @media all and (display-mode: standalone) {
+    html, body {
+      height: 100vh;
+    }
+  }
+
   body {
-    position: fixed;
-    inset: 0;
+    overscroll-behavior: none;
   }
 
   #root {

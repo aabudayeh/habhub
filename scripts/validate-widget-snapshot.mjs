@@ -103,6 +103,33 @@ assert.match(
 );
 assert.equal(noTodoFeatured.todoSummary, "0/0 To-Dos");
 
+const hiddenTodoFeatured = featuredWidgetSnapshot(
+  {
+    ...state,
+    settings: { ...state.settings, showTodosToday: false },
+    todos: [
+      {
+        id: "hidden-widget-todo",
+        title: "Hidden widget to-do",
+        createdAt: `${today}T08:00:00.000Z`,
+        priority: "normal",
+        reminders: [],
+        completedDates: [],
+      },
+    ],
+  },
+  today,
+  state.settings.language ?? "en",
+  identity,
+  theme,
+);
+assert.equal(
+  hiddenTodoFeatured.todoSummary,
+  "",
+  "Featured widgets must hide the To-Do segment when To-Dos are hidden in Today",
+);
+assert.doesNotMatch(hiddenTodoFeatured.compactSubtitle, /To-Dos/);
+
 const status = statusRangeRollup(state, state.currentUserId, [today]);
 const avatar = statusWidgetSnapshot(
   state,
@@ -221,6 +248,17 @@ const filteredHero = todayHeroSummary(
 );
 assert.equal(filteredHero.todoVisible, false);
 assert.deepEqual(filteredHero.todos, []);
+assert.equal(
+  featuredWidgetSnapshot(
+    activeTodoFilterState,
+    today,
+    state.settings.language ?? "en",
+    identity,
+    theme,
+  ).todoSummary,
+  "",
+  "Featured widgets must follow a Today filter that hides To-Dos",
+);
 
 const googleEntry = {
   id: "google-health:widget-private-steps",

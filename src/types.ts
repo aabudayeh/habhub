@@ -736,6 +736,7 @@ export type MuscleGroup =
   | "full_body";
 export type GymIntensity = "light" | "moderate" | "vigorous";
 export type GymCalorieCalculationMode = "session_met" | "set_aware";
+export type GymTimerMode = "guided" | "whole_workout";
 export type WorkoutExerciseTrackingMode = "load_reps" | "reps" | "duration";
 export type GymExerciseGoal = {
   targetOneRepMaxKg?: number;
@@ -1047,6 +1048,10 @@ export type UserSettings = {
   showChat: boolean;
   /** Optional dedicated strength-training tab. */
   showGym?: boolean;
+  /** Workout timer progression; omitted preserves the original set/rest flow. */
+  gymTimerMode?: GymTimerMode;
+  /** One-time repair marker for builds that temporarily retired Workout calories. */
+  workoutCaloriesRestored?: boolean;
   showCalendar?: boolean;
   showJournal?: boolean;
   /** Optional Today-header shortcuts; tabs may remain hidden independently. */

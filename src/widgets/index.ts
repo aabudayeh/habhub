@@ -40,7 +40,7 @@ export type WidgetFeaturedSnapshot = WidgetTrackerSnapshot & {
   dateLabel: string;
   /** Goal status rendered at the left of the Featured summary row. */
   goalSummary: string;
-  /** Protected right-hand count so compact widgets never clip To-Dos away. */
+  /** Optional To-Do count shown beside goal status when Today's To-Dos are visible. */
   todoSummary: string;
   /** Short enough to remain visible beside goal status in a 2 x 1 widget. */
   compactSubtitle: string;

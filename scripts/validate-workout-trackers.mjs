@@ -5,6 +5,7 @@ import {
   canonicalWorkoutTrackerId,
   consolidateWorkoutTrackers,
 } from "../src/domain/workoutTrackers.ts";
+import { completeGymWorkout } from "../src/domain/gym.ts";
 import {
   ANY_RECORDED_WORKOUT_QUALIFICATION,
   DEFAULT_WORKOUT_QUALIFICATION,
@@ -19,6 +20,27 @@ assert.equal(
   false,
   "an incidental walk must not complete Workout",
 );
+
+const unfinishedWorkout = [
+  {
+    id: "exercise",
+    name: "Bench press",
+    completed: false,
+    sets: [
+      { id: "set-1", reps: 8, weightKg: 70, completed: false },
+      { id: "set-2", reps: 8, weightKg: 70, completed: true },
+    ],
+  },
+];
+const fullyCompletedWorkout = completeGymWorkout(unfinishedWorkout);
+assert.notEqual(fullyCompletedWorkout, unfinishedWorkout);
+assert.equal(unfinishedWorkout[0].sets[0].completed, false);
+assert.equal(fullyCompletedWorkout[0].completed, true);
+assert.ok(
+  fullyCompletedWorkout[0].sets.every((set) => set.completed),
+  "Complete all must finish every set without mutating the workout draft",
+);
+
 assert.equal(
   workoutQualifies(
     { activityKey: "walking", durationMinutes: 30 },
@@ -193,14 +215,33 @@ const migration = fs.readFileSync("src/domain/stateMigration.ts", "utf8");
 const editor = fs.readFileSync("app/metric-editor.tsx", "utf8");
 const health = fs.readFileSync("src/domain/health.ts", "utf8");
 const log = fs.readFileSync("app/(tabs)/log.tsx", "utf8");
+const gymScreen = fs.readFileSync("app/(tabs)/gym.tsx", "utf8");
+const types = fs.readFileSync("src/types.ts", "utf8");
+const workoutNotifications = fs.readFileSync(
+  "src/notifications/workoutTimer.ts",
+  "utf8",
+);
 assert.match(seed, /id: "workout"[\s\S]{0,500}gymMapping: \{ kind: "session_completed" \}/);
 assert.match(seed, /id: "workout_duration"[\s\S]{0,500}gymMapping: \{ kind: "session_duration" \}/);
 assert.match(seed, /id: "workout"[\s\S]{0,600}workoutQualification: DEFAULT_WORKOUT_QUALIFICATION/);
-assert.doesNotMatch(seed, /id: "workout_calories"/);
-assert.doesNotMatch(provider, /metricId: "workout_calories"/);
+assert.match(seed, /id: "workout_calories"/);
+assert.match(seed, /workout_calories: \{ dataType: "workouts", field: "active_calories" \}/);
+assert.match(provider, /metricId: "workout_calories"/);
 assert.match(provider, /workoutQualifies\(/);
 assert.match(health, /workoutCompletionQualifies/);
-assert.match(migration, /RETIRED_METRIC_IDS = new Set\(\["workout_calories"\]\)/);
+assert.match(migration, /restoreWorkoutCalories\(state, defaults\)/);
+assert.match(
+  migration,
+  /state\.settings\.workoutCaloriesRestored === true[\s\S]{0,40}return state/,
+  "Workout-calorie restoration must run once, not after a later user deletion",
+);
+assert.match(migration, /workoutCaloriesRestored: true/);
+assert.doesNotMatch(
+  migration,
+  /\? \["workout_duration", WORKOUT_CALORIES_METRIC_ID, "workout_distance"\]/,
+  "the general companion repair must not re-add Workout calories after a later user deletion",
+);
+assert.doesNotMatch(migration, /RETIRED_METRIC_IDS/);
 assert.match(editor, /What counts as a workout/);
 assert.doesNotMatch(catalog, /templateId: "gym_completed"/);
 assert.doesNotMatch(catalog, /templateId: "gym_duration"/);
@@ -212,6 +253,54 @@ assert.match(
   log,
   /selected\.dataType === "boolean" && selected\.id !== "workout"/,
   "Workout logging must use its detail/Add flow rather than a redundant Mark as complete toggle",
+);
+assert.match(
+  log,
+  /\["workout_calories", workoutCalories\][\s\S]{0,80}\["exercise", workoutCalories\]/,
+  "a manually logged workout must restore both Workout calories and Active energy",
+);
+assert.match(types, /gymTimerMode\?: GymTimerMode/);
+assert.match(
+  gymScreen,
+  /const configuredTimerMode: GymTimerMode =[\s\S]{0,120}state\.settings\.gymTimerMode === "whole_workout"[\s\S]{0,80}: "guided"/,
+  "The existing set/rest timer must remain the default for old and new accounts",
+);
+assert.match(gymScreen, /setWorkoutTimer\(\{[\s\S]{0,120}\.\.\.draft\.timer,[\s\S]{0,180}: "guided"/);
+assert.match(gymScreen, /setWorkoutTimer\(\{[\s\S]{0,100}mode: configuredTimerMode,[\s\S]{0,100}phase: "work"/);
+assert.match(
+  gymScreen,
+  /function advanceWorkoutTimer[\s\S]{0,150}workoutTimer\.mode === "whole_workout"\) return/,
+  "Whole-workout mode must not enter per-set or rest progression",
+);
+assert.match(
+  gymScreen,
+  /workoutTimer\.mode !== "whole_workout" \? \([\s\S]{0,180}advanceWorkoutTimer\(\)/,
+  "The fixed Next control must exist only for the original guided timer",
+);
+assert.match(gymScreen, /updateSettings\(\{ gymTimerMode: "guided" \}\)/);
+assert.match(gymScreen, /updateSettings\(\{ gymTimerMode: "whole_workout" \}\)/);
+assert.match(gymScreen, /onPress=\{completeAllSets\}[\s\S]{0,500}>Complete all</);
+assert.match(gymScreen, /setExercises\(\(current\) => completeGymWorkout\(current\)\)/);
+const exercisePicker = gymScreen.slice(
+  gymScreen.indexOf('visible={pickerOpen}'),
+  gymScreen.indexOf('visible={recapOpen}'),
+);
+assert.ok(exercisePicker.length > 0);
+assert.doesNotMatch(
+  exercisePicker,
+  /autoFocus/,
+  "Add Exercise must show its menu without forcing Search or the keyboard open",
+);
+assert.match(
+  gymScreen,
+  /allowProgression: workoutTimer\.mode !== "whole_workout"/,
+  "Whole-workout notifications must not expose a stale Next action",
+);
+assert.match(workoutNotifications, /allowProgression = true/);
+assert.match(
+  workoutNotifications,
+  /allowProgression && actionToken && maxActions > 0/,
+  "The notification API must preserve guided progression by default while allowing the whole timer to suppress Next",
 );
 
 console.log("Canonical workout tracker merge, compatibility aliases, and onboarding recommendations validated.");

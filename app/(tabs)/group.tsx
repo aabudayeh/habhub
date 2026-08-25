@@ -264,17 +264,9 @@ const LeaderboardMemberGrid = React.memo(function LeaderboardMemberGrid({
             (item) => item.date === selectedDate,
           );
           if (!cell?.logged) return;
-          if (memberId === state.currentUserId) {
-            router.navigate({
-              pathname: "/day/[date]",
-              params: { date: selectedDate, metrics: metric.id },
-            } as never);
-            return;
-          }
           router.navigate({
-            pathname: "/member/[id]",
+            pathname: "/leaderboard-detail",
             params: {
-              id: memberId,
               period: "custom",
               anchor: selectedDate,
               metrics: metric.id,
@@ -1408,6 +1400,21 @@ function LeaderboardScreen() {
               const gridKey = `${id}:${row.member.id}`;
               const gridExpanded = expandedGridRows.includes(gridKey);
               const gridMemberName = memberDisplayName(state, row.member);
+              const openMemberComparison = () =>
+                router.navigate({
+                  pathname: "/member/[id]",
+                  params: {
+                    id: row.member.id,
+                    period,
+                    anchor,
+                    metrics: id,
+                  },
+                } as never);
+              const openLeaderboardDetail = () =>
+                router.navigate({
+                  pathname: "/leaderboard-detail",
+                  params: { period, anchor, metrics: id },
+                } as never);
               return (
                 <View
                   key={row.member.id}
@@ -1433,102 +1440,115 @@ function LeaderboardScreen() {
                       },
                     ]}
                   >
-                  <Pressable
-                    disabled={editing}
-                    onPress={() =>
-                      router.navigate({
-                        pathname: "/member/[id]",
-                        params: {
-                          id: row.member.id,
-                          period,
-                          anchor,
-                          metrics: id,
-                        },
-                      } as never)
-                    }
-                    style={styles.memberLink}
-                  >
-                  <Text
-                    style={[
-                      styles.rank,
-                      { color: colors.faint },
-                      index < 3 && styles.podium,
-                    ]}
-                  >
-                    #{index + 1}
-                  </Text>
-                  <Avatar
-                    initials={row.member.initials}
-                    color={row.member.color}
-                    uri={row.member.avatarUri}
-                    size={31}
-                  />
-                  <View style={styles.copy}>
-                    <Text style={[styles.name, { color: colors.ink }]}>
-                      {memberDisplayName(state, row.member)}
-                      {row.member.id === state.currentUserId ? " · You" : ""}
-                    </Text>
-                    {memberOriginalLabel(state, row.member) ? (
-                      <Text style={[styles.original, { color: colors.faint }]}>
-                        {memberOriginalLabel(state, row.member)}
-                      </Text>
-                    ) : null}
-                    {loadingSavedResult ? (
-                      <Text style={[styles.detail, { color: colors.muted }]}>
-                        Loading saved data…
-                      </Text>
-                    ) : includeScore ? (
-                      <Text style={[styles.detail, { color: colors.muted }]}>
-                        Group-weighted score
-                      </Text>
-                    ) : canShowStreak ? (
-                      <View style={styles.streakBlock}>
-                        <View style={styles.detailLine}>
-                          <Ionicons
-                            name="flame"
-                            size={12}
-                            color={metric?.color ?? accent}
-                          />
-                          <Text
-                            style={[styles.streakText, { color: colors.muted }]}
-                          >
-                            {result.streak ?? 0}d · Best{" "}
-                            {result.bestStreak ?? 0}d
-                          </Text>
-                        </View>
-                        {syncTimestamp ? (
-                          <Text
-                            style={[styles.syncDetail, { color: colors.muted }]}
-                          >
-                            Synced {relativeTime(syncTimestamp)}
-                          </Text>
-                        ) : null}
-                      </View>
-                    ) : (
+                  <View style={styles.memberLink}>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={t("Leaderboard details")}
+                      disabled={editing}
+                      onPress={openLeaderboardDetail}
+                      style={styles.rankLink}
+                    >
                       <Text
                         style={[
-                          styles.detail,
-                          { color: colors.muted },
-                          result?.mode === "private" && styles.private,
+                          styles.rank,
+                          { color: colors.faint },
+                          index < 3 && styles.podium,
                         ]}
                       >
-                        {syncTimestamp
-                          ? `Synced ${relativeTime(syncTimestamp)}`
-                          : result?.label === "Private"
-                            ? "Private"
-                            : "No data"}
+                        #{index + 1}
                       </Text>
-                    )}
+                    </Pressable>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`${t("Compare with")} ${gridMemberName}`}
+                      disabled={editing}
+                      onPress={openMemberComparison}
+                      style={styles.memberAvatarLink}
+                    >
+                      <Avatar
+                        initials={row.member.initials}
+                        color={row.member.color}
+                        uri={row.member.avatarUri}
+                        size={31}
+                      />
+                    </Pressable>
+                    <View style={styles.copy}>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={`${t("Compare with")} ${gridMemberName}`}
+                        disabled={editing}
+                        onPress={openMemberComparison}
+                        style={styles.memberNameLink}
+                      >
+                        <Text style={[styles.name, { color: colors.ink }]}>
+                          {gridMemberName}
+                          {row.member.id === state.currentUserId ? " · You" : ""}
+                        </Text>
+                      </Pressable>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={t("Leaderboard details")}
+                        disabled={editing}
+                        onPress={openLeaderboardDetail}
+                        style={styles.memberDetailLink}
+                      >
+                        {memberOriginalLabel(state, row.member) ? (
+                          <Text style={[styles.original, { color: colors.faint }]}>
+                            {memberOriginalLabel(state, row.member)}
+                          </Text>
+                        ) : null}
+                        {loadingSavedResult ? (
+                          <Text style={[styles.detail, { color: colors.muted }]}>
+                            Loading saved data…
+                          </Text>
+                        ) : includeScore ? (
+                          <Text style={[styles.detail, { color: colors.muted }]}>
+                            Group-weighted score
+                          </Text>
+                        ) : canShowStreak ? (
+                          <View style={styles.streakBlock}>
+                            <View style={styles.detailLine}>
+                              <Ionicons
+                                name="flame"
+                                size={12}
+                                color={metric?.color ?? accent}
+                              />
+                              <Text
+                                style={[styles.streakText, { color: colors.muted }]}
+                              >
+                                {result.streak ?? 0}d · Best{" "}
+                                {result.bestStreak ?? 0}d
+                              </Text>
+                            </View>
+                            {syncTimestamp ? (
+                              <Text
+                                style={[styles.syncDetail, { color: colors.muted }]}
+                              >
+                                Synced {relativeTime(syncTimestamp)}
+                              </Text>
+                            ) : null}
+                          </View>
+                        ) : (
+                          <Text
+                            style={[
+                              styles.detail,
+                              { color: colors.muted },
+                              result?.mode === "private" && styles.private,
+                            ]}
+                          >
+                            {syncTimestamp
+                              ? `Synced ${relativeTime(syncTimestamp)}`
+                              : result?.label === "Private"
+                                ? "Private"
+                                : "No data"}
+                          </Text>
+                        )}
+                      </Pressable>
+                    </View>
                   </View>
-                  </Pressable>
                   <Pressable
                     disabled={editing}
-                    onPress={() => {
-                      router.navigate({
-                        pathname: "/leaderboard-detail",
-                        params: { period, anchor, metrics: id },
-                      } as never);
-                    }}
+                    onPress={openLeaderboardDetail}
                     style={styles.metricLink}
                   >
                     <View style={styles.bar}>
@@ -2371,6 +2391,8 @@ const styles = StyleSheet.create({
   memberGrid: { borderTopWidth: StyleSheet.hairlineWidth, paddingHorizontal: 7, paddingTop: 5, paddingBottom: 8 },
   rank: { width: 26, fontSize: 11, fontWeight: "900" },
   podium: { color: palette.amber, fontSize: 14 },
+  rankLink: { width: 26, minHeight: 31, justifyContent: "center" },
+  memberAvatarLink: { borderRadius: 16 },
   memberLink: {
     flex: 1,
     minWidth: 0,
@@ -2379,6 +2401,8 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   copy: { flex: 1 },
+  memberNameLink: { alignSelf: "flex-start" },
+  memberDetailLink: { minHeight: 18, justifyContent: "center" },
   metricLink: { flexDirection: "row", alignItems: "center", gap: 5, paddingVertical: 4 },
   name: { fontSize: 12, fontWeight: "900" },
   original: { fontSize: 8, marginTop: 1 },

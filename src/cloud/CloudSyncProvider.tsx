@@ -2061,74 +2061,6 @@ type MembershipRealtimeRow = {
   last_data_synced_at?: string;
 };
 
-type ProfileRealtimeRow = {
-  id?: string;
-  display_name?: string;
-  avatar_path?: string | null;
-  account_revision?: number;
-};
-
-function applyProfileRealtimeRow(
-  state: AppState,
-  row: ProfileRealtimeRow,
-): AppState | null {
-  const userId = row.id;
-  const name = row.display_name?.trim();
-  const revision = Number(row.account_revision);
-  if (!userId || !name) return null;
-  let changed = false;
-  const updateGroup = (group: Group) => {
-    let groupChanged = false;
-    const updateMember = (member: Member) => {
-      if (member.id !== userId) return member;
-      if (
-        Number.isSafeInteger(revision) &&
-        Number.isSafeInteger(member.profileRevision) &&
-        revision < Number(member.profileRevision)
-      )
-        return member;
-      const avatarStoragePath = row.avatar_path ?? undefined;
-      const initials = name
-        .split(/\s+/)
-        .slice(0, 2)
-        .map((part) => part[0] ?? "")
-        .join("")
-        .toUpperCase();
-      if (
-        member.name === name &&
-        member.initials === initials &&
-        member.avatarStoragePath === avatarStoragePath &&
-        (!Number.isSafeInteger(revision) ||
-          member.profileRevision === revision)
-      )
-        return member;
-      changed = true;
-      groupChanged = true;
-      return {
-        ...member,
-        name,
-        initials,
-        avatarStoragePath,
-        avatarUri:
-          member.avatarStoragePath === avatarStoragePath
-            ? member.avatarUri
-            : undefined,
-        profileRevision: Number.isSafeInteger(revision)
-          ? revision
-          : member.profileRevision,
-      };
-    };
-    const members = group.members.map(updateMember);
-    const pendingMembers = group.pendingMembers?.map(updateMember);
-    return groupChanged ? { ...group, members, pendingMembers } : group;
-  };
-  const groups = state.groups.map(updateGroup);
-  const group =
-    groups.find((candidate) => candidate.id === state.group.id) ??
-    updateGroup(state.group);
-  return changed ? { ...state, groups, group } : state;
-}
-
 function applyMembershipRealtimeRow(
   state: AppState,
   row: MembershipRealtimeRow,
@@ -5637,20 +5569,38 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       },
     );
     const channel = supabase
-      .channel(`membership-approval:${auth.user.id}`)
+      .channel(`account:${auth.user.id}:memberships`, {
+        config: { private: true, broadcast: { self: false } },
+      })
       .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "group_members",
-          filter: `user_id=eq.${auth.user.id}`,
-        },
+        "broadcast",
+        { event: "membership_updated" },
         (event) => {
-          const membership = event.new as {
+          const membership = (event.payload ?? {}) as {
             group_id?: string;
+            user_id?: string;
             status?: string;
+            operation?: string;
           };
+          if (membership.user_id !== auth.user?.id) return;
+          if (membership.operation === "DELETE") {
+            if (
+              membership.group_id &&
+              pendingGroupRef.current?.groupId === membership.group_id
+            ) {
+              AsyncStorage.removeItem(PENDING_GROUP_KEY).catch(() => undefined);
+              pendingGroupRef.current = null;
+              setPendingGroup(null);
+            }
+            if (
+              membership.group_id &&
+              stateRef.current.groups.some(
+                (group) => group.id === membership.group_id,
+              )
+            )
+              void evictUnavailableGroup(membership.group_id);
+            return;
+          }
           if (
             membership.group_id &&
             membership.status === "active" &&
@@ -5658,37 +5608,6 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           ) {
             activateIfApproved(membership.group_id).catch(() => undefined);
           }
-        },
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "DELETE",
-          schema: "public",
-          table: "group_members",
-          filter: `user_id=eq.${auth.user.id}`,
-        },
-        (event) => {
-          const removed = event.old as {
-            group_id?: string;
-            user_id?: string;
-          };
-          if (
-            removed.group_id &&
-            pendingGroupRef.current?.groupId === removed.group_id
-          ) {
-            AsyncStorage.removeItem(PENDING_GROUP_KEY).catch(() => undefined);
-            pendingGroupRef.current = null;
-            setPendingGroup(null);
-          }
-          if (
-            removed.user_id === auth.user?.id &&
-            removed.group_id &&
-            stateRef.current.groups.some(
-              (group) => group.id === removed.group_id,
-            )
-          )
-            void evictUnavailableGroup(removed.group_id);
         },
       )
       .subscribe();
@@ -6405,133 +6324,13 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       activityVersionChecks.set(groupId, check);
     };
     const workspaceChannel = supabase
-      .channel(`group-workspace:${state.group.id}`)
+      .channel(`group:${state.group.id}:workspace`, {
+        config: { private: true, broadcast: { self: false } },
+      })
       .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "messages",
-          filter: `group_id=eq.${state.group.id}`,
-        },
-        queueMessageRefresh,
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "photo_updates",
-          filter: `group_id=eq.${state.group.id}`,
-        },
+        "broadcast",
+        { event: "workspace_updated" },
         queueRefresh,
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "groups",
-          filter: `id=eq.${state.group.id}`,
-        },
-        queueRefresh,
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "profiles",
-        },
-        (event) => {
-          const row = event.new as ProfileRealtimeRow;
-          if (row.id === stateRef.current.currentUserId) {
-            // The private revision is the canonical merge boundary for this
-            // account. Pull it instead of turning an incoming self-profile row
-            // into a new local outbox write.
-            const revision = Number(row.account_revision);
-            if (
-              Number.isSafeInteger(revision) &&
-              revision <= revisionRef.current
-            )
-              return;
-            pullLatest(
-              Number.isSafeInteger(revision) ? revision : undefined,
-            ).catch(() => undefined);
-            return;
-          }
-          const live = stateRef.current;
-          const previousAvatarPath = live.groups
-            .flatMap((group) => [
-              ...group.members,
-              ...(group.pendingMembers ?? []),
-            ])
-            .find((member) => member.id === row.id)?.avatarStoragePath;
-          const next = applyProfileRealtimeRow(live, row);
-          if (!next) {
-            queueRefresh();
-            return;
-          }
-          if (next !== live) {
-            stateRef.current = next;
-            replaceState(next, { source: "cloud" });
-          }
-          // Names apply from the tiny realtime row immediately. Only a changed
-          // private-bucket object needs the deferred shell refresh for a new
-          // signed URL.
-          if (previousAvatarPath !== (row.avatar_path ?? undefined))
-            queueRefresh();
-        },
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "group_members",
-          filter: `group_id=eq.${state.group.id}`,
-        },
-        (event) => {
-          if (event.eventType === "DELETE") {
-            const removed = event.old as { group_id?: string };
-            if (removed.group_id === stateRef.current.group.id)
-              queueRefresh();
-            return;
-          }
-          const live = stateRef.current;
-          const next = applyMembershipRealtimeRow(
-            live,
-            event.new as MembershipRealtimeRow,
-          );
-          if (!next) {
-            queueRefresh();
-            return;
-          }
-          if (next !== live) {
-            stateRef.current = next;
-            replaceState(next, { source: "cloud" });
-          }
-        },
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "metric_definitions",
-          filter: `group_id=eq.${state.group.id}`,
-        },
-        queueRefresh,
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "group_activity_versions",
-          filter: `group_id=eq.${state.group.id}`,
-        },
-        queueActivityRefresh,
       )
       .subscribe();
     const activityChannel = supabase
@@ -6564,6 +6363,12 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       .subscribe((channelStatus) => {
         if (channelStatus === "SUBSCRIBED") queueMessageRefresh();
       });
+    const directChatChannel = supabase
+      .channel(`account:${auth.user.id}:chat`, {
+        config: { private: true, broadcast: { self: false } },
+      })
+      .on("broadcast", { event: "message_committed" }, queueMessageRefresh)
+      .subscribe();
     return () => {
       cancelled = true;
       activityVersionChecks.delete(state.group.id);
@@ -6573,6 +6378,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       supabase?.removeChannel(workspaceChannel).catch(() => undefined);
       supabase?.removeChannel(activityChannel).catch(() => undefined);
       supabase?.removeChannel(chatChannel).catch(() => undefined);
+      supabase?.removeChannel(directChatChannel).catch(() => undefined);
     };
   }, [
     auth.status,

@@ -223,9 +223,10 @@ assert.match(
 );
 assert.match(
   pluginSource,
-  /denseMemberHeader = desiredRows >= 3[\s\S]*headerScale = if \(denseMemberHeader\) 0\.78f else 1f[\s\S]*desiredRows \* preferredRowHeight > availableHeight[\s\S]*compactRowHeight[\s\S]*rowHeight \* 0\.58f[\s\S]*baseRowTextSize \* 1\.28f/,
-  "Leaderboard rows must compact to fit larger groups and scale up into spare height for smaller groups",
+  /MIN_LEADERBOARD_ROW_TEXT_SIZE = 6\.2f[\s\S]*denseMemberHeader = desiredRows >= 3[\s\S]*desiredRows \* preferredRowHeight > availableHeight[\s\S]*MIN_LEADERBOARD_ROW_TEXT_SIZE \* 1\.35f[\s\S]*rowHeight \* 0\.66f[\s\S]*coerceAtLeast\(MIN_LEADERBOARD_ROW_TEXT_SIZE\)[\s\S]*baseRowTextSize \* 1\.28f/,
+  "Leaderboard rows must keep a legible floor while compacting larger groups and scaling into spare height",
 );
+const MIN_LEADERBOARD_ROW_TEXT_SIZE = 6.2;
 function singleMetricLeaderboardDensity(widthDp, heightDp, members) {
   const pad = Math.min(12, Math.max(4, Math.min(widthDp, heightDp) * 0.065));
   const headerSize = Math.min(15, Math.max(6.2, Math.min(widthDp / 14, heightDp / 6.5)));
@@ -246,14 +247,23 @@ function singleMetricLeaderboardDensity(widthDp, heightDp, members) {
   const availableHeight = Math.max(0, cellHeight - titleBandHeight - innerPad * 0.45);
   const preferredRowHeight = Math.max(10, baseRowTextSize * 2.15);
   const compactRows = desiredRows > 0 && desiredRows * preferredRowHeight > availableHeight;
-  const compactRowHeight = Math.min(9, Math.max(6.4, baseRowTextSize * 0.9));
+  const compactRowHeight = Math.max(
+    MIN_LEADERBOARD_ROW_TEXT_SIZE * 1.35,
+    Math.min(10, Math.max(6.4, baseRowTextSize * 0.9)),
+  );
   const visibleRows = Math.min(
     desiredRows,
     Math.max(1, Math.floor(availableHeight / (compactRows ? compactRowHeight : preferredRowHeight))),
   );
   const rowHeight = availableHeight / Math.max(1, visibleRows);
   const rowTextSize = compactRows
-    ? Math.max(4, Math.min(baseRowTextSize, rowHeight * 0.58))
+    ? Math.max(
+        MIN_LEADERBOARD_ROW_TEXT_SIZE,
+        Math.min(
+          Math.max(baseRowTextSize, MIN_LEADERBOARD_ROW_TEXT_SIZE),
+          rowHeight * 0.66,
+        ),
+      )
     : Math.max(baseRowTextSize, Math.min(baseRowTextSize * 1.28, rowHeight * 0.58));
   return { rowHeight, rowTextSize, visibleRows };
 }
@@ -264,6 +274,16 @@ assert.ok(sparseLeaderboard.rowHeight > crowdedLeaderboard.rowHeight);
 assert.ok(
   sparseLeaderboard.rowTextSize > crowdedLeaderboard.rowTextSize,
   "A sparse leaderboard must spend its spare height on larger text",
+);
+const compactLeaderboard = singleMetricLeaderboardDensity(109, 50, 5);
+assert.equal(
+  compactLeaderboard.visibleRows,
+  2,
+  "A 2 x 1 leaderboard must show as many members as its legible text floor permits",
+);
+assert.ok(
+  compactLeaderboard.rowTextSize >= MIN_LEADERBOARD_ROW_TEXT_SIZE,
+  "A crowded 2 x 1 leaderboard must never shrink member text below the legible floor",
 );
 assert.match(
   pluginSource,
@@ -309,13 +329,23 @@ assert.match(
 assert.match(pluginSource, /item\.optString\("compactSubtitle", item\.optString\("subtitle"\)\)/);
 assert.match(
   pluginSource,
-  /drawFeaturedSummary\([\s\S]*if \(size\.compact\) 31\.5f else 54f[\s\S]*todoSummary[\s\S]*drawRightAlignedEllipsizedText/,
-  "The goals-left and protected To-Do count must share one baseline in every Featured size",
+  /drawFeaturedSummary\([\s\S]*if \(size\.compact\) 31\.5f else 54f[\s\S]*todoSummary/,
+  "The goals-left and To-Do count must share one baseline in every Featured size",
 );
+const featuredSummaryRenderer = pluginSource.slice(
+  pluginSource.indexOf("private fun drawFeaturedSummary"),
+  pluginSource.indexOf("private fun drawCompactGoalTiles"),
+);
+assert.match(featuredSummaryRenderer, /val combined = "\$goalSummary · \$todoSummary"/);
 assert.match(
-  pluginSource,
-  /todoWidth = min\(availableWidth \* 0\.48f[\s\S]*goalWidth = max\(8f, availableWidth - todoWidth - dividerWidth\)/,
-  "Featured widgets must reserve enough right-hand width for the To-Do count",
+  featuredSummaryRenderer,
+  /drawText\(canvas, combined, pad, baseline, availableWidth, sharedPaint\)/,
+  "Featured To-Dos must sit directly after goals-left and its separator",
+);
+assert.doesNotMatch(
+  featuredSummaryRenderer,
+  /drawRightAlignedEllipsizedText|withAlpha\(accent/,
+  "Featured To-Dos must neither jump to the far edge nor use the green accent",
 );
 assert.match(pluginSource, /max\(34f, barTop - 10\.5f\)/);
 const featured2x1Width = 109;

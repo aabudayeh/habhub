@@ -42,7 +42,7 @@ const replaceStateCalls = [
 ].map((match) => match[0]);
 assert.equal(
   replaceStateCalls.length,
-  36,
+  34,
   "update the source-classification fixture when replaceState calls change",
 );
 replaceStateCalls.forEach((call, index) =>
@@ -709,5 +709,5 @@ assert.doesNotMatch(
 );
 
 console.log(
-  `Native sync performance validation passed (36 classified replacements; 50k-row transient check ${presenceMs.toFixed(1)} ms).`,
+  `Native sync performance validation passed (34 classified replacements; 50k-row transient check ${presenceMs.toFixed(1)} ms).`,
 );

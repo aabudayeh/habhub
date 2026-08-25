@@ -39,7 +39,9 @@ import {
 import {
   activeEnergyEntriesWithoutCoveredWorkoutFallbacks,
   healthFallbackContextForRead,
+  isFitbitRestingEnergyRecord,
   mapHealthRecordsToEntries,
+  reconciledActiveEnergyValue,
   reconcileGoogleHealthNativeMirrors,
   unrecordedStepActivity,
 } from "../src/domain/health.ts";
@@ -506,6 +508,15 @@ const workoutFallbackMetrics = [
     healthMapping: { dataType: "workouts", field: "duration_minutes" },
   },
   {
+    id: "workout_calories",
+    name: "Workout calories",
+    dataType: "number",
+    unit: "kcal",
+    aggregation: "sum",
+    defaultVisibility: "group",
+    healthMapping: { dataType: "workouts", field: "active_calories" },
+  },
+  {
     id: "workout_distance",
     name: "Workout distance",
     dataType: "number",
@@ -516,6 +527,43 @@ const workoutFallbackMetrics = [
     healthMapping: { dataType: "workouts", field: "distance_km" },
   },
 ];
+const measuredWorkoutCalorieRows = mapHealthRecordsToEntries(
+  [
+    {
+      id: "measured-strength-session",
+      provider: "health_connect",
+      type: "workouts",
+      startTime: "2026-08-13T18:00:00.000Z",
+      endTime: "2026-08-13T18:45:00.000Z",
+      localDate: "2026-08-13",
+      value: 45,
+      unit: "minutes",
+      origin: "Samsung Health",
+      label: "Strength training",
+      activityKey: "strength_training",
+      measurements: { durationMinutes: 45, activeCalories: 185 },
+    },
+  ],
+  "owner",
+  "group",
+  workoutFallbackMetrics,
+  70,
+);
+assert.equal(
+  measuredWorkoutCalorieRows.find(
+    (entry) => entry.metricId === "workout_calories",
+  )?.value,
+  185,
+  "a workout's measured calories must populate the restored Workout calories tracker",
+);
+assert.equal(
+  measuredWorkoutCalorieRows.find(
+    (entry) =>
+      entry.metricId === "exercise" && entry.id.endsWith(":workout-energy"),
+  )?.value,
+  185,
+  "the same measured workout calories must also remain a distinct Active energy session entry",
+);
 const currentDayWithWalkingWorkout = mapHealthRecordsToEntries(
   [
     record({
@@ -795,8 +843,50 @@ assert.equal(
   activeEnergyEntriesWithoutCoveredWorkoutFallbacks(
     dailyAggregateWorkoutEnergy,
   ).length,
-  1,
-  "the numeric Active energy total must still suppress the workout component already contained in a provider day aggregate",
+  2,
+  "a day aggregate must not delete the separately attributable workout row",
+);
+assert.equal(
+  reconciledActiveEnergyValue(dailyAggregateWorkoutEnergy),
+  420,
+  "a provider day total and its visible workout components must reconcile without counting the workout twice",
+);
+assert.equal(
+  metricValue(
+    {
+      entries: [
+        ...dailyAggregateWorkoutEnergy,
+        {
+          id: "daily-aggregate-steps",
+          metricId: "steps",
+          userId: "owner",
+          value: 8_000,
+          localDate: "2026-08-15",
+          recordedAt: "2026-08-15T20:00:00.000Z",
+          visibility: "group",
+          source: "imported",
+          sourceProvider: "health_connect",
+        },
+      ],
+      metrics: workoutFallbackMetrics,
+      settings: {
+        energyProfile: {
+          age: 35,
+          sex: "unspecified",
+          heightCm: 175,
+          weightKg: 70,
+          targetWeightKg: 70,
+          activityLevel: "sedentary",
+          desiredWeeklyLossKg: 0,
+        },
+      },
+    },
+    workoutFallbackMetrics.find((metric) => metric.id === "exercise"),
+    "owner",
+    "2026-08-15",
+  ),
+  420,
+  "a day-wide Active energy authority already contains incidental movement and must not receive another Step estimate",
 );
 assert.equal(
   activeEnergyEntriesWithoutCoveredWorkoutFallbacks(
@@ -878,6 +968,50 @@ const energyBurnedMetric = {
   defaultVisibility: "group",
   healthMapping: { dataType: "total_energy", field: "value" },
 };
+const fitbitRestingRecord = record({
+  id: "fitbit-bmr-increment",
+  type: "active_energy",
+  value: 74,
+  unit: "kcal",
+  origin: "com.fitbit.FitbitMobile",
+  label: undefined,
+});
+assert.equal(
+  isFitbitRestingEnergyRecord(fitbitRestingRecord),
+  true,
+  "an unscoped FitbitMobile ActiveCaloriesBurned increment is total/resting energy, not activity",
+);
+const fitbitEnergyRows = mapHealthRecordsToEntries(
+  [
+    fitbitRestingRecord,
+    record({
+      id: "fitbit-total-energy",
+      type: "total_energy",
+      value: 1_940,
+      unit: "kcal",
+      origin: "com.fitbit.FitbitMobile",
+    }),
+  ],
+  "owner",
+  "group",
+  [...workoutFallbackMetrics, energyBurnedMetric],
+  70,
+);
+assert.equal(
+  fitbitEnergyRows.some((entry) => entry.metricId === "exercise"),
+  false,
+  "Fitbit BMR increments must not leak into Active energy",
+);
+assert.equal(
+  fitbitEnergyRows.some((entry) => entry.metricId === "workout_calories"),
+  false,
+  "Fitbit BMR increments must not leak into Workout calories",
+);
+assert.equal(
+  fitbitEnergyRows.find((entry) => entry.metricId === "energy_burned")?.value,
+  1_940,
+  "Fitbit total energy must remain available in Energy burned",
+);
 const workoutEnergyState = {
   entries: currentDayWithWalkingWorkout,
   metrics: [...workoutFallbackMetrics, energyBurnedMetric],
@@ -1035,33 +1169,36 @@ assert.equal(
     "2026-08-13",
   ),
   Math.round(
-    225 + providerActiveEnergyEntry.value + walkingEstimate.estimatedCalories,
+    225 +
+      providerActiveEnergyEntry.value +
+      Number(walkingWorkoutEnergy.value) +
+      walkingEstimate.estimatedCalories,
   ),
-  "an imported ActiveCaloriesBurned stream must suppress only overlapping health-workout calories, not app gym calories or uncovered-step activity",
+  "an unscoped ActiveCaloriesBurned stream must not erase a workout row without per-session provenance",
 );
-const providerDailyBreakdown = totalEnergyBurnedBreakdownEntries(
+const providerStreamBreakdown = totalEnergyBurnedBreakdownEntries(
   providerAndGymState,
   "owner",
   ["2026-08-13"],
   new Date("2026-08-25T12:00:00.000Z"),
 );
 assert.ok(
-  providerDailyBreakdown.some((entry) => entry.label === "Walking"),
-  "a provider daily active total must retain the separate workout row in the Energy burned detail view",
+  providerStreamBreakdown.some((entry) => entry.label === "Walking"),
+  "an unscoped provider stream must retain the separate workout row in the Energy burned detail view",
 );
 assert.ok(
-  providerDailyBreakdown.some(
+  !providerStreamBreakdown.some(
     (entry) => entry.label === "Other provider active energy",
   ),
-  "only the provider remainder after workout components should stay aggregated",
+  "a provider row without explicit day-total provenance must not be rewritten as a provider remainder",
 );
 assert.ok(
-  providerDailyBreakdown.every((entry) => entry.label !== "Active calories"),
-  "the full provider aggregate must not be displayed on top of its separate workout components",
+  providerStreamBreakdown.some((entry) => entry.label === "Active calories"),
+  "the independent provider row must remain visible beside separately attributable workouts",
 );
 assert.ok(
   Math.abs(
-    providerDailyBreakdown.reduce(
+    providerStreamBreakdown.reduce(
       (sum, entry) => sum + Number(entry.value || 0),
       0,
     ) -
@@ -1072,7 +1209,7 @@ assert.ok(
         "2026-08-13",
       ),
   ) < 1,
-  "the provider-remainder detail rows must reconcile without double-counting workouts",
+  "the per-session detail rows must reconcile without dropping independent workouts",
 );
 const persistedWalkingWorkouts = mapHealthRecordsToEntries(
   [
@@ -2364,6 +2501,11 @@ assert.match(
   /case "saveGymSession"[\s\S]{0,900}\{ metricId: "exercise", value: calorieValue \}/,
   "saving an app gym session must materialize its calories into Active energy",
 );
+assert.match(
+  appProviderHydrationSource,
+  /case "saveGymSession"[\s\S]{0,900}\{ metricId: "workout_calories", value: calorieValue \}/,
+  "saving an app gym session must also restore its Workout calories row",
+);
 const metricCalculationSource = fs.readFileSync(
   "src/domain/metrics.ts",
   "utf8",
@@ -2857,6 +2999,11 @@ assert.match(
   "total energy must use Health Connect's priority-aware daily aggregate",
 );
 assert.match(
+  androidHealthSource,
+  /function fitbitEnergyIsWorkoutScoped[\s\S]{0,900}Math\.abs\(energyEnd - workoutEnd\) <= tolerance/,
+  "Fitbit ActiveCaloriesBurned increments must require workout-session provenance",
+);
+assert.match(
   appConfig,
   /READ_ACTIVE_CALORIES_BURNED[\s\S]{0,160}READ_TOTAL_CALORIES_BURNED/,
   "Android must request both distinct energy permissions",
@@ -2866,10 +3013,10 @@ assert.match(
   /energy_burned: \{ dataType: "total_energy", field: "value" \}/,
   "the total-energy tracker must map to the provider total",
 );
-assert.doesNotMatch(
+assert.match(
   seedSource,
   /workout_calories: \{ dataType: "workouts"/,
-  "the retired workout-calories mapping must not return",
+  "Workout calories must map to each workout session's active-calorie measurement",
 );
 assert.match(
   healthMappingSource,

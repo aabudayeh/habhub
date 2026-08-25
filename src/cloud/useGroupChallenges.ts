@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   deleteGroupChallenge,
@@ -17,6 +17,7 @@ import { supabase } from "@/src/lib/supabase";
 import { useApp } from "@/src/state/AppProvider";
 import { GroupChallenge } from "@/src/types";
 import { useTutorialSandbox } from "@/src/tutorial/TutorialSandboxContext";
+import { subscribePrivateBroadcast } from "@/src/cloud/privateBroadcast";
 
 type UseGroupChallengesOptions = {
   /** Group-settings discovery only; never use this for Leaderboard history. */
@@ -31,10 +32,6 @@ export function useGroupChallenges(
   const tutorial = useTutorialSandbox();
   const { state } = useApp();
   const discoverActive = options.discoverActive === true;
-  // Leaderboard stays mounted underneath the member comparison route. Give
-  // every mounted hook its own Realtime topic so Supabase never reuses an
-  // already-subscribed channel and rejects a second `.on(...)` callback.
-  const subscriberId = useId();
   const [challenges, setChallenges] = useState<GroupChallenge[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
@@ -126,24 +123,16 @@ export function useGroupChallenges(
         void refresh();
       }, 180);
     };
-    const channel = supabase
-      .channel(`group-challenges:${groupId}:${subscriberId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "group_challenges",
-          filter: `group_id=eq.${groupId}`,
-        },
-        queueRefresh,
-      )
-      .subscribe();
+    const unsubscribe = subscribePrivateBroadcast(
+      `group:${groupId}:challenges`,
+      "challenges_updated",
+      queueRefresh,
+    );
     return () => {
       if (timer) clearTimeout(timer);
-      supabase?.removeChannel(channel).catch(() => undefined);
+      unsubscribe();
     };
-  }, [groupId, refresh, subscriberId, tutorial.active]);
+  }, [groupId, refresh, tutorial.active]);
 
   const save = useCallback(async (input: SaveGroupChallengeInput) => {
     if (tutorial.active) {

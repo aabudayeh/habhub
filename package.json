@@ -50,7 +50,7 @@
     "validate:screen-time": "node --no-warnings --experimental-strip-types --experimental-loader ./scripts/typescript-resolver-loader.mjs scripts/validate-screen-time.mjs",
     "validate:schedule": "node --no-warnings --experimental-strip-types --experimental-loader ./scripts/typescript-resolver-loader.mjs scripts/validate-schedule-all-items.mjs",
     "validate:todos": "node --no-warnings --experimental-strip-types --experimental-loader ./scripts/typescript-resolver-loader.mjs scripts/validate-todos.mjs",
-    "validate:performance-latency": "node --no-warnings --experimental-strip-types --experimental-loader ./scripts/typescript-resolver-loader.mjs scripts/validate-cloud-write-pressure.mjs && node --no-warnings --experimental-strip-types --experimental-loader ./scripts/typescript-resolver-loader.mjs scripts/validate-interaction-performance.mjs",
+    "validate:performance-latency": "node --no-warnings --experimental-strip-types --experimental-loader ./scripts/typescript-resolver-loader.mjs scripts/validate-cloud-write-pressure.mjs && node scripts/validate-compact-realtime.mjs && node --no-warnings --experimental-strip-types --experimental-loader ./scripts/typescript-resolver-loader.mjs scripts/validate-interaction-performance.mjs",
     "validate:profile-polish": "node --no-warnings --experimental-strip-types scripts/validate-profile-today-polish.mjs",
     "validate:product-ui": "node scripts/validate-product-ui.mjs",
     "validate:web-interactions": "node --no-warnings --experimental-strip-types --experimental-loader ./scripts/typescript-resolver-loader.mjs scripts/validate-web-interactions.mjs",

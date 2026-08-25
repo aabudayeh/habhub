@@ -30,6 +30,15 @@ export function completedGymSets(exercises: GymExercise[]) {
   );
 }
 
+/** Marks every planned set complete without mutating the editable workout. */
+export function completeGymWorkout(exercises: GymExercise[]) {
+  return exercises.map((exercise) => ({
+    ...exercise,
+    completed: true,
+    sets: exercise.sets.map((set) => ({ ...set, completed: true })),
+  }));
+}
+
 /** Derived gym trackers expose comparable totals without exposing raw set notes. */
 export function gymMetricValue(
   state: AppState,

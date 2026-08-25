@@ -124,6 +124,7 @@ import {
 import { trackerPresets } from "@/src/domain/trackerCatalog";
 import { isGoogleHealthEntry } from "@/src/domain/googleHealthLocalPrivacy";
 import { totalEnergyBurnedBreakdownEntries } from "@/src/domain/energyBreakdown";
+import { isFitbitRestingEnergyEntry } from "@/src/domain/health";
 import {
   GoogleHealthClientError,
   invokeGoogleHealth,
@@ -368,7 +369,8 @@ export default function TrackerDetail() {
         entry.userId === state.currentUserId &&
         entry.metricId === tracker.id &&
         dates.includes(entry.localDate) &&
-        (!tracker.gymMapping || !entry.id.startsWith("gym-sync:")),
+        (!tracker.gymMapping || !entry.id.startsWith("gym-sync:")) &&
+        (tracker.id !== "exercise" || !isFitbitRestingEnergyEntry(entry)),
     )
     .sort(
       (a, b) =>

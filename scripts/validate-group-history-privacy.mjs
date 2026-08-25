@@ -9,6 +9,10 @@ import {
   canUseCachedSharedRaw,
   projectionSurvivesSharedMetricPrivacyFences,
 } from "../src/domain/sharedMetricPrivacy.ts";
+import {
+  sharedLeaderboardLogEntries,
+  SHARED_DAILY_SUMMARY_LABEL,
+} from "../src/domain/sharedLeaderboardLogs.ts";
 import { accountOwnedCollections } from "../src/domain/accountCollections.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -70,7 +74,7 @@ assert.doesNotMatch(group, /styles\.gridRangeChoices|styles\.gridBulkBox/);
 assert.match(group, /const cloudStatus = useCloudSyncStatus\(\)/);
 assert.match(
   group,
-  /cloudStatus === "initializing" && !result[\s\S]{0,5000}Loading saved data…/,
+  /cloudStatus === "initializing" && !result[\s\S]{0,8000}Loading saved data…/,
   "initial leaderboard hydration must label only absent results without hiding cached values",
 );
 assert.doesNotMatch(group, /ActivityIndicator/);
@@ -79,7 +83,29 @@ assert.match(group, /sharedLeaderboardHeatmapModel/);
 assert.match(group, /const LeaderboardMemberGrid = React\.memo/);
 assert.match(group, /const gridModel = useMemo/);
 assert.doesNotMatch(group, /rows\.slice\(0, 4\)\.map/);
-assert.match(group, /pathname: "\/day\/\[date\]"/);
+assert.match(
+  group,
+  /onSelect=\{\(selectedDate\)[\s\S]{0,500}pathname: "\/leaderboard-detail"/,
+  "leaderboard heatmap cells should open leaderboard detail rather than friend comparison",
+);
+assert.equal(
+  (group.match(/pathname: "\/member\/\[id\]"/g) ?? []).length,
+  1,
+  "the leaderboard card should define one friend-comparison action",
+);
+assert.equal(
+  (group.match(/onPress=\{openMemberComparison\}/g) ?? []).length,
+  2,
+  "only the member avatar and member name should invoke friend comparison",
+);
+assert.match(
+  group,
+  /onPress=\{openMemberComparison\}[\s\S]{0,180}style=\{styles\.memberAvatarLink\}/,
+);
+assert.match(
+  group,
+  /onPress=\{openMemberComparison\}[\s\S]{0,180}style=\{styles\.memberNameLink\}/,
+);
 assert.doesNotMatch(
   group,
   /tap a shared day for details/i,
@@ -208,6 +234,135 @@ assert.equal(
   true,
   "the privacy cache fence must not hide an owner's own local history",
 );
+const sharedLogDay = "2026-08-13";
+const sharedLogStatuses = [
+  {
+    groupId: "group",
+    metricId: "food",
+    userId: "peer",
+    localDate: sharedLogDay,
+    goalReached: false,
+    scoreContribution: 0,
+    visibility: "group",
+    privacyProjectionVersion: 2,
+    exactValue: 610,
+    sourceRevision: 12,
+  },
+  {
+    groupId: "group",
+    metricId: "steps",
+    userId: "peer",
+    localDate: sharedLogDay,
+    goalReached: false,
+    scoreContribution: 0,
+    visibility: "group",
+    privacyProjectionVersion: 2,
+    exactValue: 8_200,
+    sourceRevision: 12,
+  },
+  {
+    groupId: "group",
+    metricId: "water",
+    userId: "peer",
+    localDate: sharedLogDay,
+    goalReached: false,
+    scoreContribution: 0,
+    visibility: "status",
+    privacyProjectionVersion: 2,
+    sourceRevision: 13,
+  },
+];
+const sharedMeal = {
+  id: "meal-lunch",
+  metricId: "food",
+  userId: "peer",
+  value: 610,
+  localDate: sharedLogDay,
+  recordedAt: `${sharedLogDay}T12:30:00.000Z`,
+  visibility: "group",
+  source: "imported",
+  label: "Chicken rice bowl",
+  note: "Lunch after training",
+  nutrition: {
+    mealType: "lunch",
+    calories: 610,
+    proteinG: 42,
+    carbsG: 71,
+    fatG: 17,
+  },
+  imageStoragePath: "peer/entry/meal-lunch.jpg",
+  imageUri: "https://signed.example/meal-lunch.jpg",
+  sourceRevision: 12,
+};
+const selectedSharedLogs = sharedLeaderboardLogEntries({
+  currentUserId: "viewer",
+  dates: [sharedLogDay],
+  entries: [
+    sharedMeal,
+    {
+      ...sharedMeal,
+      id: "status-only-water-cache",
+      metricId: "water",
+      value: 500,
+      label: "Water bottle",
+      nutrition: undefined,
+      imageStoragePath: undefined,
+      imageUri: undefined,
+    },
+    {
+      ...sharedMeal,
+      id: "peer-private-meal",
+      visibility: "private",
+    },
+    {
+      ...sharedMeal,
+      id: "owner-private-meal",
+      userId: "viewer",
+      visibility: "private",
+    },
+  ],
+  groupId: "group",
+  statuses: sharedLogStatuses,
+});
+assert.deepEqual(
+  selectedSharedLogs.map((entry) => entry.id),
+  [
+    "meal-lunch",
+    "owner-private-meal",
+    `shared-total:peer:steps:${sharedLogDay}`,
+  ],
+  "a modern exact status must preserve authorized item details, fence status/private rows, and synthesize only compact-only totals",
+);
+assert.deepEqual(
+  selectedSharedLogs[0].nutrition,
+  sharedMeal.nutrition,
+  "shared meal nutrition must survive the leaderboard detail projection",
+);
+assert.equal(
+  selectedSharedLogs[0].imageUri,
+  sharedMeal.imageUri,
+  "the RLS-authorized signed meal attachment must survive the detail projection",
+);
+assert.equal(
+  selectedSharedLogs.at(-1)?.label,
+  SHARED_DAILY_SUMMARY_LABEL,
+  "a compact-only sensor total should retain the explicit summary fallback",
+);
+assert.deepEqual(
+  sharedLeaderboardLogEntries({
+    currentUserId: "viewer",
+    dates: [sharedLogDay],
+    entries: [sharedMeal],
+    groupId: "group",
+    peerDetailsAuthorized: false,
+    statuses: sharedLogStatuses,
+  }).map((entry) => entry.id),
+  [
+    `shared-total:peer:food:${sharedLogDay}`,
+    `shared-total:peer:steps:${sharedLogDay}`,
+  ],
+  "peer item details must fail closed until the requested range is RLS-refreshed",
+);
 const stalePeerRaw = 5_000;
 const verifiedPeerExact = 8_000;
 const peerGroupValues = [
@@ -329,10 +484,21 @@ assert.match(
   /const verifiedProjectionValue =[\s\S]*privacyProjectionVersion === 2[\s\S]*const localExactValue = canUseCachedSharedRaw\([\s\S]*authoritativeSharedExactValue\([\s\S]*visibility === "status"[\s\S]*authoritativeExactValue !== undefined/,
   "an authoritative status/private projection must override stale cached raw entries",
 );
+assert.match(leaderboardDetail, /sharedLeaderboardLogEntries\(\{/);
 assert.match(
   leaderboardDetail,
-  /statusForDay\([\s\S]{0,500}const verifiedExactValue =[\s\S]{0,300}canUseCachedSharedRaw\([\s\S]{0,180}verifiedExactValue/,
-  "leaderboard detail history must apply the same per-day cache privacy fence",
+  /cloud\s*\.refreshActivity\(targetedActivitySince\)/,
+  "direct leaderboard-detail navigation must hydrate its requested activity range",
+);
+assert.equal(
+  (leaderboardDetail.match(/pathname: "\/member\/\[id\]"/g) ?? []).length,
+  2,
+  "leaderboard detail should link only the member avatar and name to comparison",
+);
+assert.doesNotMatch(
+  leaderboardDetail,
+  /canUseCachedSharedRaw/,
+  "compact totals must not replace authorized item-level rows in the shared-log display",
 );
 assert.match(privacyMigration, /add column if not exists privacy_projection_version/);
 assert.match(
@@ -530,8 +696,8 @@ assert.match(
 );
 assert.match(
   provider,
-  /removed\.user_id === auth\.user\?\.id[\s\S]{0,300}evictUnavailableGroup\(removed\.group_id\)/,
-  "an unfilterable membership DELETE event must never evict the viewer for another member's deletion",
+  /\.channel\(`account:\$\{auth\.user\.id\}:memberships`[\s\S]{0,450}membership\.user_id !== auth\.user\?\.id[\s\S]{0,450}membership\.operation === "DELETE"[\s\S]{0,650}evictUnavailableGroup\(membership\.group_id\)/,
+  "a private account membership broadcast must still verify its recipient before evicting a deleted membership",
 );
 assert.match(
   provider,
@@ -540,8 +706,8 @@ assert.match(
 );
 assert.match(
   provider,
-  /const removed = event\.old as \{ group_id\?: string \}[\s\S]{0,150}removed\.group_id === stateRef\.current\.group\.id[\s\S]{0,100}queueRefresh/,
-  "an unfilterable group-members DELETE must be scoped explicitly before refreshing",
+  /\.channel\(`group:\$\{state\.group\.id\}:workspace`[\s\S]{0,250}\{ event: "workspace_updated" \}[\s\S]{0,100}queueRefresh/,
+  "group membership and workspace invalidations must refresh only through the active group's private topic",
 );
 assert.match(
   explicitProjectionMigration,

@@ -38,6 +38,8 @@ import {
 import {
   activeEnergyEntriesWithoutCoveredWorkoutFallbacks,
   isCalculatedStepFallback,
+  isDailyActiveEnergyAggregateEntry,
+  reconciledActiveEnergyValue,
   supplementalWorkoutCaloriesForActiveEnergy,
   unrecordedStepActivity,
 } from "./health";
@@ -272,8 +274,14 @@ export function metricValue(
         activeEnergyEntriesWithoutCoveredWorkoutFallbacks(sameDay).filter(
           (entry) => !isCalculatedStepFallback(entry),
         );
+      const hasDailyActiveEnergyAggregate = measuredEntries.some(
+        isDailyActiveEnergyAggregateEntry,
+      );
       const measuredValue = measuredEntries.length
-        ? aggregate(measuredEntries, metric.aggregation)
+        ? metric.healthMapping?.dataType === "active_energy" &&
+          metric.healthMapping.field === "value"
+          ? reconciledActiveEnergyValue(measuredEntries)
+          : aggregate(measuredEntries, metric.aggregation)
         : 0;
       const steps = state.metrics.find(
         (candidate) =>
@@ -316,7 +324,7 @@ export function metricValue(
             metric.id,
             estimate,
           ) +
-          estimate.estimatedCalories,
+          (hasDailyActiveEnergyAggregate ? 0 : estimate.estimatedCalories),
       );
     }
     if (sameDay.length)

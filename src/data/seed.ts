@@ -433,6 +433,22 @@ const BASE_METRICS: MetricDefinition[] = [
     activeFrom: dateKeyWithOffset(-29),
   },
   {
+    id: "workout_calories",
+    name: "Workout calories",
+    icon: "flame-outline",
+    color: "#D95852",
+    unit: "kcal",
+    dataType: "number",
+    aggregation: "sum",
+    rankingDirection: "higher",
+    goal: { kind: "at_least", target: 250 },
+    scoreWeight: 0,
+    defaultVisibility: "group",
+    sections: { today: false, group: false, insights: true },
+    order: 19,
+    activeFrom: dateKeyWithOffset(-29),
+  },
+  {
     id: "workout_distance",
     name: "Workout distance",
     icon: "map-outline",
@@ -1395,6 +1411,7 @@ const HEALTH_MAPPINGS: Record<string, MetricDefinition["healthMapping"]> = {
   weight: { dataType: "weight", field: "value" },
   workout: { dataType: "workouts", field: "value" },
   workout_duration: { dataType: "workouts", field: "duration_minutes" },
+  workout_calories: { dataType: "workouts", field: "active_calories" },
   workout_distance: { dataType: "workouts", field: "distance_km" },
   body_fat: { dataType: "body_fat", field: "value" },
   lean_body_mass: { dataType: "lean_body_mass", field: "value" },
@@ -1419,6 +1436,7 @@ const CATEGORIES: Record<string, MetricDefinition["category"]> = {
   energy_burned: "activity",
   workout: "activity",
   workout_duration: "activity",
+  workout_calories: "activity",
   workout_distance: "activity",
   food: "nutrition",
   ...Object.fromEntries(
@@ -1934,6 +1952,7 @@ export function createInitialState(): AppState {
       showLeaderboard: true,
       showChat: true,
       showGym: true,
+      workoutCaloriesRestored: true,
       // Keep the first-run navigation focused. Restored snapshots spread their
       // explicit visibility settings over these defaults in AppProvider.
       showCalendar: false,

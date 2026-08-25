@@ -440,13 +440,13 @@ assert.match(hook, /sendGroupChallengeStartedPush\(saved\)/);
 assert.match(hook, /sendGroupChallengeAcceptedPush/);
 assert.match(
   hook,
-  /const subscriberId = useId\(\)/,
-  "each mounted challenge hook must own a stable Realtime subscriber id",
+  /subscribePrivateBroadcast\([\s\S]{0,100}`group:\$\{groupId\}:challenges`[\s\S]{0,80}"challenges_updated"/,
+  "mounted challenge hooks must share the active group's private invalidation topic",
 );
-assert.match(
+assert.doesNotMatch(
   hook,
-  /\.channel\(`group-challenges:\$\{groupId\}:\$\{subscriberId\}`\)/,
-  "leaderboard and friend comparison must not reuse one subscribed Realtime channel",
+  /postgres_changes|useId\(\)/,
+  "challenge screens must not reopen per-hook Postgres Changes streams",
 );
 assert.match(cloud, /\.limit\(200\)/, "challenge reads must stay bounded");
 assert.match(cloud, /rpc\("list_active_group_challenges"/);

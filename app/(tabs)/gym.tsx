@@ -44,6 +44,7 @@ import {
 } from "@/src/domain/exerciseCatalog";
 import {
   completedGymSets,
+  completeGymWorkout,
   averageGymRestSeconds,
   estimateGymActiveCalories,
   expandedGymExercises,
@@ -102,6 +103,7 @@ import {
   GymPlan,
   GymSession,
   GymSet,
+  GymTimerMode,
   MuscleGroup,
   Visibility,
 } from "@/src/types";
@@ -112,6 +114,7 @@ const intensities: GymIntensity[] = ["light", "moderate", "vigorous"];
 type RunningWorkoutPhase = "work" | "set_rest" | "exercise_rest";
 type WorkoutPhase = RunningWorkoutPhase | "paused";
 type WorkoutTimer = {
+  mode: GymTimerMode;
   phase: WorkoutPhase;
   resumePhase?: RunningWorkoutPhase;
   startedAt: number;
@@ -475,6 +478,7 @@ function GymScreen() {
     deleteGroupGymPlan,
     saveGymSession,
     deleteGymSession,
+    updateSettings,
   } = useApp();
   const tutorialSandbox = useTutorialSandboxActive();
   const tutorial = useTutorial();
@@ -533,6 +537,10 @@ function GymScreen() {
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [workoutTimer, setWorkoutTimer] = useState<WorkoutTimer | null>(null);
+  const configuredTimerMode: GymTimerMode =
+    state.settings.gymTimerMode === "whole_workout"
+      ? "whole_workout"
+      : "guided";
   const [timerNow, setTimerNow] = useState(Date.now());
   const activeTutorialTarget = tutorial.activeStep?.target;
   useEffect(() => {
@@ -570,6 +578,7 @@ function GymScreen() {
     steps: WorkoutNotificationStep[];
     phaseStartedAt: number;
     phaseElapsedSeconds: number;
+    allowProgression: boolean;
   } | null>(null);
   const initializedDate = useRef<string | null>(null);
   const [workoutDraftReady, setWorkoutDraftReady] = useState(false);
@@ -1028,6 +1037,15 @@ function GymScreen() {
     [sessions],
   );
   const completedSets = completedGymSets(exercises);
+  const plannedSetCount = exercises.reduce(
+    (total, exercise) => total + exercise.sets.length,
+    0,
+  );
+  const allWorkoutSetsComplete =
+    plannedSetCount > 0 &&
+    exercises.every((exercise) =>
+      exercise.sets.every((set) => set.completed),
+    );
   const volume = trainingVolumeKg(exercises);
   const loggedRestSeconds = totalGymRestSeconds(exercises);
   const recordedWorkoutMinutes =
@@ -1309,7 +1327,13 @@ function GymScreen() {
         setSetStartDelaySeconds(draft.setStartDelaySeconds ?? 0);
         setExercises(draft.exercises);
         setTimerNow(Date.now());
-        setWorkoutTimer(draft.timer);
+        setWorkoutTimer({
+          ...draft.timer,
+          mode:
+            draft.timer.mode === "whole_workout"
+              ? "whole_workout"
+              : "guided",
+        });
       })
       .catch(() => undefined)
       .finally(() => {
@@ -1481,6 +1505,7 @@ function GymScreen() {
     setDuration("");
     setTimerNow(now);
     setWorkoutTimer({
+      mode: configuredTimerMode,
       phase: "work",
       startedAt: now,
       phaseStartedAt: now,
@@ -1536,7 +1561,7 @@ function GymScreen() {
   }
 
   function toggleSet(exerciseId: string, set: GymSet) {
-    if (workoutTimer) {
+    if (workoutTimer && workoutTimer.mode !== "whole_workout") {
       if (
         workoutTimer.phase === "work" &&
         workoutTimer.exerciseId === exerciseId &&
@@ -1560,9 +1585,14 @@ function GymScreen() {
   }
 
   function finishExercise(exercise: GymExercise) {
-    if (workoutTimer) return;
+    if (workoutTimer && workoutTimer.mode !== "whole_workout") return;
     patchExercise(exercise.id, { completed: true });
     setOpenExerciseId(null);
+  }
+
+  function completeAllSets() {
+    if (workoutTimer && workoutTimer.mode !== "whole_workout") return;
+    setExercises((current) => completeGymWorkout(current));
   }
 
   function patchExercise(exerciseId: string, changes: Partial<GymExercise>) {
@@ -1590,7 +1620,10 @@ function GymScreen() {
   }
 
   function removeExerciseSafely(exercise: GymExercise) {
-    if (workoutTimer?.exerciseId === exercise.id) {
+    if (
+      workoutTimer?.mode !== "whole_workout" &&
+      workoutTimer?.exerciseId === exercise.id
+    ) {
       Alert.alert(
         "Current exercise is active",
         "Use Next or finish the workout before removing this exercise. Other exercises can still be edited while the timer runs.",
@@ -1604,6 +1637,7 @@ function GymScreen() {
 
   function removeSetSafely(exercise: GymExercise, set: GymSet) {
     if (
+      workoutTimer?.mode !== "whole_workout" &&
       workoutTimer?.exerciseId === exercise.id &&
       workoutTimer.setId === set.id
     ) {
@@ -1843,6 +1877,7 @@ function GymScreen() {
 
   function advanceWorkoutTimer(occurredAt = Date.now()) {
     if (!workoutTimer) return;
+    if (workoutTimer.mode === "whole_workout") return;
     if (workoutTimer.phase === "paused") {
       // A notification/watch action may be replayed well after the tap. Keep
       // the pause duration anchored to that native action timestamp.
@@ -2070,12 +2105,18 @@ function GymScreen() {
         ? 0
         : Math.max(1, timerPhaseElapsed(workoutTimer, now));
     const nextExercises =
-      phaseSeconds > 0
-        ? recordTimerPhase(exercises, workoutTimer, phaseSeconds)
-        : exercises;
+      workoutTimer.mode === "whole_workout"
+        ? exercises
+        : phaseSeconds > 0
+          ? recordTimerPhase(exercises, workoutTimer, phaseSeconds)
+          : exercises;
+    const sessionElapsedSeconds =
+      workoutTimer.mode === "whole_workout"
+        ? timerSessionElapsed(workoutTimer, now)
+        : workoutTimer.completedElapsedSeconds + phaseSeconds;
     persistSession(
       nextExercises,
-      (workoutTimer.completedElapsedSeconds + phaseSeconds) / 60,
+      sessionElapsedSeconds / 60,
       {
         startedAt: new Date(workoutTimer.startedAt).toISOString(),
         completedAt: new Date(now).toISOString(),
@@ -2194,28 +2235,42 @@ function GymScreen() {
   const timerHeading =
     workoutTimer?.phase === "paused"
       ? "Workout paused"
-      : workoutTimer?.phase === "work"
-        ? `${timerExercise ? localizeExerciseName(language, timerExercise) : "Exercise"} · Set ${timerSetIndex + 1}/${timerExercise?.sets.length ?? 0}`
-        : workoutTimer?.phase === "set_rest"
-          ? `Set rest · next is set ${timerNextTarget ? timerNextTarget.exercise.sets.findIndex((set) => set.id === timerNextTarget.set.id) + 1 : ""}`
-          : `Between exercises · next is ${timerNextTarget ? localizeExerciseName(language, timerNextTarget.exercise) : "finish"}`;
+      : workoutTimer?.mode === "whole_workout"
+        ? "Whole workout"
+        : workoutTimer?.phase === "work"
+          ? `${timerExercise ? localizeExerciseName(language, timerExercise) : "Exercise"} · Set ${timerSetIndex + 1}/${timerExercise?.sets.length ?? 0}`
+          : workoutTimer?.phase === "set_rest"
+            ? `Set rest · next is set ${timerNextTarget ? timerNextTarget.exercise.sets.findIndex((set) => set.id === timerNextTarget.set.id) + 1 : ""}`
+            : `Between exercises · next is ${timerNextTarget ? localizeExerciseName(language, timerNextTarget.exercise) : "finish"}`;
   const timerNextLabel =
-    workoutTimer?.phase === "paused"
-      ? "Resume"
-      : workoutTimer?.phase === "set_rest"
-        ? "Start next set"
-        : workoutTimer?.phase === "exercise_rest"
-          ? "Start exercise"
-          : timerExercise?.sets
-                .slice(timerSetIndex + 1)
-                .some((set) => !set.completed)
-            ? "Finish set"
-            : firstPendingTarget(exercises, timerExerciseIndex + 1)
-              ? "Finish exercise"
-              : "Finish workout";
+    workoutTimer?.mode === "whole_workout"
+      ? "Finish when you're done"
+      : workoutTimer?.phase === "paused"
+        ? "Resume"
+        : workoutTimer?.phase === "set_rest"
+          ? "Start next set"
+          : workoutTimer?.phase === "exercise_rest"
+            ? "Start exercise"
+            : timerExercise?.sets
+                  .slice(timerSetIndex + 1)
+                  .some((set) => !set.completed)
+              ? "Finish set"
+              : firstPendingTarget(exercises, timerExerciseIndex + 1)
+                ? "Finish exercise"
+                : "Finish workout";
   const notificationSteps = useMemo(
-    () =>
-      workoutTimer ? workoutNotificationSteps(exercises, workoutTimer, language, t) : [],
+    () => {
+      if (!workoutTimer) return [];
+      if (workoutTimer.mode === "whole_workout")
+        return [
+          {
+            title: t("Whole workout"),
+            body: t("Finish when you're done"),
+            phase: "work" as const,
+          },
+        ];
+      return workoutNotificationSteps(exercises, workoutTimer, language, t);
+    },
     [exercises, language, t, workoutTimer],
   );
   timerActionRef.current = (action, occurredAt) => {
@@ -2374,6 +2429,7 @@ function GymScreen() {
         steps: notificationSteps,
         phaseStartedAt: workoutTimer.phaseStartedAt,
         phaseElapsedSeconds: workoutTimer.phaseElapsedSeconds,
+        allowProgression: workoutTimer.mode !== "whole_workout",
       }
     : null;
 
@@ -2445,6 +2501,7 @@ function GymScreen() {
     workoutTimer?.exerciseId,
     workoutTimer?.phase,
     workoutTimer?.phaseStartedAt,
+    workoutTimer?.mode,
     workoutTimer?.setId,
   ]);
 
@@ -2484,7 +2541,10 @@ function GymScreen() {
     }
     void showWorkoutTimerNotification({
       title: t(timerHeading),
-      body: t(`${timerNextLabel} · open HabHub to adjust kg or reps`),
+      body:
+        workoutTimer.mode === "whole_workout"
+          ? t("Finish when you're done")
+          : t(`${timerNextLabel} · open HabHub to adjust kg or reps`),
       phase:
         workoutTimer.phase === "work"
           ? "work"
@@ -2494,6 +2554,7 @@ function GymScreen() {
       steps: notificationSteps,
       phaseStartedAt: workoutTimer.phaseStartedAt,
       phaseElapsedSeconds: workoutTimer.phaseElapsedSeconds,
+      allowProgression: workoutTimer.mode !== "whole_workout",
       ownerId: state.currentUserId,
     }).catch(() => undefined);
   }, [
@@ -2506,6 +2567,7 @@ function GymScreen() {
     state.currentUserId,
     state.settings.notifications.pushEnabled,
     workoutTimer?.phase,
+    workoutTimer?.mode,
     workoutTimer?.setId,
     workoutTimer,
     workoutDraftReady,
@@ -2564,13 +2626,15 @@ function GymScreen() {
       >
         <Ionicons name="stop" size={16} color={palette.red} />
       </Pressable>
-      <Pressable
-        onPress={() => advanceWorkoutTimer()}
-        style={[styles.timerNext, { backgroundColor: timerColor }]}
-      >
-        <Text style={styles.timerNextText}>{timerNextLabel}</Text>
-        <Ionicons name="chevron-forward" size={15} color={palette.ink} />
-      </Pressable>
+      {workoutTimer.mode !== "whole_workout" ? (
+        <Pressable
+          onPress={() => advanceWorkoutTimer()}
+          style={[styles.timerNext, { backgroundColor: timerColor }]}
+        >
+          <Text style={styles.timerNextText}>{timerNextLabel}</Text>
+          <Ionicons name="chevron-forward" size={15} color={palette.ink} />
+        </Pressable>
+      ) : null}
     </View>
   ) : undefined;
 
@@ -3060,7 +3124,7 @@ function GymScreen() {
               <Card style={styles.guidedTimerCard}>
                 <View style={styles.timerStartRow}>
                   <Pressable
-                    accessibilityLabel="Guided timer settings"
+                    accessibilityLabel="Workout timer"
                     accessibilityRole="button"
                     accessibilityState={{ expanded: timerSettingsOpen }}
                     onPress={() => setTimerSettingsOpen((open) => !open)}
@@ -3068,10 +3132,12 @@ function GymScreen() {
                   >
                     <View style={styles.grow}>
                       <Text style={[styles.exerciseName, { color: colors.ink }]}>
-                        Guided timer
+                        Workout timer
                       </Text>
                       <Text style={[styles.meta, { color: colors.muted }]}>
-                        Optional · otherwise tick sets and save manually.
+                        {configuredTimerMode === "guided"
+                          ? "Sets & rests · Next advances the workout."
+                          : "Whole workout · mark sets manually."}
                       </Text>
                     </View>
                     <Ionicons
@@ -3090,37 +3156,72 @@ function GymScreen() {
                 {timerSettingsOpen ? (
                   <View
                     style={[
-                      styles.timerAdjustment,
+                      styles.timerSettingsBody,
                       { borderTopColor: colors.border },
                     ]}
                   >
-                    <View style={styles.grow}>
-                      <Text style={[styles.label, { color: colors.ink }]}>Set start adjustment</Text>
+                    <View style={styles.timerModeSetting}>
+                      <Text style={[styles.label, { color: colors.ink }]}>Timer progression</Text>
+                      <View style={styles.timerModeChoices}>
+                        <Chip
+                          label="Sets & rests"
+                          size="small"
+                          selected={configuredTimerMode === "guided"}
+                          onPress={() =>
+                            updateSettings({ gymTimerMode: "guided" })
+                          }
+                        />
+                        <Chip
+                          label="Whole workout"
+                          size="small"
+                          selected={configuredTimerMode === "whole_workout"}
+                          onPress={() =>
+                            updateSettings({ gymTimerMode: "whole_workout" })
+                          }
+                        />
+                      </View>
                       <Text style={[styles.meta, { color: colors.muted }]}>
-                        Subtract phone-placement time from every guided set.
+                        {configuredTimerMode === "guided"
+                          ? "Next moves through each set and rest."
+                          : "One Start/Pause/Finish timer; mark sets manually."}
                       </Text>
                     </View>
-                    <Pressable
-                      accessibilityLabel="Decrease set start adjustment"
-                      onPress={() =>
-                        setSetStartDelaySeconds((value) => Math.max(0, value - 1))
-                      }
-                      style={[styles.delayButton, { borderColor: colors.border }]}
-                    >
-                      <Ionicons name="remove" size={16} color={colors.ink} />
-                    </Pressable>
-                    <Text style={[styles.delayValue, { color: accent }]}>
-                      {setStartDelaySeconds}s
-                    </Text>
-                    <Pressable
-                      accessibilityLabel="Increase set start adjustment"
-                      onPress={() =>
-                        setSetStartDelaySeconds((value) => Math.min(15, value + 1))
-                      }
-                      style={[styles.delayButton, { borderColor: colors.border }]}
-                    >
-                      <Ionicons name="add" size={16} color={colors.ink} />
-                    </Pressable>
+                    {configuredTimerMode === "guided" ? (
+                      <View
+                        style={[
+                          styles.timerAdjustment,
+                          { borderTopColor: colors.border },
+                        ]}
+                      >
+                        <View style={styles.grow}>
+                          <Text style={[styles.label, { color: colors.ink }]}>Set start adjustment</Text>
+                          <Text style={[styles.meta, { color: colors.muted }]}>
+                            Subtract phone-placement time from every guided set.
+                          </Text>
+                        </View>
+                        <Pressable
+                          accessibilityLabel="Decrease set start adjustment"
+                          onPress={() =>
+                            setSetStartDelaySeconds((value) => Math.max(0, value - 1))
+                          }
+                          style={[styles.delayButton, { borderColor: colors.border }]}
+                        >
+                          <Ionicons name="remove" size={16} color={colors.ink} />
+                        </Pressable>
+                        <Text style={[styles.delayValue, { color: accent }]}>
+                          {setStartDelaySeconds}s
+                        </Text>
+                        <Pressable
+                          accessibilityLabel="Increase set start adjustment"
+                          onPress={() =>
+                            setSetStartDelaySeconds((value) => Math.min(15, value + 1))
+                          }
+                          style={[styles.delayButton, { borderColor: colors.border }]}
+                        >
+                          <Ionicons name="add" size={16} color={colors.ink} />
+                        </Pressable>
+                      </View>
+                    ) : null}
                   </View>
                 ) : null}
               </Card>
@@ -3138,9 +3239,29 @@ function GymScreen() {
                     <Text style={styles.exerciseDoneText}>Done</Text>
                   </Pressable>
                 ) : (
-                <Text style={[styles.summary, { color: accent }]}>
-                  {completedSets} sets · {Math.round(volume).toLocaleString(locale)} kg
-                </Text>
+                  <View style={styles.summaryActions}>
+                    <Text style={[styles.summary, { color: accent }]}>
+                      {completedSets} sets · {Math.round(volume).toLocaleString(locale)} kg
+                    </Text>
+                    {!allWorkoutSetsComplete &&
+                    (!workoutTimer || workoutTimer.mode === "whole_workout") ? (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="Complete all workout sets"
+                        onPress={completeAllSets}
+                        style={[
+                          styles.completeAll,
+                          {
+                            borderColor: accent,
+                            backgroundColor: colors.primarySoft,
+                          },
+                        ]}
+                      >
+                        <Ionicons name="checkmark-done" size={13} color={accent} />
+                        <Text style={[styles.completeAllText, { color: accent }]}>Complete all</Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
                 )
               }
             />
@@ -4188,7 +4309,6 @@ function GymScreen() {
               onChangeText={setPickerSearch}
               placeholder="Search exercise or muscle"
               placeholderTextColor={colors.faint}
-              autoFocus
               style={[styles.search, { color: colors.ink, borderColor: colors.border }]}
             />
             <ScrollView
@@ -4389,6 +4509,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 6,
   },
+  timerSettingsBody: { borderTopWidth: 1, paddingTop: 7, gap: 7 },
+  timerModeSetting: { gap: 5 },
+  timerModeChoices: { flexDirection: "row", flexWrap: "wrap", gap: 5 },
   timerAdjustment: {
     minHeight: 44,
     borderTopWidth: 1,
@@ -4517,6 +4640,18 @@ const styles = StyleSheet.create({
   restStop: { height: 32, paddingHorizontal: 10, borderRadius: 9, alignItems: "center", justifyContent: "center" },
   restStopText: { color: palette.white, fontSize: 8, fontWeight: "900" },
   summary: { fontSize: 9, fontWeight: "900" },
+  summaryActions: { flexDirection: "row", alignItems: "center", gap: 6 },
+  completeAll: {
+    minHeight: 26,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 7,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 3,
+  },
+  completeAllText: { fontSize: 7, fontWeight: "900" },
   exerciseDone: {
     minHeight: 30,
     borderRadius: 9,

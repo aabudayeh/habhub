@@ -315,6 +315,7 @@ object HabHubWidgetRenderer {
   private const val GOAL_GOLD = "#D7A62A"
   private const val GOAL_LIME = "#B8E45C"
   private const val MAX_RENDER_PIXELS = 190_000f
+  private const val MIN_LEADERBOARD_ROW_TEXT_SIZE = 6.2f
   private val providers = arrayOf(
     HabHubSmallWidgetProvider::class.java,
     HabHubSquareWidgetProvider::class.java,
@@ -841,7 +842,10 @@ object HabHubWidgetRenderer {
       // third, fourth, or fifth member, switch to a denser single-line row and
       // scale only as far as needed to fit the available member list.
       val compactRows = desiredRows > 0 && desiredRows * preferredRowHeight > availableHeight
-      val compactRowHeight = min(9f, max(6.4f, baseRowTextSize * 0.9f))
+      val compactRowHeight = max(
+        MIN_LEADERBOARD_ROW_TEXT_SIZE * 1.35f,
+        min(10f, max(6.4f, baseRowTextSize * 0.9f)),
+      )
       val visibleRows = min(
         desiredRows,
         max(1, (availableHeight / if (compactRows) compactRowHeight else preferredRowHeight).toInt()),
@@ -849,7 +853,10 @@ object HabHubWidgetRenderer {
       val rowHeight = availableHeight / max(1, visibleRows)
       val stackRows = roomyStackRows && !compactRows
       val rowTextSize = if (compactRows) {
-        min(baseRowTextSize, rowHeight * 0.58f).coerceAtLeast(4f)
+        min(
+          max(baseRowTextSize, MIN_LEADERBOARD_ROW_TEXT_SIZE),
+          rowHeight * 0.66f,
+        ).coerceAtLeast(MIN_LEADERBOARD_ROW_TEXT_SIZE)
       } else {
         // With only a few members, consume the spare height with larger,
         // easier-to-read names and values instead of leaving dead space.
@@ -883,7 +890,7 @@ object HabHubWidgetRenderer {
             labelLeft,
             firstBaseline,
             max(5f, right - labelLeft),
-            fittedTextPaint(name, max(5f, right - labelLeft), rowTextSize, 4.2f, Color.argb(224, 242, 246, 255), false),
+            fittedTextPaint(name, max(5f, right - labelLeft), rowTextSize, MIN_LEADERBOARD_ROW_TEXT_SIZE, Color.argb(224, 242, 246, 255), false),
           )
           val valueWidth = max(8f, right - (left + innerPad))
           drawRightAlignedEllipsizedText(
@@ -892,7 +899,7 @@ object HabHubWidgetRenderer {
             right,
             centerY + rowTextSize * 1.16f,
             valueWidth,
-            fittedTextPaint(value, valueWidth, rowTextSize, 3.8f, valueColor, true),
+            fittedTextPaint(value, valueWidth, rowTextSize, MIN_LEADERBOARD_ROW_TEXT_SIZE, valueColor, true),
           )
         } else {
           val baseline = centerY + rowTextSize * 0.34f
@@ -911,7 +918,7 @@ object HabHubWidgetRenderer {
             labelLeft,
             baseline,
             nameWidth,
-            fittedTextPaint(name, nameWidth, rowTextSize, 4.2f, Color.argb(224, 242, 246, 255), false),
+            fittedTextPaint(name, nameWidth, rowTextSize, MIN_LEADERBOARD_ROW_TEXT_SIZE, Color.argb(224, 242, 246, 255), false),
           )
           drawRightAlignedEllipsizedText(
             canvas,
@@ -919,7 +926,7 @@ object HabHubWidgetRenderer {
             right,
             baseline,
             valueWidth,
-            fittedTextPaint(value, valueWidth, rowTextSize, 3.8f, valueColor, true),
+            fittedTextPaint(value, valueWidth, rowTextSize, MIN_LEADERBOARD_ROW_TEXT_SIZE, valueColor, true),
           )
         }
       }
@@ -1001,7 +1008,6 @@ object HabHubWidgetRenderer {
       if (size.compact) 31.5f else 54f,
       goalSummary,
       todoSummary,
-      accent,
     )
     drawProgressBadge(
       canvas,
@@ -1050,7 +1056,7 @@ object HabHubWidgetRenderer {
     }
   }
 
-  /** Keeps the To-Do count visible instead of letting whole-line ellipsis eat it. */
+  /** Keeps the two summaries together, with one neutral style and separator. */
   private fun drawFeaturedSummary(
     canvas: Canvas,
     size: HabHubWidgetSize,
@@ -1058,7 +1064,6 @@ object HabHubWidgetRenderer {
     baseline: Float,
     goalSummary: String,
     todoSummary: String,
-    accent: Int,
   ) {
     val availableWidth = size.widthDp - pad * 2f
     if (todoSummary.isBlank()) {
@@ -1088,22 +1093,7 @@ object HabHubWidgetRenderer {
       Color.argb(220, 224, 234, 250),
       true,
     )
-    val todoPaint = textPaint(sharedPaint.textSize, withAlpha(accent, 245), true)
-    val dividerPaint = textPaint(sharedPaint.textSize, Color.argb(150, 224, 234, 250), true)
-    val todoWidth = min(availableWidth * 0.48f, todoPaint.measureText(todoSummary) + 1f)
-    val divider = "·"
-    val dividerWidth = dividerPaint.measureText(divider) + if (size.compact) 2f else 3f
-    val goalWidth = max(8f, availableWidth - todoWidth - dividerWidth)
-    drawText(canvas, goalSummary, pad, baseline, goalWidth, sharedPaint)
-    drawText(canvas, divider, pad + goalWidth, baseline, dividerWidth, dividerPaint)
-    drawRightAlignedEllipsizedText(
-      canvas,
-      todoSummary,
-      size.widthDp - pad,
-      baseline,
-      todoWidth,
-      todoPaint,
-    )
+    drawText(canvas, combined, pad, baseline, availableWidth, sharedPaint)
   }
 
   private fun drawCompactGoalTiles(

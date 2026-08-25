@@ -578,6 +578,7 @@ async function presentWebWorkoutNotification({
   phaseStartedAt,
   phaseElapsedSeconds,
   ownerId,
+  allowProgression,
 }: {
   title: string;
   body: string;
@@ -585,6 +586,7 @@ async function presentWebWorkoutNotification({
   phaseStartedAt?: number;
   phaseElapsedSeconds: number;
   ownerId: string;
+  allowProgression: boolean;
 }) {
   if (
     !webWorkoutNotificationsSupported() ||
@@ -647,18 +649,20 @@ async function presentWebWorkoutNotification({
       }).maxActions ?? 0,
     ),
   );
-  const actionToken = await webWorkoutActionIdentity(ownerId);
+  const actionToken = allowProgression
+    ? await webWorkoutActionIdentity(ownerId)
+    : undefined;
   if (
     revision !== webWorkoutNotificationRevision ||
     webWorkoutNotificationOwnerId !== ownerId ||
     !webWorkoutDocumentHidden()
   )
     return;
-  // Keep the lock-screen surface deliberately single-purpose. Pause/resume
-  // remains available inside the workout screen, while the notification only
-  // advances (or resumes, when the in-app timer was paused).
+  // Keep the Web lock-screen surface deliberately single-purpose. Guided
+  // timers advance (or resume) here; the whole-workout stopwatch has no Next
+  // transition and keeps Start/Pause/Finish inside the workout screen.
   const actions =
-    actionToken && maxActions > 0
+    allowProgression && actionToken && maxActions > 0
       ? [
           {
             action: WORKOUT_TIMER_NEXT,
@@ -990,6 +994,7 @@ export async function showWorkoutTimerNotification({
   phaseStartedAt,
   phaseElapsedSeconds = 0,
   ownerId,
+  allowProgression = true,
 }: {
   title: string;
   body: string;
@@ -998,6 +1003,8 @@ export async function showWorkoutTimerNotification({
   phaseStartedAt?: number;
   phaseElapsedSeconds?: number;
   ownerId: string;
+  /** False for a whole-workout stopwatch that has no Next transition. */
+  allowProgression?: boolean;
 }) {
   if (Platform.OS === "web") {
     const operation = webWorkoutNotificationQueue.then(() =>
@@ -1008,6 +1015,7 @@ export async function showWorkoutTimerNotification({
         phaseStartedAt,
         phaseElapsedSeconds,
         ownerId,
+        allowProgression,
       }),
     );
     webWorkoutNotificationQueue = operation.catch(() => undefined);

@@ -95,6 +95,7 @@ function ChatScreen() {
   const userScrolledAwayFromBottom = useRef(false);
   const userDragInProgress = useRef(false);
   const userDragStartDistanceFromBottom = useRef<number | null>(null);
+  const followOutgoingMessageLayout = useRef(false);
   const renderedConversationKey = useRef<string | null>(null);
   const recipient = recipientId
     ? state.group.members.find((member) => member.id === recipientId)
@@ -299,6 +300,21 @@ function ChatScreen() {
     },
     [scrollToNewestAfterLayout],
   );
+  const handleThreadContentSizeChange = useCallback(() => {
+    if (
+      userDragInProgress.current ||
+      (userScrolledAwayFromBottom.current &&
+        !followOutgoingMessageLayout.current)
+    )
+      return;
+    // iOS Web can commit the outgoing bubble, the cleared composer, and the
+    // keyboard viewport in separate layouts. Follow the content-size commit
+    // itself so the scroll target is the new bottom rather than the previous
+    // message's bottom.
+    followOutgoingMessageLayout.current = false;
+    scrollToNewest(false);
+    scrollToNewestAfterLayout(64, true);
+  }, [scrollToNewest, scrollToNewestAfterLayout]);
   const bottomDistance = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
       const { contentOffset, contentSize, layoutMeasurement } =
@@ -480,6 +496,10 @@ function ChatScreen() {
   ]);
   function submit() {
     if (!draft.trim() && !imageUri && !attachedTodo) return;
+    followOutgoingMessageLayout.current = true;
+    userScrolledAwayFromBottom.current = false;
+    userDragInProgress.current = false;
+    userDragStartDistanceFromBottom.current = null;
     sendMessage(
       draft,
       conversationId,
@@ -498,7 +518,8 @@ function ChatScreen() {
     setImageUri(null);
     setAttachedTodoId(undefined);
     setTodoPickerOpen(false);
-    setTimeout(() => scrollToNewest(true), 30);
+    scrollToNewest(false);
+    scrollToNewestAfterLayout(96, true);
   }
   function suggest(kind: MessageCategory) {
     setDraft(
@@ -688,6 +709,7 @@ function ChatScreen() {
             contentContainerStyle={styles.messages}
             keyboardShouldPersistTaps="always"
             onLayout={handleThreadLayout}
+            onContentSizeChange={handleThreadContentSizeChange}
             onScroll={handleThreadScroll}
             onScrollBeginDrag={handleUserScrollStart}
             onScrollEndDrag={handleUserScrollEnd}

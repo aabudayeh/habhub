@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   loadGroupNotificationEvents,
@@ -10,6 +10,8 @@ import {
   GroupNotificationEvent,
   type GroupNotificationPreferences,
 } from "@/src/types";
+import { useAuth } from "@/src/auth/AuthProvider";
+import { subscribePrivateBroadcast } from "@/src/cloud/privateBroadcast";
 
 function preferenceAllowsEvent(
   event: GroupNotificationEvent,
@@ -37,7 +39,7 @@ export function useGroupNotificationEvents(
   groupId: string,
   preferences?: GroupNotificationPreferences,
 ) {
-  const subscriberId = useId();
+  const auth = useAuth();
   const [events, setEvents] = useState<GroupNotificationEvent[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
@@ -81,27 +83,20 @@ export function useGroupNotificationEvents(
   useEffect(() => {
     if (!supabase || !isCloudGroupId(groupId)) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const channel = supabase
-      .channel(`group-notification-events:${groupId}:${subscriberId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "group_notification_events",
-          filter: `group_id=eq.${groupId}`,
-        },
-        () => {
-          if (timer) clearTimeout(timer);
-          timer = setTimeout(() => void refresh(), 120);
-        },
-      )
-      .subscribe();
+    if (auth.status !== "signedIn" || !auth.user) return;
+    const unsubscribe = subscribePrivateBroadcast(
+      `account:${auth.user.id}:group-notifications`,
+      "notifications_updated",
+      () => {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => void refresh(), 120);
+      },
+    );
     return () => {
       if (timer) clearTimeout(timer);
-      supabase?.removeChannel(channel).catch(() => undefined);
+      unsubscribe();
     };
-  }, [groupId, refresh, subscriberId]);
+  }, [auth.status, auth.user, groupId, refresh]);
 
   const markRead = useCallback(
     async (eventIds: string[]) => {

@@ -14,6 +14,7 @@ import {
   healthConnectSegmentExercise,
   healthConnectSessionExercise,
 } from "@/src/domain/exerciseCatalog";
+import { isFitbitEnergyOrigin } from "@/src/domain/health";
 import {
   authoritativeHealthConnectStepGroups,
   combineDisjointStepWindows,
@@ -446,6 +447,27 @@ function dedupeCrossSource(
 
 function overlaps(record: Record<string, unknown>, start: string, end: string) {
   return String(record.endTime) > start && String(record.startTime) < end;
+}
+
+function fitbitEnergyIsWorkoutScoped(
+  energy: Record<string, unknown>,
+  workouts: readonly Record<string, unknown>[],
+) {
+  if (!isFitbitEnergyOrigin(origin(energy))) return true;
+  const energyStart = new Date(String(energy.startTime)).getTime();
+  const energyEnd = new Date(String(energy.endTime)).getTime();
+  if (![energyStart, energyEnd].every(Number.isFinite)) return false;
+  return workouts.some((workout) => {
+    if (origin(workout) !== origin(energy)) return false;
+    const workoutStart = new Date(String(workout.startTime)).getTime();
+    const workoutEnd = new Date(String(workout.endTime)).getTime();
+    if (![workoutStart, workoutEnd].every(Number.isFinite)) return false;
+    const tolerance = 5 * 60_000;
+    return (
+      Math.abs(energyStart - workoutStart) <= tolerance &&
+      Math.abs(energyEnd - workoutEnd) <= tolerance
+    );
+  });
 }
 
 function nutrition(record: Record<string, unknown>): NutritionDetails {
@@ -911,7 +933,7 @@ export const healthConnectAdapter: HealthAdapter = {
     const needsWorkoutDetails = dataTypes.includes("workouts");
     const needsWorkoutNames =
       needsWorkoutDetails || dataTypes.includes("active_energy");
-    const activeCalorieRecords =
+    const rawActiveCalorieRecords =
       dataTypes.includes("active_energy") || needsWorkoutDetails
         ? dedupeCrossSource(
             individualIntervals(enabledRecords(await readSafe("ActiveCaloriesBurned"))),
@@ -979,6 +1001,13 @@ export const healthConnectAdapter: HealthAdapter = {
           (record) => recordDuration(record) / 60000,
         )
       : [];
+    // FitbitMobile can publish frequent BMR/total-energy increments under the
+    // ActiveCaloriesBurned record type. Only accept a Fitbit row here when it
+    // has the same boundaries as an actual Fitbit exercise session; its
+    // all-day energy still arrives through TotalCaloriesBurned above.
+    const activeCalorieRecords = rawActiveCalorieRecords.filter((record) =>
+      fitbitEnergyIsWorkoutScoped(record, workoutRecords),
+    );
     const workoutImports = workoutRecords.flatMap((record) => {
       const converted = convert("workouts", record);
       const start = String(record.startTime);

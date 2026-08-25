@@ -28,7 +28,7 @@ const METRICS_BY_DATA_TYPE: Record<HealthDataType, string[]> = {
   weight: ['weight'],
   nutrition: ['food', ...FOOD_NUTRIENTS.map((nutrient) => nutrient.id)],
   water: ['water'],
-  workouts: ['workout','workout_duration','workout_distance'],
+  workouts: ['workout','workout_duration','workout_calories','workout_distance'],
   body_fat: ['body_fat'],
   lean_body_mass: ['lean_body_mass'],
   body_water_mass: ['body_water_mass'],
@@ -224,6 +224,32 @@ function recordTime(record: HealthImportRecord, edge: 'start' | 'end') {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+export function isFitbitEnergyOrigin(origin: unknown) {
+  return /(?:^|[.\s])fitbit(?:mobile)?(?:$|[.\s])/i.test(
+    String(origin ?? '').trim(),
+  );
+}
+
+/**
+ * Fitbit can mirror its running total-energy/BMR stream through Health
+ * Connect as small ActiveCaloriesBurned increments. A real workout-scoped row
+ * has activity/session provenance by the time it reaches this mapper; an
+ * unlabelled Fitbit increment belongs only in Total energy burned.
+ */
+export function isFitbitRestingEnergyRecord(record: HealthImportRecord) {
+  if (record.type !== 'active_energy' || !isFitbitEnergyOrigin(record.origin))
+    return false;
+  const genericLabel = (record.label ?? '').trim();
+  return !record.activityKey &&
+    (!genericLabel || /^(active (calories|energy)( total)?|calories burned)$/i.test(genericLabel));
+}
+
+export function isFitbitRestingEnergyEntry(entry: MetricEntry) {
+  if (!isFitbitEnergyOrigin(entry.sourceOrigin)) return false;
+  const label = (entry.label ?? '').trim();
+  return !label || /^(active (calories|energy)( total)?|calories burned)$/i.test(label);
+}
+
 function healthEnergyRecordCoversWorkout(
   energy: HealthImportRecord,
   workout: HealthImportRecord,
@@ -378,7 +404,7 @@ export function mapHealthRecordsToEntries(
   const deduplicatedRecords = deduplicateHealthImportRecords(
     records,
     sourcePreferences,
-  );
+  ).filter((record) => !isFitbitRestingEnergyRecord(record));
   const activeEnergyRecords = deduplicatedRecords.filter(
     (record) => record.type === 'active_energy' && Number(record.value) > 0,
   );
@@ -412,9 +438,11 @@ export function mapHealthRecordsToEntries(
         if (
           record.type === 'active_energy' &&
           !record.activityKey &&
-          ((recordTime(record, 'end') ?? 0) -
+          (((recordTime(record, 'end') ?? 0) -
             (recordTime(record, 'start') ?? 0) >=
-            20 * 60 * 60 * 1000)
+            20 * 60 * 60 * 1000) ||
+            (record.provider === 'google_health' &&
+              /(?:^|:)daily(?::|$)/i.test(record.id)))
         )
           entry.label ||= 'Active energy total';
         entries.push(entry);entryById.set(entry.id,entry);
@@ -525,6 +553,7 @@ export function mapHealthRecordsToEntries(
     if (record.type === 'workouts' && record.workoutRecordKind !== 'segment' && Number(record.value)>0) {
       if (workoutQualifies({activityKey:record.activityKey,durationMinutes:record.measurements?.durationMinutes??Number(record.value),distanceKm:record.measurements?.distanceKm,activeCalories:record.measurements?.activeCalories})) entries.push(entryFor(record, userId, 'workout', true, importedMetricVisibility(visibility,'workout')));
       entries.push(entryFor(record, userId, 'workout_duration', Math.round((record.measurements?.durationMinutes??Number(record.value))*10)/10, importedMetricVisibility(visibility,'workout_duration')));
+      if((record.measurements?.activeCalories??0)>0&&!entryById.has(importedId(record,'workout_calories')))entries.push(entryFor(record,userId,'workout_calories',Math.round(record.measurements!.activeCalories!),importedMetricVisibility(visibility,'workout_calories')));
       if((record.measurements?.distanceKm??0)>0)entries.push(entryFor(record,userId,'workout_distance',Math.round(record.measurements!.distanceKm!*100)/100,importedMetricVisibility(visibility,'workout_distance')));
     }
     if (record.type === 'body_fat' && Number(record.value)>0) entries.push(entryFor(record,userId,'body_fat',Math.round(Number(record.value)*10)/10,importedMetricVisibility(visibility,'body_fat')));
@@ -624,6 +653,7 @@ export function supplementalWorkoutCaloriesForActiveEnergy(
     (entry) =>
       entry.metricId === activeEnergyMetricId &&
       !isCalculatedStepFallback(entry) &&
+      !isFitbitRestingEnergyEntry(entry) &&
       entry.source === "imported" &&
       activeEnergyMetric?.healthMapping?.dataType === "active_energy" &&
       activeEnergyMetric.healthMapping.field === "value" &&
@@ -750,6 +780,19 @@ export function isWorkoutEnergyEntry(entry: MetricEntry) {
   return entry.id.endsWith(':workout-energy');
 }
 
+export function isDailyActiveEnergyAggregateEntry(entry: MetricEntry) {
+  const label = (entry.label ?? '').trim().toLocaleLowerCase();
+  const generic = /^(active (calories|energy)( total)?|calories burned)$/.test(
+    label,
+  );
+  return (
+    generic &&
+    (label.endsWith('total') ||
+      (entry.sourceProvider === 'google_health' &&
+        /(?:^|:)daily(?::|$)/i.test(entry.sourceRecordId ?? entry.id)))
+  );
+}
+
 /**
  * Ignore a stale workout fallback once a provider's canonical active-energy
  * stream is present. This keeps both totals and detail breakdowns aligned
@@ -758,14 +801,17 @@ export function isWorkoutEnergyEntry(entry: MetricEntry) {
 export function activeEnergyEntriesWithoutCoveredWorkoutFallbacks(
   entries: readonly MetricEntry[],
 ) {
-  const workoutFallbacks = entries.filter(isWorkoutEnergyEntry);
-  const providerRows = entries.filter(
+  const eligibleEntries = entries.filter(
+    (entry) => !isFitbitRestingEnergyEntry(entry),
+  );
+  const workoutFallbacks = eligibleEntries.filter(isWorkoutEnergyEntry);
+  const providerRows = eligibleEntries.filter(
     (entry) =>
       entry.source === 'imported' &&
       !isWorkoutEnergyEntry(entry) &&
       Number(entry.value || 0) > 0,
   );
-  if (!workoutFallbacks.length || !providerRows.length) return [...entries];
+  if (!workoutFallbacks.length || !providerRows.length) return eligibleEntries;
 
   const normalizedLabel = (entry: MetricEntry) => {
     const label = (entry.label ?? '').trim().toLocaleLowerCase();
@@ -784,34 +830,9 @@ export function activeEnergyEntriesWithoutCoveredWorkoutFallbacks(
   const compatibleOrigin = (left: MetricEntry, right: MetricEntry) => {
     const leftOrigin = normalizedOrigin(left);
     const rightOrigin = normalizedOrigin(right);
-    return (
-      !leftOrigin ||
-      !rightOrigin ||
-      leftOrigin === 'health connect' ||
-      rightOrigin === 'health connect' ||
-      leftOrigin === 'your phone' ||
-      rightOrigin === 'your phone' ||
-      leftOrigin === rightOrigin
-    );
+    return leftOrigin === rightOrigin;
   };
   const covered = new Set<string>();
-  // A clearly identified provider day total already includes that provider's
-  // workout calories. This is the one valid broad suppression case; ordinary
-  // per-workout rows below remain one-to-one.
-  for (const providerRow of providerRows) {
-    const providerId = `${providerRow.sourceRecordId ?? ''} ${providerRow.id}`;
-    const providerDayTotal =
-      !normalizedLabel(providerRow) &&
-      /(daily|aggregate|total|stream)/i.test(providerId);
-    if (!providerDayTotal) continue;
-    for (const fallback of workoutFallbacks) {
-      if (
-        fallback.sourceProvider === providerRow.sourceProvider &&
-        compatibleOrigin(fallback, providerRow)
-      )
-        covered.add(fallback.id);
-    }
-  }
   // Match one provider row to at most one old fallback. A direct row for one
   // run must never erase unrelated walking, cycling, swimming, or gym rows
   // from the same day.
@@ -847,7 +868,53 @@ export function activeEnergyEntriesWithoutCoveredWorkoutFallbacks(
       .sort((left, right) => left.score - right.score)[0]?.fallback;
     if (candidate) covered.add(candidate.id);
   }
-  return entries.filter((entry) => !covered.has(entry.id));
+  return eligibleEntries.filter((entry) => !covered.has(entry.id));
+}
+
+/**
+ * Numeric Active energy reconciliation. A provider's daily aggregate and its
+ * visible per-session components are alternate views of the same burn, so use
+ * the larger representation for that provider. Manual/app rows and providers
+ * without a day total remain additive.
+ */
+export function reconciledActiveEnergyValue(
+  entries: readonly MetricEntry[],
+) {
+  const canonical = activeEnergyEntriesWithoutCoveredWorkoutFallbacks(entries);
+  const totals = canonical.filter(isDailyActiveEnergyAggregateEntry);
+  if (!totals.length)
+    return canonical.reduce((sum, entry) => sum + Number(entry.value || 0), 0);
+
+  const byProvider = new Map<
+    string,
+    { aggregate: number; components: number }
+  >();
+  let independent = 0;
+  const providerKey = (entry: MetricEntry) => entry.sourceProvider ?? '';
+  for (const total of totals) {
+    const key = providerKey(total);
+    if (!key) {
+      independent += Number(total.value || 0);
+      continue;
+    }
+    const bucket = byProvider.get(key) ?? { aggregate: 0, components: 0 };
+    bucket.aggregate = Math.max(bucket.aggregate, Number(total.value || 0));
+    byProvider.set(key, bucket);
+  }
+  for (const entry of canonical) {
+    if (isDailyActiveEnergyAggregateEntry(entry)) continue;
+    const key = providerKey(entry);
+    const bucket = key ? byProvider.get(key) : undefined;
+    if (!bucket) independent += Number(entry.value || 0);
+    else bucket.components += Number(entry.value || 0);
+  }
+  return (
+    independent +
+    [...byProvider.values()].reduce(
+      (sum, bucket) => sum + Math.max(bucket.aggregate, bucket.components),
+      0,
+    )
+  );
 }
 
 /**
