@@ -1051,6 +1051,10 @@ const templates: Template[] = [
     ar: ([name]) => `رسالة مجموعة من ${name}`, es: ([name]) => `Mensaje de grupo de ${name}`, "zh-Hans": ([name]) => `来自 ${name} 的群组消息`,
     sv: ([name]) => `Gruppmeddelande från ${name}`, de: ([name]) => `Gruppennachricht von ${name}`, ru: ([name]) => `Сообщение в группе от ${name}`, fr: ([name]) => `Message de groupe de ${name}`,
   }),
+  template(/^Group message in (.+)$/, {
+    ar: ([name]) => `رسالة مجموعة في ${name}`, es: ([name]) => `Mensaje de grupo en ${name}`, "zh-Hans": ([name]) => `${name} 中的群组消息`,
+    sv: ([name]) => `Gruppmeddelande i ${name}`, de: ([name]) => `Gruppennachricht in ${name}`, ru: ([name]) => `Сообщение в группе ${name}`, fr: ([name]) => `Message de groupe dans ${name}`,
+  }),
   template(/^(.+?) logged (.+)$/, {
     ar: ([name, metric]) => `سجّل ${name} ${metric}`, es: ([name, metric]) => `${name} registró ${metric}`, "zh-Hans": ([name, metric]) => `${name} 记录了${metric}`,
     sv: ([name, metric]) => `${name} loggade ${metric}`, de: ([name, metric]) => `${name} hat ${metric} protokolliert`, ru: ([name, metric]) => `${name}: записано «${metric}»`, fr: ([name, metric]) => `${name} a enregistré ${metric}`,

@@ -36,6 +36,7 @@ import {
   longestStreakWithRest,
 } from "./streaks";
 import {
+  activeEnergyEntriesWithoutCoveredWorkoutFallbacks,
   isCalculatedStepFallback,
   supplementalWorkoutCaloriesForActiveEnergy,
   unrecordedStepActivity,
@@ -119,6 +120,7 @@ export function metricValue(
   userId: string,
   localDate: string,
   stack: string[] = [],
+  now = new Date(),
 ): number {
   if (metric.gymMapping) {
     const localHasData = hasGymMetricData(
@@ -191,7 +193,7 @@ export function metricValue(
     )
       .slice()
       .sort((left, right) => left.recordedAt.localeCompare(right.recordedAt));
-    const today = dateKey();
+    const today = dateKey(now);
     if (localDate > today) return 0;
     const profile =
       state.energyProfiles?.[userId] ?? state.settings.energyProfile;
@@ -202,7 +204,7 @@ export function metricValue(
             0,
             Math.min(
               1,
-              (Date.now() - new Date(`${today}T00:00:00`).getTime()) /
+              (now.getTime() - new Date(`${today}T00:00:00`).getTime()) /
                 86400000,
             ),
           )
@@ -213,10 +215,14 @@ export function metricValue(
     const calculatedTotal =
       restingDaily * elapsedFraction +
       (activeEnergy
-        ? metricValue(state, activeEnergy, userId, localDate, [
-            ...stack,
-            metric.id,
-          ])
+        ? metricValue(
+            state,
+            activeEnergy,
+            userId,
+            localDate,
+            [...stack, metric.id],
+            now,
+          )
         : 0);
     if (!imported.length) return calculatedTotal;
     // TotalCaloriesBurned normally already contains rest + activity, so it
@@ -231,12 +237,12 @@ export function metricValue(
   }
   if (
     Boolean(metric.fastingSettings) &&
-    localDate === dateKey()
+    localDate === dateKey(now)
   ) {
     const liveHours = activeFastingHours(
       state,
       userId,
-      new Date(),
+      now,
       metric.id,
     );
     // A newly started/resumed fast is today's live value even if an earlier
@@ -262,9 +268,10 @@ export function metricValue(
       // part of the day's health entries. Stored fallback rows remain useful
       // for sync/history, but are excluded here so they cannot be counted
       // twice alongside the fresh estimate.
-      const measuredEntries = sameDay.filter(
-        (entry) => !isCalculatedStepFallback(entry),
-      );
+      const measuredEntries =
+        activeEnergyEntriesWithoutCoveredWorkoutFallbacks(sameDay).filter(
+          (entry) => !isCalculatedStepFallback(entry),
+        );
       const measuredValue = measuredEntries.length
         ? aggregate(measuredEntries, metric.aggregation)
         : 0;
@@ -274,7 +281,14 @@ export function metricValue(
           candidate.healthMapping.field === "value",
       );
       const stepCount = steps
-        ? metricValue(state, steps, userId, localDate, [...stack, metric.id])
+        ? metricValue(
+            state,
+            steps,
+            userId,
+            localDate,
+            [...stack, metric.id],
+            now,
+          )
         : 0;
       const profile =
         state.energyProfiles?.[userId] ?? state.settings.energyProfile;
@@ -342,6 +356,7 @@ export function metricValue(
         userId,
         localDate,
         [...stack, metric.id],
+        now,
       );
     }
   }
@@ -2536,6 +2551,8 @@ export type WeeklyBalancePeriodReport = WeeklyDeficitBalance & {
   endDate: string;
   bucketKind: "day" | "week" | "month" | "year";
   buckets: WeeklyBalanceBucket[];
+  /** Completed, food-logged days in the selected range, for the Entries list. */
+  dailyBalances: WeeklyBalanceBucket[];
   averageDailyBalance: number;
   onPlanBuckets: number;
   countedBuckets: number;
@@ -2676,6 +2693,16 @@ export function weeklyBalancePeriodReport(
     weekStartsOn,
     foodDates,
   );
+  const dailyBalances = dates.flatMap((date) => {
+    if (!foodDates.has(date)) return [];
+    const result = energyBalanceAcrossDates(
+      state,
+      userId,
+      [date],
+      foodDates,
+    );
+    return [{ id: date, ...result, startDate: date, endDate: date }];
+  });
   const bucketTotals = buckets.reduce(
     (sum, bucket) => ({
       actual: sum.actual + bucket.actual,
@@ -2696,6 +2723,7 @@ export function weeklyBalancePeriodReport(
     endDate: dates.at(-1) ?? through,
     bucketKind,
     buckets,
+    dailyBalances,
     averageDailyBalance: totals.days ? totals.balance / totals.days : 0,
     onPlanBuckets: counted.filter((bucket) => bucket.balance >= 0).length,
     countedBuckets: counted.length,

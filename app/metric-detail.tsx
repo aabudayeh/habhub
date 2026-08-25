@@ -23,6 +23,7 @@ import {
 import { ExpandableImage } from "@/src/components/ExpandableImage";
 import { FastingClockEditor } from "@/src/components/FastingClockEditor";
 import { FastingProgressBar } from "@/src/components/FastingProgressBar";
+import { InfoPopover } from "@/src/components/InfoPopover";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import { SelectionMenu } from "@/src/components/SelectionMenu";
 import { TimeInput } from "@/src/components/TimeInput";
@@ -122,6 +123,7 @@ import {
 } from "@/src/domain/food";
 import { trackerPresets } from "@/src/domain/trackerCatalog";
 import { isGoogleHealthEntry } from "@/src/domain/googleHealthLocalPrivacy";
+import { totalEnergyBurnedBreakdownEntries } from "@/src/domain/energyBreakdown";
 import {
   GoogleHealthClientError,
   invokeGoogleHealth,
@@ -360,7 +362,7 @@ export default function TrackerDetail() {
     (tracker.healthMapping?.dataType === "blood_pressure" &&
       tracker.healthMapping.field === "systolic");
   const visualization = metricVisualization(tracker);
-  const entries = state.entries
+  const trackerEntries = state.entries
     .filter(
       (entry) =>
         entry.userId === state.currentUserId &&
@@ -373,6 +375,14 @@ export default function TrackerDetail() {
         b.localDate.localeCompare(a.localDate) ||
         b.recordedAt.localeCompare(a.recordedAt),
     );
+  const entries =
+    tracker.id === "energy_burned"
+      ? totalEnergyBurnedBreakdownEntries(
+          state,
+          state.currentUserId,
+          dates,
+        )
+      : trackerEntries;
   const editingFoodEntry = editingFoodEntryId
     ? entries.find((entry) => entry.id === editingFoodEntryId)
     : undefined;
@@ -2180,6 +2190,9 @@ export default function TrackerDetail() {
                     ? t(fastDetails.endedAutomatically ? "Automatic" : "Manual")
                     : isFoodNutrientDetailEntry(entry)
                     ? entry.sourceOrigin || "Food log"
+                    : tracker.id === "energy_burned" &&
+                        entry.id.startsWith("energy-breakdown:")
+                      ? entry.sourceOrigin || "Calculated"
                     : entry.source === "imported"
                     ? entry.sourceOrigin || "Health import"
                     : "Manual entry"}
@@ -3501,10 +3514,15 @@ function WeeklyDetail({
     <Screen>
       <PageHeader
         title="Weekly balance"
-        subtitle="Only days with food recorded count. A non-negative balance means the weekly target is on plan."
         showMenu={false}
         action={
           <View style={styles.headerActions}>
+            <InfoPopover
+              label={t("About Weekly balance")}
+              message={t(
+                "Only days with food recorded count. A non-negative balance means the weekly target is on plan.",
+              )}
+            />
             <IconButton
               icon="book-outline"
               label="Open Weekly balance journal notes"
@@ -3747,6 +3765,87 @@ function WeeklyDetail({
             colors={colors}
           />
         </View>
+      </Card>
+      <Card style={styles.weeklyEntriesCard}>
+        <View style={styles.weeklyEntriesHeading}>
+          <View
+            style={[
+              styles.weeklyReportIcon,
+              { backgroundColor: `${trackerColor}18` },
+            ]}
+          >
+            <Ionicons name="list-outline" size={18} color={trackerColor} />
+          </View>
+          <View style={styles.grow}>
+            <Text style={[styles.entryTitle, { color: colors.ink }]}>Entries</Text>
+            <Text style={[styles.time, { color: colors.muted }]}>
+              End-of-day balances from food-logged days
+            </Text>
+          </View>
+        </View>
+        {report.dailyBalances.length ? (
+          [...report.dailyBalances].reverse().map((entry, index) => (
+            <View
+              key={entry.id}
+              style={[
+                styles.weeklyEntryRow,
+                index > 0
+                  ? { borderTopColor: colors.border, borderTopWidth: 1 }
+                  : null,
+              ]}
+            >
+              <View
+                style={[
+                  styles.weeklyEntryIcon,
+                  {
+                    backgroundColor:
+                      entry.balance >= 0
+                        ? `${trackerColor}18`
+                        : `${palette.red}18`,
+                  },
+                ]}
+              >
+                <Ionicons
+                  name={entry.balance >= 0 ? "trending-up" : "trending-down"}
+                  size={15}
+                  color={entry.balance >= 0 ? trackerColor : palette.red}
+                />
+              </View>
+              <View style={styles.grow}>
+                <Text style={[styles.entryTitle, { color: colors.ink }]}>
+                  {friendlyDate(entry.startDate, locale)}
+                </Text>
+                <Text style={[styles.time, { color: colors.muted }]}>
+                  {formatLocalizedTemplate(
+                    t,
+                    "{actual} kcal actual · {target} kcal target",
+                    {
+                      actual: Math.round(entry.actual).toLocaleString(locale),
+                      target: Math.round(entry.target).toLocaleString(locale),
+                    },
+                  )}
+                </Text>
+              </View>
+              <Text
+                numberOfLines={2}
+                adjustsFontSizeToFit
+                minimumFontScale={0.72}
+                style={[
+                  styles.weeklyEntryValue,
+                  {
+                    color: entry.balance >= 0 ? trackerColor : palette.red,
+                  },
+                ]}
+              >
+                {bucketBalanceLabel(entry.balance)}
+              </Text>
+            </View>
+          ))
+        ) : (
+          <Text style={[styles.empty, { color: colors.muted }]}>
+            No completed food-logged days in this period yet.
+          </Text>
+        )}
       </Card>
       <Card style={styles.weeklyReportCard}>
         <View style={styles.weeklyReportHeading}>
@@ -5400,6 +5499,29 @@ const styles = StyleSheet.create({
   },
   weeklyBalanceScale: { fontSize: 7, fontWeight: "700", textAlign: "center" },
   weeklyReportCard: { gap: 8 },
+  weeklyEntriesCard: { gap: 8 },
+  weeklyEntriesHeading: { flexDirection: "row", alignItems: "center", gap: 9 },
+  weeklyEntryRow: {
+    minHeight: 52,
+    paddingVertical: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+  },
+  weeklyEntryIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  weeklyEntryValue: {
+    width: "35%",
+    fontSize: 10,
+    lineHeight: 13,
+    fontWeight: "900",
+    textAlign: "right",
+  },
   weeklyReportHeading: { flexDirection: "row", alignItems: "center", gap: 9 },
   weeklyReportIcon: {
     width: 34,

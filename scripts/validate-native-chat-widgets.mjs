@@ -215,11 +215,55 @@ assert.match(
   /bestLeaderboardGrid[\s\S]*cellWidth \/ 68f[\s\S]*cellHeight \/ 39f[\s\S]*for \(count in 4 downTo 2\)/,
   "Leaderboard capacity and grid geometry must adapt across launcher spans",
 );
-assert.match(pluginSource, /cellScale[\s\S]*metricTitleSize[\s\S]*rowTextSize[\s\S]*iconRadius/);
+assert.match(pluginSource, /cellScale[\s\S]*metricTitleSize[\s\S]*baseRowTextSize[\s\S]*iconRadius/);
 assert.match(
   pluginSource,
-  /val stackRows = grid\.cellWidth < 76f[\s\S]*fittedTextPaint\(value, valueWidth/,
+  /val desiredRows = min\(metricRows\.length\(\), 5\)[\s\S]*val compactRows = desiredRows > 0[\s\S]*val stackRows = roomyStackRows && !compactRows[\s\S]*fittedTextPaint\(value, valueWidth/,
   "Leaderboard values must fit responsively instead of truncating units in narrow widgets",
+);
+assert.match(
+  pluginSource,
+  /denseMemberHeader = desiredRows >= 3[\s\S]*headerScale = if \(denseMemberHeader\) 0\.78f else 1f[\s\S]*desiredRows \* preferredRowHeight > availableHeight[\s\S]*compactRowHeight[\s\S]*rowHeight \* 0\.58f[\s\S]*baseRowTextSize \* 1\.28f/,
+  "Leaderboard rows must compact to fit larger groups and scale up into spare height for smaller groups",
+);
+function singleMetricLeaderboardDensity(widthDp, heightDp, members) {
+  const pad = Math.min(12, Math.max(4, Math.min(widthDp, heightDp) * 0.065));
+  const headerSize = Math.min(15, Math.max(6.2, Math.min(widthDp / 14, heightDp / 6.5)));
+  const cellWidth = widthDp - pad * 2;
+  const cellHeight = heightDp - (pad + headerSize + Math.max(3, headerSize * 0.45)) - pad;
+  const desiredRows = Math.min(members, 5);
+  const cellScale = Math.min(2.6, Math.max(0.62, Math.min(cellWidth / 68, cellHeight / 39)));
+  const denseMemberHeader = desiredRows >= 3 && cellHeight < 32 + desiredRows * 14;
+  const headerScale = denseMemberHeader ? 0.78 : 1;
+  const innerPad = Math.min(10, Math.max(2.4, 4.5 * cellScale * headerScale));
+  const metricTitleSize = Math.min(18, Math.max(5.4, 8.2 * cellScale * headerScale));
+  const baseRowTextSize = Math.min(14.5, Math.max(4.5, 6.6 * cellScale * headerScale));
+  const iconRadius = Math.min(12, Math.max(3, 4.8 * cellScale * headerScale));
+  const titleBandHeight = Math.max(
+    iconRadius * 2 + innerPad * 1.45,
+    metricTitleSize * 1.65 + innerPad,
+  );
+  const availableHeight = Math.max(0, cellHeight - titleBandHeight - innerPad * 0.45);
+  const preferredRowHeight = Math.max(10, baseRowTextSize * 2.15);
+  const compactRows = desiredRows > 0 && desiredRows * preferredRowHeight > availableHeight;
+  const compactRowHeight = Math.min(9, Math.max(6.4, baseRowTextSize * 0.9));
+  const visibleRows = Math.min(
+    desiredRows,
+    Math.max(1, Math.floor(availableHeight / (compactRows ? compactRowHeight : preferredRowHeight))),
+  );
+  const rowHeight = availableHeight / Math.max(1, visibleRows);
+  const rowTextSize = compactRows
+    ? Math.max(4, Math.min(baseRowTextSize, rowHeight * 0.58))
+    : Math.max(baseRowTextSize, Math.min(baseRowTextSize * 1.28, rowHeight * 0.58));
+  return { rowHeight, rowTextSize, visibleRows };
+}
+const sparseLeaderboard = singleMetricLeaderboardDensity(203, 105, 1);
+const crowdedLeaderboard = singleMetricLeaderboardDensity(203, 105, 5);
+assert.equal(crowdedLeaderboard.visibleRows, 5, "A standard 2 x 2 widget should fit five members for one tracker");
+assert.ok(sparseLeaderboard.rowHeight > crowdedLeaderboard.rowHeight);
+assert.ok(
+  sparseLeaderboard.rowTextSize > crowdedLeaderboard.rowTextSize,
+  "A sparse leaderboard must spend its spare height on larger text",
 );
 assert.match(
   pluginSource,
@@ -265,8 +309,13 @@ assert.match(
 assert.match(pluginSource, /item\.optString\("compactSubtitle", item\.optString\("subtitle"\)\)/);
 assert.match(
   pluginSource,
-  /compactSubtitleWidth = size\.widthDp - pad \* 2f[\s\S]*fittedTextPaint\([\s\S]*compactSubtitleWidth[\s\S]*31\.5f[\s\S]*compactSubtitleWidth/,
-  "The goals-left and To-Do summary must share one full-width compact baseline",
+  /drawFeaturedSummary\([\s\S]*if \(size\.compact\) 31\.5f else 54f[\s\S]*todoSummary[\s\S]*drawRightAlignedEllipsizedText/,
+  "The goals-left and protected To-Do count must share one baseline in every Featured size",
+);
+assert.match(
+  pluginSource,
+  /todoWidth = min\(availableWidth \* 0\.48f[\s\S]*goalWidth = max\(8f, availableWidth - todoWidth - dividerWidth\)/,
+  "Featured widgets must reserve enough right-hand width for the To-Do count",
 );
 assert.match(pluginSource, /max\(34f, barTop - 10\.5f\)/);
 const featured2x1Width = 109;
@@ -296,6 +345,11 @@ assert.ok(
   34 - 31.5 >= 2.5,
   "Compact goal tiles must begin below the shared summary baseline",
 );
+assert.match(
+  pluginSource,
+  /val pillCenterY = destination\.bottom - pillHeight \* 0\.35f/,
+  "Status avatar percentage should sit at the avatar's feet",
+);
 assert.match(pluginSource, /PorterDuffColorFilter/);
 assert.match(pluginSource, /LruCache<String, Bitmap>/);
 assert.match(pluginSource, /MAX_RENDER_PIXELS/);
@@ -323,6 +377,8 @@ assert.match(leaderboardPreview, /android:fillColor="#B8E45C"/);
 assert.match(leaderboardPreview, /android:fillColor="#DDE6F5"/);
 
 assert.match(widgetTypes, /export type WidgetGoalSnapshot/);
+assert.match(widgetTypes, /goalSummary: string/);
+assert.match(widgetTypes, /todoSummary: string/);
 assert.match(widgetTypes, /export type WidgetFeaturedSnapshot/);
 assert.match(widgetTypes, /dateLabel: string/);
 assert.match(widgetTypes, /export type WidgetAvatarSnapshot/);

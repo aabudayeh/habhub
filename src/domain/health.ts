@@ -10,9 +10,16 @@ import {
 } from '@/src/domain/healthDedup';
 import { metricEntryKey } from '@/src/domain/metricEntry';
 import { FOOD_NUTRIENTS } from '@/src/domain/food';
+import {
+  catalogExercise,
+  exerciseFromActivityName,
+} from '@/src/domain/exerciseCatalog';
 import { HealthImportRecord } from '@/src/health/types';
 import { AppState, EnergyProfile, HealthDataType, HealthMetricField, HealthMetricMapping, HealthProvider, HealthSourcePreference, MetricDefinition, MetricEntry, NutritionDetails, Visibility } from '@/src/types';
-import { workoutQualifies } from './workoutQualification';
+import {
+  workoutActivityFamily,
+  workoutQualifies,
+} from './workoutQualification';
 
 const METRICS_BY_DATA_TYPE: Record<HealthDataType, string[]> = {
   steps: ['steps'],
@@ -205,6 +212,140 @@ export function healthFallbackContextForRead(
   });
 }
 
+export type WorkoutActiveEnergyEstimate = {
+  calories: number;
+  estimated: boolean;
+  basis: string;
+};
+
+function recordTime(record: HealthImportRecord, edge: 'start' | 'end') {
+  const value = edge === 'start' ? record.startTime : record.endTime;
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function healthEnergyRecordCoversWorkout(
+  energy: HealthImportRecord,
+  workout: HealthImportRecord,
+) {
+  if (energy.provider !== workout.provider) return false;
+  const energyStart = recordTime(energy, 'start');
+  const energyEnd = recordTime(energy, 'end');
+  const workoutStart = recordTime(workout, 'start');
+  const workoutEnd = recordTime(workout, 'end');
+  if (
+    energyStart === undefined ||
+    energyEnd === undefined ||
+    workoutStart === undefined ||
+    workoutEnd === undefined ||
+    energyEnd <= workoutStart ||
+    energyStart >= workoutEnd
+  )
+    return false;
+  const energyActivity = energy.activityKey?.trim();
+  const workoutActivity = workout.activityKey?.trim();
+  if (energyActivity && workoutActivity && energyActivity !== workoutActivity)
+    return false;
+  const energyDuration = Math.max(1, energyEnd - energyStart);
+  const workoutDuration = Math.max(1, workoutEnd - workoutStart);
+  if (
+    !energyActivity &&
+    (energyDuration >= 20 * 60 * 60 * 1000 ||
+      energyDuration > Math.max(2 * 60 * 60 * 1000, workoutDuration * 3))
+  )
+    return false;
+  const energyOrigin = energy.origin
+    ? friendlyHealthOrigin(energy.origin).trim().toLocaleLowerCase()
+    : '';
+  const workoutOrigin = workout.origin
+    ? friendlyHealthOrigin(workout.origin).trim().toLocaleLowerCase()
+    : '';
+  if (energyOrigin && workoutOrigin && energyOrigin === workoutOrigin)
+    return true;
+  // Health Connect can expose records from several writers under one provider.
+  // Cross-writer overlap alone is not ownership. Require the same explicit
+  // activity plus an interval that substantially belongs to this workout.
+  if (!energyActivity || !workoutActivity || energyActivity !== workoutActivity)
+    return false;
+  const overlap = Math.max(
+    0,
+    Math.min(energyEnd, workoutEnd) - Math.max(energyStart, workoutStart),
+  );
+  return overlap / energyDuration >= 0.8;
+}
+
+/**
+ * Return a workout's own net active energy.
+ *
+ * Provider calories are kept verbatim. When they are absent, movement
+ * sessions prefer measured distance and all other workouts use the catalog's
+ * whole-session MET with 1 MET removed because resting energy is represented
+ * separately by BMR.
+ */
+export function workoutActiveEnergy(
+  record: HealthImportRecord,
+  profileOrWeight: StepActivityProfile | number,
+): WorkoutActiveEnergyEstimate {
+  const measured = Number(record.measurements?.activeCalories ?? 0);
+  if (Number.isFinite(measured) && measured > 0)
+    return {
+      calories: measured,
+      estimated: false,
+      basis: 'provider calorie measurement',
+    };
+
+  const profile = stepProfile(profileOrWeight);
+  const weightKg = clamp(Number(profile.weightKg) || 70, 35, 300);
+  const catalog =
+    catalogExercise(record.activityKey) ??
+    exerciseFromActivityName(record.label);
+  const activityKey = record.activityKey ?? catalog?.key;
+  const family = workoutActivityFamily(activityKey);
+  const distanceKm = Math.max(
+    0,
+    Number(record.measurements?.distanceKm ?? 0) || 0,
+  );
+  if (distanceKm > 0 && (family === 'walking' || family === 'running'))
+    return {
+      calories:
+        distanceKm *
+        weightKg *
+        (family === 'running' ? 1 : LEGACY_WALKING_KCAL_PER_KG_KM),
+      estimated: true,
+      basis: `${Math.round(distanceKm * 100) / 100} km distance`,
+    };
+
+  const explicitDuration = Number(record.measurements?.durationMinutes ?? 0);
+  const intervalMinutes = Math.max(
+    0,
+    ((recordTime(record, 'end') ?? 0) -
+      (recordTime(record, 'start') ?? 0)) /
+      60000,
+  );
+  const durationMinutes = Math.max(
+    0,
+    Number.isFinite(explicitDuration) && explicitDuration > 0
+      ? explicitDuration
+      : intervalMinutes || Number(record.value) || 0,
+  );
+  if (durationMinutes <= 0)
+    return { calories: 0, estimated: true, basis: 'workout duration' };
+  const fallbackMet =
+    family === 'walking'
+      ? 3.5
+      : family === 'running'
+        ? 8.3
+        : family === 'strength'
+          ? 5
+          : 4.5;
+  const met = Math.max(1, Number(catalog?.met ?? fallbackMet) || fallbackMet);
+  return {
+    calories: ((met - 1) * 3.5 * weightKg * durationMinutes) / 200,
+    estimated: true,
+    basis: `${Math.round(durationMinutes * 10) / 10} min duration`,
+  };
+}
+
 export function mapHealthRecordsToEntries(
   records: HealthImportRecord[],
   userId: string,
@@ -234,7 +375,20 @@ export function mapHealthRecordsToEntries(
       else compoundByType.set(type, [metric]);
     }
   }
-  for (const record of deduplicateHealthImportRecords(records, sourcePreferences)) {
+  const deduplicatedRecords = deduplicateHealthImportRecords(
+    records,
+    sourcePreferences,
+  );
+  const activeEnergyRecords = deduplicatedRecords.filter(
+    (record) => record.type === 'active_energy' && Number(record.value) > 0,
+  );
+  const activeEnergyMetric = metrics?.find(
+    (metric) =>
+      metric.id === 'exercise' &&
+      metric.healthMapping?.dataType === 'active_energy' &&
+      metric.healthMapping.field === 'value',
+  );
+  for (const record of deduplicatedRecords) {
     if(metrics){
       for(const metric of (directByType.get(record.type) ?? []).filter((item)=>healthMappingMatchesRecord(item.healthMapping,record)&&workoutCompletionQualifies(record,item))){
         const value=mappedValue(record,metric);if(value===undefined||value===false||Number(value)<=0)continue;
@@ -255,6 +409,14 @@ export function mapHealthRecordsToEntries(
                 importedMetricVisibility(visibility, metric.id),
                 record.nutrition,
               );
+        if (
+          record.type === 'active_energy' &&
+          !record.activityKey &&
+          ((recordTime(record, 'end') ?? 0) -
+            (recordTime(record, 'start') ?? 0) >=
+            20 * 60 * 60 * 1000)
+        )
+          entry.label ||= 'Active energy total';
         entries.push(entry);entryById.set(entry.id,entry);
       }
       for(const metric of (compoundByType.get(record.type) ?? []).filter((item)=>
@@ -307,6 +469,46 @@ export function mapHealthRecordsToEntries(
               );
         entry.submetricValues=submetricValues;
         entries.push(entry);entryById.set(entry.id,entry);
+      }
+      // ExerciseSession calories belong to that session, just like its
+      // duration and distance. Health Connect and HealthKit sometimes expose
+      // no matching ActiveCaloriesBurned interval, even though the session has
+      // a calorie measurement or enough duration/distance to estimate it. In
+      // that case retain one stable Active energy row per workout instead of
+      // folding every workout into the unrelated uncovered-Steps estimate.
+      if (
+        activeEnergyMetric &&
+        record.type === 'workouts' &&
+        record.workoutRecordKind !== 'segment' &&
+        !activeEnergyRecords.some((activeRecord) =>
+          healthEnergyRecordCoversWorkout(activeRecord, record),
+        )
+      ) {
+        const workoutEnergy = workoutActiveEnergy(record, profileOrWeight);
+        if (workoutEnergy.calories > 0) {
+          const entry = entryFor(
+            record,
+            userId,
+            activeEnergyMetric.id,
+            Math.round(workoutEnergy.calories * 10) / 10,
+            importedMetricVisibility(visibility, activeEnergyMetric.id),
+          );
+          entry.id = `${entry.id}:workout-energy`;
+          if (workoutEnergy.estimated) {
+            entry.source = 'calculated';
+            entry.note = [
+              record.note,
+              `Estimated from this workout's ${workoutEnergy.basis}; its provider did not supply active calories.`,
+              record.origin?.trim()
+                ? `Synced from ${friendlyHealthOrigin(record.origin.trim())}`
+                : undefined,
+            ]
+              .filter(Boolean)
+              .join(' · ');
+          }
+          entries.push(entry);
+          entryById.set(entry.id, entry);
+        }
       }
       // Nutrition is compound data. Even when a user has not added every
       // linked nutrient tracker yet, retain a privacy-safe sidecar for every
@@ -543,6 +745,111 @@ export function isCalculatedStepFallback(entry: MetricEntry) {
   );
 }
 
+/** A calorie row derived directly from one native workout session. */
+export function isWorkoutEnergyEntry(entry: MetricEntry) {
+  return entry.id.endsWith(':workout-energy');
+}
+
+/**
+ * Ignore a stale workout fallback once a provider's canonical active-energy
+ * stream is present. This keeps both totals and detail breakdowns aligned
+ * after a source starts reporting calories on a later sync.
+ */
+export function activeEnergyEntriesWithoutCoveredWorkoutFallbacks(
+  entries: readonly MetricEntry[],
+) {
+  const workoutFallbacks = entries.filter(isWorkoutEnergyEntry);
+  const providerRows = entries.filter(
+    (entry) =>
+      entry.source === 'imported' &&
+      !isWorkoutEnergyEntry(entry) &&
+      Number(entry.value || 0) > 0,
+  );
+  if (!workoutFallbacks.length || !providerRows.length) return [...entries];
+
+  const normalizedLabel = (entry: MetricEntry) => {
+    const label = (entry.label ?? '').trim().toLocaleLowerCase();
+    return /^(active (calories|energy)( total)?|calories burned)$/.test(label)
+      ? ''
+      : label;
+  };
+  const timestamp = (entry: MetricEntry) => {
+    const value = new Date(entry.recordedAt).getTime();
+    return Number.isFinite(value) ? value : undefined;
+  };
+  const normalizedOrigin = (entry: MetricEntry) =>
+    entry.sourceOrigin
+      ? friendlyHealthOrigin(entry.sourceOrigin).trim().toLocaleLowerCase()
+      : '';
+  const compatibleOrigin = (left: MetricEntry, right: MetricEntry) => {
+    const leftOrigin = normalizedOrigin(left);
+    const rightOrigin = normalizedOrigin(right);
+    return (
+      !leftOrigin ||
+      !rightOrigin ||
+      leftOrigin === 'health connect' ||
+      rightOrigin === 'health connect' ||
+      leftOrigin === 'your phone' ||
+      rightOrigin === 'your phone' ||
+      leftOrigin === rightOrigin
+    );
+  };
+  const covered = new Set<string>();
+  // A clearly identified provider day total already includes that provider's
+  // workout calories. This is the one valid broad suppression case; ordinary
+  // per-workout rows below remain one-to-one.
+  for (const providerRow of providerRows) {
+    const providerId = `${providerRow.sourceRecordId ?? ''} ${providerRow.id}`;
+    const providerDayTotal =
+      !normalizedLabel(providerRow) &&
+      /(daily|aggregate|total|stream)/i.test(providerId);
+    if (!providerDayTotal) continue;
+    for (const fallback of workoutFallbacks) {
+      if (
+        fallback.sourceProvider === providerRow.sourceProvider &&
+        compatibleOrigin(fallback, providerRow)
+      )
+        covered.add(fallback.id);
+    }
+  }
+  // Match one provider row to at most one old fallback. A direct row for one
+  // run must never erase unrelated walking, cycling, swimming, or gym rows
+  // from the same day.
+  for (const providerRow of providerRows) {
+    const providerTime = timestamp(providerRow);
+    const providerLabel = normalizedLabel(providerRow);
+    const candidate = workoutFallbacks
+      .filter((fallback) => !covered.has(fallback.id))
+      .flatMap((fallback) => {
+        if (fallback.sourceProvider !== providerRow.sourceProvider) return [];
+        if (!compatibleOrigin(fallback, providerRow)) return [];
+        const fallbackId = fallback.sourceRecordId ?? '';
+        const providerId = providerRow.sourceRecordId ?? '';
+        const relatedId =
+          Boolean(fallbackId && providerId) &&
+          (providerId === `workout-energy:${fallbackId}` ||
+            fallbackId === `workout-energy:${providerId}`);
+        const fallbackTime = timestamp(fallback);
+        const timeDifference =
+          providerTime === undefined || fallbackTime === undefined
+            ? Number.POSITIVE_INFINITY
+            : Math.abs(providerTime - fallbackTime);
+        const fallbackLabel = normalizedLabel(fallback);
+        const sameLabel =
+          Boolean(providerLabel && fallbackLabel) &&
+          providerLabel === fallbackLabel;
+        const closeUnlabelledInterval =
+          !providerLabel && timeDifference <= 60_000;
+        if (!relatedId && !(sameLabel && timeDifference <= 15 * 60_000) && !closeUnlabelledInterval)
+          return [];
+        return [{ fallback, score: relatedId ? -1 : timeDifference }];
+      })
+      .sort((left, right) => left.score - right.score)[0]?.fallback;
+    if (candidate) covered.add(candidate.id);
+  }
+  return entries.filter((entry) => !covered.has(entry.id));
+}
+
 /**
  * Estimate the walking that remains after Health Connect workout sessions have
  * explained their share of the daily step total.
@@ -590,6 +897,15 @@ export function unrecordedStepActivity(
         (metric) =>
           metric.healthMapping?.dataType === "workouts" &&
           metric.healthMapping.field === "active_calories",
+      )
+      .map((metric) => metric.id),
+  );
+  const activeEnergyIds = new Set(
+    metrics
+      .filter(
+        (metric) =>
+          metric.healthMapping?.dataType === "active_energy" &&
+          metric.healthMapping.field === "value",
       )
       .map((metric) => metric.id),
   );
@@ -653,7 +969,10 @@ export function unrecordedStepActivity(
     // when no day-level ActiveCaloriesBurned rows exist, so an overlapping
     // provider total can never be counted twice.
     const hasMeasuredSessionCalories = matching.some(
-      (entry) => calorieIds.has(entry.metricId) && Number(entry.value || 0) > 0,
+      (entry) =>
+        (calorieIds.has(entry.metricId) ||
+          activeEnergyIds.has(entry.metricId)) &&
+        Number(entry.value || 0) > 0,
     );
     if (!hasMeasuredSessionCalories && estimatedDistanceKm > 0) {
       const weightKg = clamp(
@@ -732,13 +1051,11 @@ function appendStepFallbackEntries(entries:MetricEntry[],userId:string,visibilit
     if(steps<=0)continue;
     const estimate=unrecordedStepActivity(dayEntries,metrics,steps,profileOrWeight);
     const stepEntry=importedDayEntries.find((entry)=>stepIdSet.has(entry.metricId))!;
-    const make=(metricId:string,value:number,suffix:string,includedEstimatedWorkoutCalories=0):MetricEntry=>({id:`health:${stepEntry.sourceProvider??'health_connect'}:step-fallback:${day}:${metricId}:${suffix}`,metricId,userId,value:Math.round(value*10)/10,localDate:day,recordedAt:stepEntry.recordedAt,visibility:importedMetricVisibility(visibility,metricId),source:'calculated',label:'Estimated unrecorded walking from steps',note:[`Uses ${Math.round(estimate.uncoveredSteps).toLocaleString()} steps not already explained by walking or running workouts.`,suffix==='calories'&&includedEstimatedWorkoutCalories>0?`Also includes ${Math.round(includedEstimatedWorkoutCalories).toLocaleString()} estimated active kcal for synced movement workouts whose provider supplied duration or distance but no calories.`:undefined].filter(Boolean).join(' '),sourceProvider:stepEntry.sourceProvider,sourceRecordId:`step-fallback:${day}`,sourceOrigin:stepEntry.sourceOrigin});
+    const make=(metricId:string,value:number,suffix:string):MetricEntry=>({id:`health:${stepEntry.sourceProvider??'health_connect'}:step-fallback:${day}:${metricId}:${suffix}`,metricId,userId,value:Math.round(value*10)/10,localDate:day,recordedAt:stepEntry.recordedAt,visibility:importedMetricVisibility(visibility,metricId),source:'calculated',label:'Estimated unrecorded walking from steps',note:`Uses ${Math.round(estimate.uncoveredSteps).toLocaleString()} steps not already explained by walking or running workouts.`,sourceProvider:stepEntry.sourceProvider,sourceRecordId:`step-fallback:${day}`,sourceOrigin:stepEntry.sourceOrigin});
     for(const metric of fallback){
       const mapping=metric.healthMapping;
       if(mapping?.dataType==='active_energy'&&mapping.field==='value'){
-        const supplementalWorkoutCalories=supplementalWorkoutCaloriesForActiveEnergy(dayEntries,metrics,metric.id,estimate);
-        const calories=supplementalWorkoutCalories+estimate.estimatedCalories;
-        if(calories>0)derived.push(make(metric.id,calories,'calories',Math.min(estimate.estimatedWorkoutCalories,supplementalWorkoutCalories)));
+        if(estimate.estimatedCalories>0)derived.push(make(metric.id,estimate.estimatedCalories,'calories'));
       } else if(mapping?.dataType==='workouts'&&mapping.field==='distance_km'&&estimate.uncoveredSteps>0) {
         derived.push(make(metric.id,estimate.distanceKm,'distance'));
       } else if(mapping?.dataType==='workouts'&&mapping.field==='duration_minutes'&&estimate.uncoveredSteps>0) {

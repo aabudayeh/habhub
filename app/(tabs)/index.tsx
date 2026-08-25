@@ -2166,6 +2166,7 @@ function TodayTrackerPageFlow({
       requestedPage={requestedPage}
       scrollEnabled={scrollEnabled}
       showPageDots={false}
+      pageStyle={styles.todayTrackerPagerPage}
       pages={chunkIntoPages(rows, pageSize).map((page, index) => (
         <View key={index} style={styles.list}>{page}</View>
       ))}
@@ -4023,6 +4024,10 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
   list: { flex: 1, gap: 6 },
+  // A one-point gutter keeps the antialiased completion outline of the next
+  // page outside the visible snap boundary. Clipping also contains animated
+  // card borders during a swipe without changing scrolling-list alignment.
+  todayTrackerPagerPage: { overflow: "hidden", paddingHorizontal: 1 },
   todosAfterPagedTrackers: { marginTop: 4 },
   row: {
     minHeight: 62,

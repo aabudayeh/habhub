@@ -742,10 +742,10 @@ async function canonicalChatEvent(
       title: pushPreview(
         direct
           ? `Direct message from ${senderName}`
-          : `Group message from ${senderName}`,
+          : `Group message in ${groupName}`,
         120,
       ),
-      body: pushPreview(direct ? text : `${groupName}: ${text}`, 220),
+      body: pushPreview(direct ? text : `${senderName}: ${text}`, 220),
       data: {
         route: "/chat",
         category: "chat",

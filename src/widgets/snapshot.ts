@@ -109,6 +109,7 @@ export function featuredWidgetSnapshot(
     summary.usesGoals
       ? `${summary.completedTodos}/${summary.todos.length} ${translate("To-Dos")}`
       : "";
+  const goalSummary = featuredSubtitle(summary, translate);
   const goals: WidgetGoalSnapshot[] = summary.usesGoals
     ? summary.goalProgress.map((goal) => ({
         id: goal.id,
@@ -134,12 +135,14 @@ export function featuredWidgetSnapshot(
     id: "__featured__",
     eyebrow: baseEyebrow,
     dateLabel: compactWidgetDate(today, language),
-    compactSubtitle: [featuredSubtitle(summary, translate), todoSummary]
+    goalSummary,
+    todoSummary,
+    compactSubtitle: [goalSummary, todoSummary]
       .filter(Boolean)
       .join(" · "),
     title: "HabHub",
     value: `${summary.met} ${translate("of")} ${summary.total}`,
-    subtitle: featuredSubtitle(summary, translate),
+    subtitle: goalSummary,
     progress: summary.progress,
     color: activeColor,
     backgroundColor: summary.allMet

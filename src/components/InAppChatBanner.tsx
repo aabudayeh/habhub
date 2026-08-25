@@ -93,12 +93,13 @@ export function InAppChatBanner() {
     const senderName = sender
       ? memberDisplayName(stateRef.current, sender)
       : "A group member";
+    const preview = message.text || "Sent an image";
     show({
       id: message.id,
       title: message.recipientId
         ? `Direct message from ${senderName}`
-        : `Group message from ${senderName}`,
-      body: message.text || "Sent an image",
+        : `Group message in ${state.group.name}`,
+      body: message.recipientId ? preview : `${senderName}: ${preview}`,
       senderId: message.senderId,
       direct: Boolean(message.recipientId),
     });

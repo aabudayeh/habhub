@@ -78,6 +78,16 @@ assert.equal(selectedDay.target, 1_500);
 assert.equal(selectedDay.balance, 100);
 assert.equal(selectedDay.onPlanBuckets, 2);
 assert.equal(selectedDay.countedBuckets, 3);
+assert.deepEqual(
+  selectedDay.dailyBalances.map((entry) => entry.startDate),
+  ["2026-08-17", "2026-08-18", "2026-08-20"],
+  "a selected day must expose each completed, food-logged day in its week-to-date Entries range",
+);
+assert.deepEqual(
+  selectedDay.dailyBalances.map((entry) => entry.balance),
+  [50, -50, 100],
+  "each Weekly balance entry must preserve that day's end-of-day balance",
+);
 assert.equal(selectedDay.bestBucket?.balance, 100);
 assert.equal(selectedDay.worstBucket?.balance, -50);
 
@@ -107,6 +117,7 @@ assert.equal(week.target, 2_000);
 assert.equal(week.balance, 100);
 assert.equal(week.onPlanBuckets, 3);
 assert.equal(week.countedBuckets, 4);
+assert.equal(week.dailyBalances.length, 4);
 
 const month = weeklyBalancePeriodReport(
   state,
@@ -118,6 +129,7 @@ assert.equal(month.startDate, "2026-08-01");
 assert.equal(month.endDate, dateKey());
 assert.equal(month.bucketKind, "week");
 assert.equal(month.days, 4);
+assert.equal(month.dailyBalances.length, 4);
 assert.ok(month.buckets.length >= 4);
 
 const year = weeklyBalancePeriodReport(
@@ -130,6 +142,7 @@ assert.equal(year.startDate, "2026-01-01");
 assert.equal(year.endDate, dateKey());
 assert.equal(year.bucketKind, "month");
 assert.equal(year.days, 4);
+assert.equal(year.dailyBalances.length, 4);
 
 const overall = weeklyBalancePeriodReport(
   state,
@@ -141,6 +154,7 @@ assert.equal(overall.startDate, "2026-08-17");
 assert.equal(overall.endDate, dateKey());
 assert.equal(overall.days, 4);
 assert.equal(overall.balance, 100);
+assert.equal(overall.dailyBalances.length, 4);
 assert.ok(overall.bestBucket);
 assert.ok(overall.worstBucket);
 
@@ -183,6 +197,7 @@ const emptyReport = weeklyBalancePeriodReport(
   "2026-08-20",
 );
 assert.equal(emptyReport.days, 0);
+assert.deepEqual(emptyReport.dailyBalances, []);
 assert.equal(emptyReport.balance, 0);
 assert.equal(emptyReport.bestBucket, undefined);
 
@@ -440,6 +455,14 @@ assert.match(detail, /Balance report/);
 assert.match(detail, /Plan consistency/);
 assert.match(detail, /above line = ahead · below = behind/);
 assert.match(detail, /No food-logged days in this period/);
+assert.match(detail, /<InfoPopover/);
+assert.doesNotMatch(
+  detail,
+  /title="Weekly balance"\s+subtitle=/,
+  "Weekly balance explanation must live behind the info icon instead of an always-visible subtitle",
+);
+assert.match(detail, /report\.dailyBalances/);
+assert.match(detail, /End-of-day balances from food-logged days/);
 assert.match(detail, /"\{balance\} kcal ahead"/);
 assert.match(detail, /"\{balance\} kcal behind"/);
 assert.doesNotMatch(detail, /green ahead/);

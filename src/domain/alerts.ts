@@ -117,11 +117,11 @@ export function buildAlerts(
             ? "HabHub update"
             : sender
               ? groupConversation
-                ? `Group message from ${memberDisplayName(state, sender)}`
+                ? `Group message in ${state.group.name}`
                 : `Direct message from ${memberDisplayName(state, sender)}`
               : "New message",
         detail: groupConversation
-          ? `${state.group.name} · ${message.text || "Sent an image"}`
+          ? `${sender ? memberDisplayName(state, sender) : "A group member"}: ${message.text || "Sent an image"}`
           : message.text || "Sent an image",
         createdAt: message.createdAt,
         memberId: sender?.id,

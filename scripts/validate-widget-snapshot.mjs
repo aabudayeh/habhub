@@ -83,6 +83,12 @@ assert.match(
   /goals? left · 0\/1 To-Dos/,
   "A Featured widget with goals and to-dos must keep both counts on one separated summary line",
 );
+assert.match(todoFeatured.goalSummary, /goals? left/);
+assert.equal(
+  todoFeatured.todoSummary,
+  "0/1 To-Dos",
+  "Native rendering needs a dedicated To-Do segment so compact layouts cannot ellipsize it away",
+);
 const noTodoFeatured = featuredWidgetSnapshot(
   { ...state, todos: [] },
   today,
@@ -95,6 +101,7 @@ assert.match(
   /goals? left · 0\/0 To-Dos/,
   "A compact Featured widget must reserve its To-Do count even before the first To-Do is added",
 );
+assert.equal(noTodoFeatured.todoSummary, "0/0 To-Dos");
 
 const status = statusRangeRollup(state, state.currentUserId, [today]);
 const avatar = statusWidgetSnapshot(

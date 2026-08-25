@@ -29,6 +29,7 @@ const webPushMigration = read(
 const alerts = read("app/alerts.tsx");
 const group = read("app/(tabs)/group.tsx");
 const alertDomain = read("src/domain/alerts.ts");
+const inAppChatBanner = read("src/components/InAppChatBanner.tsx");
 const chatScreen = read("app/(tabs)/chat.tsx");
 const groupNotificationHook = read("src/cloud/useGroupNotificationEvents.ts");
 const allAcceptedMigration = read(
@@ -224,6 +225,14 @@ assert.match(
 assert.match(edge, /canonicalChatEvent/);
 assert.match(edge, /const expectedEventKey = `message:\$\{groupId\}:\$\{clientMessageId\}`/);
 assert.match(edge, /pushPreview\(direct \? text :/);
+assert.match(edge, /`Group message in \$\{groupName\}`/);
+assert.match(edge, /`\$\{senderName\}: \$\{text\}`/);
+assert.match(cloud, /`Group message in \$\{state\.group\.name\}`/);
+assert.match(cloud, /`\$\{sender\.name\}: \$\{message\.text \|\| fallback\}`/);
+assert.match(alertDomain, /`Group message in \$\{state\.group\.name\}`/);
+assert.match(alertDomain, /"A group member"\}: \$\{message\.text/);
+assert.match(inAppChatBanner, /`Group message in \$\{state\.group\.name\}`/);
+assert.match(inAppChatBanner, /`\$\{senderName\}: \$\{preview\}`/);
 assert.match(
   edge,
   /\.\.\.\(direct \? \{ recipient: senderId \} : \{\}\)/,

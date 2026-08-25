@@ -85,6 +85,12 @@ assert.match(today, /state\.settings\.todosBelowGoals !== false/);
 assert.match(today, /!todayUsesPages &&\s*!editing/);
 assert.match(today, /todayUsesPages\s*\? \[\]/);
 assert.match(today, /testID="today-tracker-pages"/);
+assert.match(today, /pageStyle=\{styles\.todayTrackerPagerPage\}/);
+assert.match(
+  today,
+  /todayTrackerPagerPage:\s*\{\s*overflow: "hidden", paddingHorizontal: 1\s*\}/,
+  "Today pages need a clipped one-point gutter so a completed card border cannot bleed into its neighbour",
+);
 assert.match(
   leaderboard,
   /\(state\.settings\.leaderboardLayoutMode \?\? "pages"\) === "pages"/,

@@ -777,11 +777,15 @@ object HabHubWidgetRenderer {
       val left = pad + column * (grid.cellWidth + gap)
       val top = gridTop + row * (grid.cellHeight + gap)
       val rect = RectF(left, top, left + grid.cellWidth, top + grid.cellHeight)
+      val metricRows = metric.optJSONArray("rows") ?: JSONArray()
+      val desiredRows = min(metricRows.length(), 5)
       val cellScale = min(grid.cellWidth / 68f, grid.cellHeight / 39f).coerceIn(0.62f, 2.6f)
-      val innerPad = (4.5f * cellScale).coerceIn(3f, 10f)
-      val metricTitleSize = (8.2f * cellScale).coerceIn(6.2f, 18f)
-      val rowTextSize = (6.6f * cellScale).coerceIn(5.2f, 14.5f)
-      val iconRadius = (4.8f * cellScale).coerceIn(3.4f, 12f)
+      val denseMemberHeader = desiredRows >= 3 && grid.cellHeight < 32f + desiredRows * 14f
+      val headerScale = if (denseMemberHeader) 0.78f else 1f
+      val innerPad = (4.5f * cellScale * headerScale).coerceIn(2.4f, 10f)
+      val metricTitleSize = (8.2f * cellScale * headerScale).coerceIn(5.4f, 18f)
+      val baseRowTextSize = (6.6f * cellScale * headerScale).coerceIn(4.5f, 14.5f)
+      val iconRadius = (4.8f * cellScale * headerScale).coerceIn(3f, 12f)
       val cornerRadius = (7f * cellScale).coerceIn(5f, 15f)
       canvas.drawRoundRect(rect, cornerRadius, cornerRadius, fillPaint(Color.argb(34, 255, 255, 255)))
       canvas.drawRoundRect(rect, cornerRadius, cornerRadius, strokePaint(Color.argb(42, 214, 226, 246), max(0.65f, cellScale * 0.55f)))
@@ -825,17 +829,35 @@ object HabHubWidgetRenderer {
           true,
         ),
       )
-      val metricRows = metric.optJSONArray("rows") ?: JSONArray()
       val titleBandHeight = max(iconRadius * 2f + innerPad * 1.45f, metricTitleSize * 1.65f + innerPad)
       val rowTop = top + titleBandHeight
       val availableHeight = max(0f, rect.bottom - rowTop - innerPad * 0.45f)
-      val stackRows = grid.cellWidth < 76f
+      val roomyStackRows = grid.cellWidth < 76f
       val preferredRowHeight = max(
-        if (stackRows) 14f else 10f,
-        rowTextSize * if (stackRows) 3.15f else 2.15f,
+        if (roomyStackRows) 14f else 10f,
+        baseRowTextSize * if (roomyStackRows) 3.15f else 2.15f,
       )
-      val visibleRows = min(metricRows.length(), max(1, (availableHeight / preferredRowHeight).toInt()))
+      // Keep the airy layout for a couple of members. If it would hide a
+      // third, fourth, or fifth member, switch to a denser single-line row and
+      // scale only as far as needed to fit the available member list.
+      val compactRows = desiredRows > 0 && desiredRows * preferredRowHeight > availableHeight
+      val compactRowHeight = min(9f, max(6.4f, baseRowTextSize * 0.9f))
+      val visibleRows = min(
+        desiredRows,
+        max(1, (availableHeight / if (compactRows) compactRowHeight else preferredRowHeight).toInt()),
+      )
       val rowHeight = availableHeight / max(1, visibleRows)
+      val stackRows = roomyStackRows && !compactRows
+      val rowTextSize = if (compactRows) {
+        min(baseRowTextSize, rowHeight * 0.58f).coerceAtLeast(4f)
+      } else {
+        // With only a few members, consume the spare height with larger,
+        // easier-to-read names and values instead of leaving dead space.
+        min(
+          baseRowTextSize * 1.28f,
+          rowHeight * if (stackRows) 0.40f else 0.58f,
+        ).coerceAtLeast(baseRowTextSize)
+      }
       repeat(visibleRows) { rowIndex ->
         val entry = metricRows.optJSONObject(rowIndex) ?: return@repeat
         val centerY = rowTop + rowHeight * rowIndex + rowHeight / 2f
@@ -964,35 +986,23 @@ object HabHubWidgetRenderer {
       contentWidth,
       textPaint(if (size.compact) 13.2f else 24f, Color.WHITE, true),
     )
-    if (size.compact) {
-      val compactSubtitle = item.optString("compactSubtitle", item.optString("subtitle"))
-      val compactSubtitleWidth = size.widthDp - pad * 2f
-      val compactSubtitlePaint = fittedTextPaint(
-        compactSubtitle,
-        compactSubtitleWidth,
-        5.45f,
-        4.2f,
-        Color.argb(220, 224, 234, 250),
-        true,
-      )
-      drawText(
-        canvas,
-        compactSubtitle,
-        pad,
-        31.5f,
-        compactSubtitleWidth,
-        compactSubtitlePaint,
-      )
-    } else {
-      drawText(
-        canvas,
-        item.optString("subtitle"),
-        pad,
-        54f,
-        contentWidth,
-        textPaint(8f, Color.argb(220, 224, 234, 250), true),
-      )
+    val legacyCompactSubtitle = item.optString("compactSubtitle", item.optString("subtitle"))
+    val summarySeparator = " · "
+    val todoSummary = item.optString("todoSummary").ifBlank {
+      legacyCompactSubtitle.substringAfter(summarySeparator, "")
     }
+    val goalSummary = item.optString("goalSummary").ifBlank {
+      legacyCompactSubtitle.substringBefore(summarySeparator).ifBlank { item.optString("subtitle") }
+    }
+    drawFeaturedSummary(
+      canvas,
+      size,
+      pad,
+      if (size.compact) 31.5f else 54f,
+      goalSummary,
+      todoSummary,
+      accent,
+    )
     drawProgressBadge(
       canvas,
       badgeCenterX,
@@ -1038,6 +1048,62 @@ object HabHubWidgetRenderer {
         accent,
       )
     }
+  }
+
+  /** Keeps the To-Do count visible instead of letting whole-line ellipsis eat it. */
+  private fun drawFeaturedSummary(
+    canvas: Canvas,
+    size: HabHubWidgetSize,
+    pad: Float,
+    baseline: Float,
+    goalSummary: String,
+    todoSummary: String,
+    accent: Int,
+  ) {
+    val availableWidth = size.widthDp - pad * 2f
+    if (todoSummary.isBlank()) {
+      drawText(
+        canvas,
+        goalSummary,
+        pad,
+        baseline,
+        availableWidth,
+        fittedTextPaint(
+          goalSummary,
+          availableWidth,
+          if (size.compact) 5.45f else 8f,
+          if (size.compact) 4.1f else 5.4f,
+          Color.argb(220, 224, 234, 250),
+          true,
+        ),
+      )
+      return
+    }
+    val combined = "$goalSummary · $todoSummary"
+    val sharedPaint = fittedTextPaint(
+      combined,
+      availableWidth,
+      if (size.compact) 5.45f else 8f,
+      if (size.compact) 3.8f else 5.2f,
+      Color.argb(220, 224, 234, 250),
+      true,
+    )
+    val todoPaint = textPaint(sharedPaint.textSize, withAlpha(accent, 245), true)
+    val dividerPaint = textPaint(sharedPaint.textSize, Color.argb(150, 224, 234, 250), true)
+    val todoWidth = min(availableWidth * 0.48f, todoPaint.measureText(todoSummary) + 1f)
+    val divider = "·"
+    val dividerWidth = dividerPaint.measureText(divider) + if (size.compact) 2f else 3f
+    val goalWidth = max(8f, availableWidth - todoWidth - dividerWidth)
+    drawText(canvas, goalSummary, pad, baseline, goalWidth, sharedPaint)
+    drawText(canvas, divider, pad + goalWidth, baseline, dividerWidth, dividerPaint)
+    drawRightAlignedEllipsizedText(
+      canvas,
+      todoSummary,
+      size.widthDp - pad,
+      baseline,
+      todoWidth,
+      todoPaint,
+    )
   }
 
   private fun drawCompactGoalTiles(
@@ -1557,7 +1623,9 @@ object HabHubWidgetRenderer {
     )
     val pillWidth = if (compact) 23f else (destination.width() * 0.72f).coerceIn(28f, 42f)
     val pillHeight = if (compact) 10.5f else (destination.height() * 0.14f).coerceIn(12f, 17f)
-    val pillCenterY = destination.top + destination.height() * 0.48f
+    // Sit the percentage at the avatar's feet. The surrounding outer padding
+    // leaves room for the pill to overlap the silhouette edge without clipping.
+    val pillCenterY = destination.bottom - pillHeight * 0.35f
     val pill = RectF(
       destination.centerX() - pillWidth / 2f,
       pillCenterY - pillHeight / 2f,

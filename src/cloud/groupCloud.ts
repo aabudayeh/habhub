@@ -2201,7 +2201,7 @@ function chatPushPayload(
     : "Sent an image";
   const body = message.recipientId
     ? message.text || fallback
-    : `${state.group.name}: ${message.text || fallback}`;
+    : `${sender.name}: ${message.text || fallback}`;
   const payload = withLocalizedPushCopy({
     eventKey: `message:${state.group.id}:${message.id}`,
     clientMessageId: message.id,
@@ -2210,7 +2210,7 @@ function chatPushPayload(
     recipientId: message.recipientId,
     title: message.recipientId
       ? `Direct message from ${sender.name}`
-      : `Group message from ${sender.name}`,
+      : `Group message in ${state.group.name}`,
     body,
     data: {
       route: "/chat",
@@ -2237,7 +2237,7 @@ function chatPushPayload(
     bodies: Object.fromEntries(
       Object.entries(imageCopy).map(([language, value]) => [
         language,
-        message.recipientId ? value : `${state.group.name}: ${value}`,
+        message.recipientId ? value : `${sender.name}: ${value}`,
       ]),
     ),
   };

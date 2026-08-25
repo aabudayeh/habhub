@@ -37,12 +37,14 @@ import {
   stepRepairRangeCovered,
 } from "../src/domain/healthDedup.ts";
 import {
+  activeEnergyEntriesWithoutCoveredWorkoutFallbacks,
   healthFallbackContextForRead,
   mapHealthRecordsToEntries,
   reconcileGoogleHealthNativeMirrors,
   unrecordedStepActivity,
 } from "../src/domain/health.ts";
 import { calculateBmr } from "../src/domain/energy.ts";
+import { totalEnergyBurnedBreakdownEntries } from "../src/domain/energyBreakdown.ts";
 import { metricValue } from "../src/domain/metrics.ts";
 import {
   HEALTH_PHYSICAL_ACTIVITY_MIGRATION_VERSION,
@@ -563,16 +565,300 @@ assert.equal(
     derivedWalkingFallbacks.find((entry) => entry.metricId === "exercise")
       ?.value,
   ),
-  169.6,
-  "a walking session without provider calories must contribute an estimated workout component as well as the uncovered-step component",
+  95.4,
+  "the uncovered-Steps Active energy row must contain only the step difference, never workout calories",
+);
+const walkingWorkoutEnergy = currentDayWithWalkingWorkout.find(
+  (entry) =>
+    entry.metricId === "exercise" &&
+    entry.sourceRecordId === "walking-session" &&
+    entry.id.endsWith(":workout-energy"),
+);
+assert.equal(
+  walkingWorkoutEnergy?.value,
+  74.2,
+  "a workout whose provider omitted calories must retain its own estimated Active energy entry",
+);
+assert.equal(
+  walkingWorkoutEnergy?.label,
+  "Walking",
+  "the separate estimated calorie row must retain the workout label",
 );
 assert.match(
+  String(walkingWorkoutEnergy?.note),
+  /provider did not supply active calories/,
+  "the workout-specific estimate must explain why its calories were estimated",
+);
+assert.doesNotMatch(
   String(
     derivedWalkingFallbacks.find((entry) => entry.metricId === "exercise")
       ?.note,
   ),
-  /provider supplied duration or distance but no calories/,
-  "the estimated Active energy row must explain why workout calories were estimated",
+  /provider did not supply active calories/,
+  "the uncovered-Steps row must not claim ownership of a workout estimate",
+);
+const multiWorkoutEnergyEntries = mapHealthRecordsToEntries(
+  [
+    {
+      id: "morning-walk-session",
+      provider: "health_connect",
+      type: "workouts",
+      startTime: "2026-08-14T06:00:00.000Z",
+      endTime: "2026-08-14T06:30:00.000Z",
+      localDate: "2026-08-14",
+      value: 30,
+      unit: "minutes",
+      origin: "Samsung Health",
+      label: "Walking",
+      activityKey: "walking",
+      measurements: { durationMinutes: 30, distanceKm: 2 },
+    },
+    {
+      id: "morning-run-session",
+      provider: "health_connect",
+      type: "workouts",
+      startTime: "2026-08-14T07:00:00.000Z",
+      endTime: "2026-08-14T07:20:00.000Z",
+      localDate: "2026-08-14",
+      value: 20,
+      unit: "minutes",
+      origin: "Samsung Health",
+      label: "Running",
+      activityKey: "running",
+      measurements: { durationMinutes: 20, distanceKm: 3 },
+    },
+    record({
+      id: "morning-run-active-energy",
+      type: "active_energy",
+      startTime: "2026-08-14T07:00:00.000Z",
+      endTime: "2026-08-14T07:20:00.000Z",
+      localDate: "2026-08-14",
+      value: 210,
+      unit: "kcal",
+      origin: "Samsung Health",
+      label: "Running",
+      activityKey: "running",
+    }),
+    {
+      id: "cycling-session",
+      provider: "health_connect",
+      type: "workouts",
+      startTime: "2026-08-14T10:00:00.000Z",
+      endTime: "2026-08-14T10:40:00.000Z",
+      localDate: "2026-08-14",
+      value: 40,
+      unit: "minutes",
+      origin: "Samsung Health",
+      label: "Cycling",
+      activityKey: "cycling",
+      measurements: { durationMinutes: 40, distanceKm: 12 },
+    },
+    {
+      id: "pool-session",
+      provider: "health_connect",
+      type: "workouts",
+      startTime: "2026-08-14T12:00:00.000Z",
+      endTime: "2026-08-14T12:25:00.000Z",
+      localDate: "2026-08-14",
+      value: 25,
+      unit: "minutes",
+      origin: "Samsung Health",
+      label: "Pool swimming",
+      activityKey: "pool_swimming",
+      measurements: { durationMinutes: 25, distanceKm: 0.8 },
+    },
+    {
+      id: "strength-session",
+      provider: "health_connect",
+      type: "workouts",
+      startTime: "2026-08-14T18:00:00.000Z",
+      endTime: "2026-08-14T18:45:00.000Z",
+      localDate: "2026-08-14",
+      value: 45,
+      unit: "minutes",
+      origin: "Samsung Health",
+      label: "Strength training",
+      activityKey: "strength_training",
+      measurements: { durationMinutes: 45, activeCalories: 185 },
+    },
+  ],
+  "owner",
+  "group",
+  workoutFallbackMetrics,
+  70,
+).filter((entry) => entry.metricId === "exercise");
+assert.deepEqual(
+  multiWorkoutEnergyEntries.map((entry) => entry.label).sort(),
+  ["Cycling", "Pool swimming", "Running", "Strength training", "Walking"],
+  "walking, running, cycling, swimming, and strength calories must remain separate Active energy entries",
+);
+assert.equal(
+  multiWorkoutEnergyEntries.filter((entry) =>
+    entry.id.endsWith(":workout-energy"),
+  ).length,
+  4,
+  "only the workout already covered by provider ActiveCaloriesBurned should skip its workout-energy fallback",
+);
+assert.equal(
+  multiWorkoutEnergyEntries.find(
+    (entry) => entry.sourceRecordId === "strength-session",
+  )?.value,
+  185,
+  "provider-reported workout calories must remain attached to their native workout identity",
+);
+assert.ok(
+  multiWorkoutEnergyEntries.every(
+    (entry) => entry.label !== "Estimated unrecorded walking from steps",
+  ),
+  "no workout-specific calorie entry may be relabeled as uncovered walking",
+);
+const crossWriterWorkoutEnergy = mapHealthRecordsToEntries(
+  [
+    {
+      id: "cross-writer-cycle",
+      provider: "health_connect",
+      type: "workouts",
+      startTime: "2026-08-14T15:00:00.000Z",
+      endTime: "2026-08-14T15:30:00.000Z",
+      localDate: "2026-08-14",
+      value: 30,
+      unit: "minutes",
+      origin: "Samsung Health",
+      label: "Cycling",
+      activityKey: "cycling",
+      measurements: { durationMinutes: 30, distanceKm: 8 },
+    },
+    record({
+      id: "cross-writer-active",
+      type: "active_energy",
+      startTime: "2026-08-14T15:00:00.000Z",
+      endTime: "2026-08-14T15:30:00.000Z",
+      localDate: "2026-08-14",
+      value: 90,
+      unit: "kcal",
+      origin: "Google Fit",
+    }),
+  ],
+  "owner",
+  "group",
+  workoutFallbackMetrics,
+  70,
+).filter((entry) => entry.metricId === "exercise");
+assert.equal(
+  crossWriterWorkoutEnergy.length,
+  2,
+  "an overlapping record from another Health Connect writer must not erase a workout's own energy entry",
+);
+assert.ok(
+  crossWriterWorkoutEnergy.some((entry) =>
+    entry.id.endsWith(":workout-energy"),
+  ),
+);
+const dailyAggregateWorkoutEnergy = mapHealthRecordsToEntries(
+  [
+    {
+      id: "daily-cycle",
+      provider: "health_connect",
+      type: "workouts",
+      startTime: "2026-08-15T15:00:00.000Z",
+      endTime: "2026-08-15T15:30:00.000Z",
+      localDate: "2026-08-15",
+      value: 30,
+      unit: "minutes",
+      origin: "Samsung Health",
+      label: "Cycling",
+      activityKey: "cycling",
+      measurements: { durationMinutes: 30, distanceKm: 8 },
+    },
+    record({
+      id: "aggregate:active-energy:2026-08-15",
+      type: "active_energy",
+      startTime: "2026-08-15T00:00:00.000Z",
+      endTime: "2026-08-15T23:59:59.000Z",
+      localDate: "2026-08-15",
+      value: 420,
+      unit: "kcal",
+      origin: "Samsung Health",
+    }),
+  ],
+  "owner",
+  "group",
+  workoutFallbackMetrics,
+  70,
+).filter((entry) => entry.metricId === "exercise");
+assert.deepEqual(
+  dailyAggregateWorkoutEnergy.map((entry) => entry.label).sort(),
+  ["Active energy total", "Cycling"],
+  "a provider day aggregate must remain decomposable into a workout plus provider remainder",
+);
+assert.equal(
+  activeEnergyEntriesWithoutCoveredWorkoutFallbacks(
+    dailyAggregateWorkoutEnergy,
+  ).length,
+  1,
+  "the numeric Active energy total must still suppress the workout component already contained in a provider day aggregate",
+);
+assert.equal(
+  activeEnergyEntriesWithoutCoveredWorkoutFallbacks(
+    multiWorkoutEnergyEntries,
+  ).length,
+  multiWorkoutEnergyEntries.length,
+  "a provider row for one workout must not suppress unrelated workout-energy rows from the same day",
+);
+const estimatedWalkingRow = multiWorkoutEnergyEntries.find(
+  (entry) => entry.label === "Walking",
+);
+const estimatedCyclingRow = multiWorkoutEnergyEntries.find(
+  (entry) => entry.label === "Cycling",
+);
+const lateWalkingProviderRow = {
+  ...estimatedWalkingRow,
+  id: "health:health_connect:active_energy:late-walk:exercise",
+  source: "imported",
+  sourceRecordId: "late-walk",
+  value: 76,
+};
+const reconciledLateWorkout = activeEnergyEntriesWithoutCoveredWorkoutFallbacks(
+  [estimatedWalkingRow, estimatedCyclingRow, lateWalkingProviderRow],
+);
+assert.equal(
+  reconciledLateWorkout.some((entry) => entry.id === estimatedWalkingRow.id),
+  false,
+  "a late provider row must replace the matching stale workout estimate",
+);
+assert.equal(
+  reconciledLateWorkout.some((entry) => entry.id === estimatedCyclingRow.id),
+  true,
+  "late provider calories for one workout must preserve another workout estimate",
+);
+assert.equal(
+  metricValue(
+    {
+      entries: multiWorkoutEnergyEntries,
+      metrics: workoutFallbackMetrics,
+      settings: {
+        energyProfile: {
+          age: 35,
+          sex: "unspecified",
+          heightCm: 175,
+          weightKg: 70,
+          targetWeightKg: 70,
+          activityLevel: "sedentary",
+          desiredWeeklyLossKg: 0,
+        },
+      },
+    },
+    workoutFallbackMetrics.find((metric) => metric.id === "exercise"),
+    "owner",
+    "2026-08-14",
+  ),
+  Math.round(
+    multiWorkoutEnergyEntries.reduce(
+      (sum, entry) => sum + Number(entry.value || 0),
+      0,
+    ),
+  ),
+  "the Active energy total must retain every unrelated workout when one workout has provider calories",
 );
 const energyProfile = {
   age: 35,
@@ -617,6 +903,66 @@ assert.equal(
   ),
   calculateBmr(energyProfile) + estimatedActiveEnergy,
   "Total energy burned must include the estimated calories from a synced movement workout when the provider omits them",
+);
+const totalEnergyBreakdown = totalEnergyBurnedBreakdownEntries(
+  workoutEnergyState,
+  "owner",
+  ["2026-08-13"],
+  new Date("2026-08-25T12:00:00.000Z"),
+);
+assert.deepEqual(
+  totalEnergyBreakdown.map((entry) => entry.label).sort(),
+  [
+    "Estimated unrecorded walking from steps",
+    "Resting energy (BMR)",
+    "Walking",
+  ],
+  "Total energy breakdown must show one BMR row plus separate workout and uncovered-step rows",
+);
+assert.ok(
+  Math.abs(
+    totalEnergyBreakdown.reduce(
+      (sum, entry) => sum + Number(entry.value || 0),
+      0,
+    ) -
+      metricValue(
+        workoutEnergyState,
+        energyBurnedMetric,
+        "owner",
+        "2026-08-13",
+      ),
+  ) < 1,
+  "Total energy breakdown rows must reconcile within the Active energy tracker's whole-kcal rounding",
+);
+assert.equal(
+  totalEnergyBreakdown.find((entry) => entry.label === "Walking")
+    ?.sourceRecordId,
+  "walking-session",
+  "Total energy workout rows must preserve native session provenance",
+);
+const noStoredStepFallbackState = {
+  ...workoutEnergyState,
+  entries: currentDayWithWalkingWorkout.filter(
+    (entry) => !entry.sourceRecordId?.startsWith("step-fallback:"),
+  ),
+};
+const noStoredStepFallbackBreakdown = totalEnergyBurnedBreakdownEntries(
+  noStoredStepFallbackState,
+  "owner",
+  ["2026-08-13"],
+  new Date("2026-08-25T12:00:00.000Z"),
+);
+assert.ok(
+  noStoredStepFallbackBreakdown.some(
+    (entry) => entry.label === "Estimated unrecorded walking from steps",
+  ),
+  "Energy burned must name the uncovered-step component even when Web or Google sync has no stored fallback row",
+);
+assert.ok(
+  noStoredStepFallbackBreakdown.every(
+    (entry) => entry.label !== "Other active energy",
+  ),
+  "a calculable uncovered-step component must never be reduced to opaque Other active energy",
 );
 const gymCalorieEntry = {
   id: "gym-sync:strength-session:exercise",
@@ -692,6 +1038,41 @@ assert.equal(
     225 + providerActiveEnergyEntry.value + walkingEstimate.estimatedCalories,
   ),
   "an imported ActiveCaloriesBurned stream must suppress only overlapping health-workout calories, not app gym calories or uncovered-step activity",
+);
+const providerDailyBreakdown = totalEnergyBurnedBreakdownEntries(
+  providerAndGymState,
+  "owner",
+  ["2026-08-13"],
+  new Date("2026-08-25T12:00:00.000Z"),
+);
+assert.ok(
+  providerDailyBreakdown.some((entry) => entry.label === "Walking"),
+  "a provider daily active total must retain the separate workout row in the Energy burned detail view",
+);
+assert.ok(
+  providerDailyBreakdown.some(
+    (entry) => entry.label === "Other provider active energy",
+  ),
+  "only the provider remainder after workout components should stay aggregated",
+);
+assert.ok(
+  providerDailyBreakdown.every((entry) => entry.label !== "Active calories"),
+  "the full provider aggregate must not be displayed on top of its separate workout components",
+);
+assert.ok(
+  Math.abs(
+    providerDailyBreakdown.reduce(
+      (sum, entry) => sum + Number(entry.value || 0),
+      0,
+    ) -
+      metricValue(
+        providerAndGymState,
+        energyBurnedMetric,
+        "owner",
+        "2026-08-13",
+      ),
+  ) < 1,
+  "the provider-remainder detail rows must reconcile without double-counting workouts",
 );
 const persistedWalkingWorkouts = mapHealthRecordsToEntries(
   [
@@ -1986,6 +2367,12 @@ assert.match(
 const metricCalculationSource = fs.readFileSync(
   "src/domain/metrics.ts",
   "utf8",
+);
+const metricDetailSource = fs.readFileSync("app/metric-detail.tsx", "utf8");
+assert.match(
+  metricDetailSource,
+  /tracker\.id === "energy_burned"[\s\S]{0,180}totalEnergyBurnedBreakdownEntries\(/,
+  "the Energy burned detail page must render the reconciled BMR and activity entry breakdown",
 );
 assert.match(
   metricCalculationSource,

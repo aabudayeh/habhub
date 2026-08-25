@@ -38,6 +38,10 @@ export type WidgetFeaturedSnapshot = WidgetTrackerSnapshot & {
   id: "__featured__";
   /** Compact local date rendered above the Featured eyebrow. */
   dateLabel: string;
+  /** Goal status rendered at the left of the Featured summary row. */
+  goalSummary: string;
+  /** Protected right-hand count so compact widgets never clip To-Dos away. */
+  todoSummary: string;
   /** Short enough to remain visible beside goal status in a 2 x 1 widget. */
   compactSubtitle: string;
   goals: WidgetGoalSnapshot[];
