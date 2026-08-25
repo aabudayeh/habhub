@@ -19,8 +19,13 @@ import {
 } from "@/src/domain/healthDedup";
 import { normalizeTodoItems } from "@/src/domain/todos";
 import { DEFAULT_WORKOUT_QUALIFICATION } from "@/src/domain/workoutQualification";
+import {
+  migrateRetiredWorkoutCaloriesEntries,
+  RETIRED_WORKOUT_CALORIES_METRIC_ID,
+} from "@/src/domain/workoutCaloriesMigration";
 
-const WORKOUT_CALORIES_METRIC_ID = "workout_calories";
+const WORKOUT_CALORIES_METRIC_ID = RETIRED_WORKOUT_CALORIES_METRIC_ID;
+const RETIRED_METRIC_IDS = new Set([WORKOUT_CALORIES_METRIC_ID]);
 
 function upgradeMetric(
   metric: MetricDefinition,
@@ -59,7 +64,9 @@ function upgradeMetricList(
   metrics: MetricDefinition[],
   defaults: AppState,
 ) {
-  const filtered = metrics.map((metric) => upgradeMetric(metric, defaults));
+  const filtered = metrics
+    .filter((metric) => !RETIRED_METRIC_IDS.has(metric.id))
+    .map((metric) => upgradeMetric(metric, defaults));
   const companionIds = [
     ...(filtered.some((metric) => metric.id === "workout")
       ? ["workout_duration", "workout_distance"]
@@ -154,100 +161,229 @@ function repairedMetricList(
   enableTodoToday = false,
 ) {
   return pruneOrphanedInternalMetrics(
-    metrics,
+    metrics.filter((metric) => !RETIRED_METRIC_IDS.has(metric.id)),
   ).map((metric) => repairKnownMetricDefaults(metric, enableTodoToday));
 }
 
-function isWorkoutCaloriesEntryId(entryId: string) {
-  return (
-    entryId.endsWith(`:${WORKOUT_CALORIES_METRIC_ID}`) ||
-    entryId.includes(`:${WORKOUT_CALORIES_METRIC_ID}:`)
+function withoutRetiredMetricIds(ids: string[] | undefined) {
+  return ids?.filter((id) => !RETIRED_METRIC_IDS.has(id));
+}
+
+function withoutRetiredMetricIdsByGroup(
+  values: Record<string, string[]> | undefined,
+) {
+  if (!values) return values;
+  return Object.fromEntries(
+    Object.entries(values).map(([groupId, ids]) => [
+      groupId,
+      withoutRetiredMetricIds(ids) ?? [],
+    ]),
   );
 }
 
-function restoreWorkoutCaloriesMetricList(
+function activeEnergyMetricList(
   metrics: MetricDefinition[] | undefined,
   defaults: AppState,
 ) {
-  if (
-    !metrics ||
-    !metrics.some((metric) => metric.id === "workout") ||
-    metrics.some((metric) => metric.id === WORKOUT_CALORIES_METRIC_ID)
-  )
-    return metrics;
-  const preset = defaults.metrics.find(
+  if (!metrics) return metrics;
+  const workoutCalories = metrics.find(
     (metric) => metric.id === WORKOUT_CALORIES_METRIC_ID,
   );
-  if (!preset) return metrics;
-  const activeFrom =
-    metrics.find((metric) => metric.id === "workout_duration")?.activeFrom ??
-    metrics.find((metric) => metric.id === "workout")?.activeFrom ??
-    preset.activeFrom;
-  return [...metrics, { ...preset, activeFrom }];
+  const filtered = metrics.filter(
+    (metric) => !RETIRED_METRIC_IDS.has(metric.id),
+  );
+  if (!workoutCalories || filtered.some((metric) => metric.id === "exercise"))
+    return filtered;
+  const preset = defaults.metrics.find((metric) => metric.id === "exercise");
+  if (!preset) return filtered;
+  return [
+    ...filtered,
+    {
+      ...preset,
+      order: workoutCalories.order,
+      activeFrom: workoutCalories.activeFrom,
+      defaultVisibility: workoutCalories.defaultVisibility,
+      sections: workoutCalories.sections,
+    },
+  ];
 }
 
 /**
- * Builds that retired Workout calories also wrote deletion tombstones for its
- * native and gym rows. Clear only those generated tombstones so the next
- * health read can restore the source sessions; user-deleted rows for every
- * other tracker remain untouched.
+ * Retire the duplicate Workout calories tracker only after preserving every
+ * calorie row in canonical Active energy. Entry visibility and provenance are
+ * copied exactly, while the old owner rows receive durable cloud tombstones.
  */
-function restoreWorkoutCalories(state: AppState, defaults: AppState): AppState {
-  if (state.settings.workoutCaloriesRestored === true)
-    return state;
-  const shouldRestorePersonalMetric =
-    !state.metrics.some(
-      (metric) => metric.id === WORKOUT_CALORIES_METRIC_ID,
-    ) && state.metrics.some((metric) => metric.id === "workout");
-  const keep = (entryId: string) => !isWorkoutCaloriesEntryId(entryId);
-  const groups = shouldRestorePersonalMetric
-    ? state.groups.map((group) => ({
-        ...group,
-        metricConfiguration: restoreWorkoutCaloriesMetricList(
-          group.metricConfiguration,
-          defaults,
-        ),
-      }))
-    : state.groups;
-  const group = shouldRestorePersonalMetric
-    ? {
-        ...state.group,
-        metricConfiguration: restoreWorkoutCaloriesMetricList(
-          state.group.metricConfiguration,
-          defaults,
-        ),
-      }
-    : state.group;
+export function retireWorkoutCalories(
+  state: AppState,
+  defaults: AppState,
+): AppState {
+  const migrated = migrateRetiredWorkoutCaloriesEntries(
+    state.entries,
+    state.currentUserId,
+    [
+      ...(state.settings.pendingDeletedEntryIds ?? []),
+      ...(state.settings.deletedEntryIds ?? []),
+      ...(state.settings.dismissedHealthEntryIds ?? []),
+    ],
+  );
+  const removedOwnEntryIds = migrated.removedOwnEntryIds;
+  const removedOwnEntryIdSet = new Set(removedOwnEntryIds);
+  const groups = state.groups.map((group) => ({
+    ...group,
+    metricConfiguration: activeEnergyMetricList(
+      group.metricConfiguration,
+      defaults,
+    ),
+  }));
+  const group = {
+    ...state.group,
+    metricConfiguration: activeEnergyMetricList(
+      state.group.metricConfiguration,
+      defaults,
+    ),
+  };
+  const trackedGoalPeriods = Object.fromEntries(
+    Object.entries(state.trackedGoalPeriods ?? {}).filter(
+      ([metricId]) => !RETIRED_METRIC_IDS.has(metricId),
+    ),
+  );
+  const todayHistoryByMetric = Object.fromEntries(
+    Object.entries(state.settings.todayHistoryByMetric ?? {}).filter(
+      ([metricId]) => !RETIRED_METRIC_IDS.has(metricId),
+    ),
+  );
+  const pendingDeletedEntryIds = [
+    ...new Set([
+      ...(state.settings.pendingDeletedEntryIds ?? []),
+      ...removedOwnEntryIds,
+    ]),
+  ];
+  const deletedEntryIds = [
+    ...new Set([
+      ...(state.settings.deletedEntryIds ?? []),
+      ...removedOwnEntryIds,
+    ]),
+  ];
   return {
     ...state,
-    metrics:
-      restoreWorkoutCaloriesMetricList(state.metrics, defaults) ??
-      state.metrics,
+    metrics: activeEnergyMetricList(state.metrics, defaults) ?? state.metrics,
+    entries: migrated.entries,
+    dailyMetricStatuses: state.dailyMetricStatuses.filter(
+      (status) => !RETIRED_METRIC_IDS.has(status.metricId),
+    ),
+    trackedGoalPeriods,
+    journalNotes: state.journalNotes?.map((note) => ({
+      ...note,
+      metricId:
+        note.metricId && RETIRED_METRIC_IDS.has(note.metricId)
+          ? undefined
+          : note.metricId,
+      metricIds: withoutRetiredMetricIds(note.metricIds),
+    })),
+    calendarReminders: state.calendarReminders?.filter(
+      (reminder) =>
+        !reminder.metricId || !RETIRED_METRIC_IDS.has(reminder.metricId),
+    ),
+    activityTimers: state.activityTimers?.filter(
+      (timer) => !RETIRED_METRIC_IDS.has(timer.metricId),
+    ),
+    activeTimer:
+      state.activeTimer && RETIRED_METRIC_IDS.has(state.activeTimer.metricId)
+        ? undefined
+        : state.activeTimer,
     group,
     groups: groups.map((candidate) =>
       candidate.id === group.id ? group : candidate,
     ),
+    selectedGroupMetricId: RETIRED_METRIC_IDS.has(state.selectedGroupMetricId)
+      ? "steps"
+      : state.selectedGroupMetricId,
     settings: {
       ...state.settings,
+      // Keep this true so an older client that understands only the temporary
+      // restoration marker does not re-add the retired tracker from defaults.
       workoutCaloriesRestored: true,
-      pendingDeletedEntryIds:
-        shouldRestorePersonalMetric
-          ? state.settings.pendingDeletedEntryIds?.filter(keep)
-          : state.settings.pendingDeletedEntryIds,
-      deletedEntryIds: shouldRestorePersonalMetric
-        ? state.settings.deletedEntryIds?.filter(keep)
-        : state.settings.deletedEntryIds,
-      dismissedHealthEntryIds:
-        shouldRestorePersonalMetric
-          ? state.settings.dismissedHealthEntryIds?.filter(keep)
-          : state.settings.dismissedHealthEntryIds,
-      googleHealthEntryOverrides: shouldRestorePersonalMetric
-        ? Object.fromEntries(
-            Object.entries(
-              state.settings.googleHealthEntryOverrides ?? {},
-            ).filter(([entryId]) => keep(entryId)),
-          )
-        : state.settings.googleHealthEntryOverrides,
+      featuredTodayCard: RETIRED_METRIC_IDS.has(
+        state.settings.featuredTodayCard,
+      )
+        ? "score"
+        : state.settings.featuredTodayCard,
+      selectedGoals: withoutRetiredMetricIds(state.settings.selectedGoals) ?? [],
+      progressMetricIds:
+        withoutRetiredMetricIds(state.settings.progressMetricIds) ?? [],
+      progressMetricOrderIds: withoutRetiredMetricIds(
+        state.settings.progressMetricOrderIds,
+      ),
+      progressPinnedMetricIds: withoutRetiredMetricIds(
+        state.settings.progressPinnedMetricIds,
+      ),
+      performanceMetricIds: withoutRetiredMetricIds(
+        state.settings.performanceMetricIds,
+      ),
+      performanceMetricOrderIds: withoutRetiredMetricIds(
+        state.settings.performanceMetricOrderIds,
+      ),
+      performancePinnedMetricIds: withoutRetiredMetricIds(
+        state.settings.performancePinnedMetricIds,
+      ),
+      leaderboardMetricIdsByGroup:
+        withoutRetiredMetricIdsByGroup(
+          state.settings.leaderboardMetricIdsByGroup,
+        ) ?? {},
+      leaderboardPinnedMetricIdsByGroup: withoutRetiredMetricIdsByGroup(
+        state.settings.leaderboardPinnedMetricIdsByGroup,
+      ),
+      leaderboardCardOrderByGroup: withoutRetiredMetricIdsByGroup(
+        state.settings.leaderboardCardOrderByGroup,
+      ),
+      comparisonMetricIdsByGroup:
+        withoutRetiredMetricIdsByGroup(
+          state.settings.comparisonMetricIdsByGroup,
+        ) ?? {},
+      todayHistoryByMetric,
+      trackerViewFilters: state.settings.trackerViewFilters?.map((filter) => ({
+        ...filter,
+        metricIds: withoutRetiredMetricIds(filter.metricIds) ?? [],
+      })),
+      scheduleViewFilters: state.settings.scheduleViewFilters?.map((filter) => ({
+        ...filter,
+        logMetricIds: withoutRetiredMetricIds(filter.logMetricIds) ?? [],
+      })),
+      calendarEventOrder: state.settings.calendarEventOrder?.filter(
+        (item) =>
+          ![...RETIRED_METRIC_IDS].some(
+            (metricId) => item === metricId || item.endsWith(`:${metricId}`),
+          ),
+      ),
+      dismissedHealthEntryIds: state.settings.dismissedHealthEntryIds?.filter(
+        (entryId) => !removedOwnEntryIdSet.has(entryId),
+      ),
+      googleHealthEntryOverrides: Object.fromEntries(
+        Object.entries(
+          state.settings.googleHealthEntryOverrides ?? {},
+        ).filter(([entryId]) => !removedOwnEntryIdSet.has(entryId)),
+      ),
+      pendingDeletedEntryIds,
+      deletedEntryIds,
+      notifications: {
+        ...state.settings.notifications,
+        metricIds:
+          withoutRetiredMetricIds(state.settings.notifications.metricIds) ?? [],
+        groupPreferencesByGroup: state.settings.notifications
+          .groupPreferencesByGroup
+          ? Object.fromEntries(
+              Object.entries(
+                state.settings.notifications.groupPreferencesByGroup,
+              ).map(([groupId, preferences]) => [
+                groupId,
+                {
+                  ...preferences,
+                  metricIds: withoutRetiredMetricIds(preferences.metricIds),
+                },
+              ]),
+            )
+          : undefined,
+      },
     },
   };
 }
@@ -374,7 +510,7 @@ export function upgradeStateV21(
   // device can upload a v25-shaped snapshot that still contains the retired
   // gym summary ids, and it must converge on the same canonical trackers.
   state = consolidateWorkoutTrackers(state, defaults);
-  state = restoreWorkoutCalories(state, defaults);
+  state = retireWorkoutCalories(state, defaults);
   state = repairEnergyFormula(state);
   state = { ...state, todos: normalizeTodoItems(state.todos ?? []) };
   state = upgradeNutritionStateV26(state, defaults, sourceVersion);

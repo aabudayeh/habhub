@@ -28,7 +28,7 @@ const METRICS_BY_DATA_TYPE: Record<HealthDataType, string[]> = {
   weight: ['weight'],
   nutrition: ['food', ...FOOD_NUTRIENTS.map((nutrient) => nutrient.id)],
   water: ['water'],
-  workouts: ['workout','workout_duration','workout_calories','workout_distance'],
+  workouts: ['workout','workout_duration','workout_distance'],
   body_fat: ['body_fat'],
   lean_body_mass: ['lean_body_mass'],
   body_water_mass: ['body_water_mass'],
@@ -230,6 +230,122 @@ export function isFitbitEnergyOrigin(origin: unknown) {
   );
 }
 
+export function isSamsungHealthOrigin(origin: unknown) {
+  return healthSourceId(String(origin ?? '')) === 'samsung-health';
+}
+
+const SAMSUNG_WORKOUT_ENERGY_BOUNDARY_TOLERANCE_MS = 5 * 60_000;
+
+function samsungTotalEnergyWorkoutMatch(
+  energy: HealthImportRecord,
+  workouts: readonly HealthImportRecord[],
+) {
+  if (
+    energy.type !== 'total_energy' ||
+    !isSamsungHealthOrigin(energy.origin) ||
+    !(Number(energy.value) > 0)
+  )
+    return undefined;
+  const energyStart = recordTime(energy, 'start');
+  const energyEnd = recordTime(energy, 'end');
+  if (
+    energyStart === undefined ||
+    energyEnd === undefined ||
+    energyEnd <= energyStart
+  )
+    return undefined;
+
+  return workouts
+    .filter(
+      (workout) =>
+        workout.type === 'workouts' &&
+        workout.workoutRecordKind !== 'segment' &&
+        workout.provider === energy.provider &&
+        healthSourceId(workout.origin) === healthSourceId(energy.origin),
+    )
+    .flatMap((workout) => {
+      const workoutStart = recordTime(workout, 'start');
+      const workoutEnd = recordTime(workout, 'end');
+      if (
+        workoutStart === undefined ||
+        workoutEnd === undefined ||
+        workoutEnd <= workoutStart
+      )
+        return [];
+      const tolerance = SAMSUNG_WORKOUT_ENERGY_BOUNDARY_TOLERANCE_MS;
+      const sameBoundaries =
+        Math.abs(energyStart - workoutStart) <= tolerance &&
+        Math.abs(energyEnd - workoutEnd) <= tolerance;
+      // Samsung can publish one exercise-calorie interval or several smaller
+      // intervals inside the matching ExerciseSession. A full-day generic
+      // TotalCaloriesBurned record fails both tests and remains total-only.
+      const containedBySession =
+        energyStart >= workoutStart - tolerance &&
+        energyEnd <= workoutEnd + tolerance;
+      if (!sameBoundaries && !containedBySession) return [];
+      const overlap = Math.max(
+        0,
+        Math.min(energyEnd, workoutEnd) - Math.max(energyStart, workoutStart),
+      );
+      if (overlap <= 0) return [];
+      const boundaryDistance =
+        Math.abs(energyStart - workoutStart) +
+        Math.abs(energyEnd - workoutEnd);
+      return [{ workout, score: sameBoundaries ? boundaryDistance : tolerance * 2 + boundaryDistance }];
+    })
+    .sort((left, right) => left.score - right.score)[0]?.workout;
+}
+
+/**
+ * Samsung Health maps its Exercise calories to TotalCaloriesBurned rather
+ * than ActiveCaloriesBurned. Promote only rows with same-source session
+ * provenance; Fitbit, Google and unmatched/all-day totals stay total-only.
+ *
+ * When Samsung also publishes ActiveCaloriesBurned for the same session, the
+ * documented TotalCaloriesBurned exercise rows are the single authority.
+ * Every raw total row is assigned to at most one session, so segmented rows
+ * remain additive without multiplying across overlapping sessions.
+ */
+export function samsungWorkoutEnergyRecords(
+  totalEnergyRecords: readonly HealthImportRecord[],
+  workoutRecords: readonly HealthImportRecord[],
+  activeEnergyRecords: readonly HealthImportRecord[] = [],
+) {
+  const matchedWorkoutIds = new Set<string>();
+  const promoted = totalEnergyRecords.flatMap((energy) => {
+    const workout = samsungTotalEnergyWorkoutMatch(energy, workoutRecords);
+    if (!workout) return [];
+    matchedWorkoutIds.add(workout.id);
+    return [
+      {
+        ...energy,
+        id: `samsung-total-workout:${energy.id}:${workout.id}:workout-energy`,
+        type: 'active_energy' as const,
+        label: workout.label ?? 'Workout',
+        activityKey: workout.activityKey,
+        note: [
+          energy.note,
+          'Samsung Health exercise calories matched to this workout session.',
+        ]
+          .filter(Boolean)
+          .join(' · '),
+      },
+    ];
+  });
+  const retainedActiveEnergy = activeEnergyRecords.filter((energy) => {
+    if (!isSamsungHealthOrigin(energy.origin)) return true;
+    const matchingWorkout = samsungTotalEnergyWorkoutMatch(
+      { ...energy, type: 'total_energy' },
+      workoutRecords,
+    );
+    return !matchingWorkout || !matchedWorkoutIds.has(matchingWorkout.id);
+  });
+  return {
+    workoutEnergyRecords: promoted,
+    activeEnergyRecords: retainedActiveEnergy,
+  };
+}
+
 /**
  * Fitbit can mirror its running total-energy/BMR stream through Health
  * Connect as small ActiveCaloriesBurned increments. A real workout-scoped row
@@ -250,11 +366,16 @@ export function isFitbitRestingEnergyEntry(entry: MetricEntry) {
   return !label || /^(active (calories|energy)( total)?|calories burned)$/i.test(label);
 }
 
-function healthEnergyRecordCoversWorkout(
+export function healthEnergyRecordCoversWorkout(
   energy: HealthImportRecord,
   workout: HealthImportRecord,
 ) {
   if (energy.provider !== workout.provider) return false;
+  // One Health Connect provider can expose rows written by several apps. An
+  // overlapping Google/Fitbit row is not ownership evidence for a Samsung
+  // (or another writer's) workout session.
+  if (healthSourceId(energy.origin) !== healthSourceId(workout.origin))
+    return false;
   const energyStart = recordTime(energy, 'start');
   const energyEnd = recordTime(energy, 'end');
   const workoutStart = recordTime(workout, 'start');
@@ -280,24 +401,7 @@ function healthEnergyRecordCoversWorkout(
       energyDuration > Math.max(2 * 60 * 60 * 1000, workoutDuration * 3))
   )
     return false;
-  const energyOrigin = energy.origin
-    ? friendlyHealthOrigin(energy.origin).trim().toLocaleLowerCase()
-    : '';
-  const workoutOrigin = workout.origin
-    ? friendlyHealthOrigin(workout.origin).trim().toLocaleLowerCase()
-    : '';
-  if (energyOrigin && workoutOrigin && energyOrigin === workoutOrigin)
-    return true;
-  // Health Connect can expose records from several writers under one provider.
-  // Cross-writer overlap alone is not ownership. Require the same explicit
-  // activity plus an interval that substantially belongs to this workout.
-  if (!energyActivity || !workoutActivity || energyActivity !== workoutActivity)
-    return false;
-  const overlap = Math.max(
-    0,
-    Math.min(energyEnd, workoutEnd) - Math.max(energyStart, workoutStart),
-  );
-  return overlap / energyDuration >= 0.8;
+  return true;
 }
 
 /**
@@ -553,7 +657,6 @@ export function mapHealthRecordsToEntries(
     if (record.type === 'workouts' && record.workoutRecordKind !== 'segment' && Number(record.value)>0) {
       if (workoutQualifies({activityKey:record.activityKey,durationMinutes:record.measurements?.durationMinutes??Number(record.value),distanceKm:record.measurements?.distanceKm,activeCalories:record.measurements?.activeCalories})) entries.push(entryFor(record, userId, 'workout', true, importedMetricVisibility(visibility,'workout')));
       entries.push(entryFor(record, userId, 'workout_duration', Math.round((record.measurements?.durationMinutes??Number(record.value))*10)/10, importedMetricVisibility(visibility,'workout_duration')));
-      if((record.measurements?.activeCalories??0)>0&&!entryById.has(importedId(record,'workout_calories')))entries.push(entryFor(record,userId,'workout_calories',Math.round(record.measurements!.activeCalories!),importedMetricVisibility(visibility,'workout_calories')));
       if((record.measurements?.distanceKm??0)>0)entries.push(entryFor(record,userId,'workout_distance',Math.round(record.measurements!.distanceKm!*100)/100,importedMetricVisibility(visibility,'workout_distance')));
     }
     if (record.type === 'body_fat' && Number(record.value)>0) entries.push(entryFor(record,userId,'body_fat',Math.round(Number(record.value)*10)/10,importedMetricVisibility(visibility,'body_fat')));

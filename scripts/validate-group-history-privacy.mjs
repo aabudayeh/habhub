@@ -14,6 +14,7 @@ import {
   SHARED_DAILY_SUMMARY_LABEL,
 } from "../src/domain/sharedLeaderboardLogs.ts";
 import { accountOwnedCollections } from "../src/domain/accountCollections.ts";
+import { scopeCachedGroupActivity } from "../src/domain/groupActivityCacheScope.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (file) => readFileSync(path.join(root, file), "utf8");
@@ -708,6 +709,106 @@ assert.match(
   provider,
   /\.channel\(`group:\$\{state\.group\.id\}:workspace`[\s\S]{0,250}\{ event: "workspace_updated" \}[\s\S]{0,100}queueRefresh/,
   "group membership and workspace invalidations must refresh only through the active group's private topic",
+);
+const scopedActivity = scopeCachedGroupActivity(
+  {
+    groupId: "group",
+    version: 7,
+    entries: [
+      { ...mixedEntries[0], id: "shared-peer", userId: "peer" },
+      { ...mixedEntries[0], id: "owned-account-row", userId: "viewer" },
+      { ...mixedEntries[0], id: "private-peer", userId: "peer", visibility: "private" },
+      { ...mixedEntries[0], id: "departed-peer", userId: "departed" },
+      { ...mixedEntries[0], id: "removed-metric", userId: "peer", metricId: "old" },
+    ],
+    dailyMetricStatuses: [
+      { ...sharedLogStatuses[0], metricId: "water" },
+      { ...sharedLogStatuses[0], metricId: "water", visibility: "private" },
+      { ...sharedLogStatuses[0], userId: "viewer", metricId: "water" },
+      { ...sharedLogStatuses[0], userId: "departed", metricId: "water" },
+      { ...sharedLogStatuses[0], metricId: "old" },
+      { ...sharedLogStatuses[0], groupId: "other", metricId: "water" },
+    ],
+  },
+  {
+    currentUserId: "viewer",
+    group: {
+      id: "group",
+      name: "Test",
+      inviteCode: "TEST",
+      templateName: "Test",
+      streakRestDaysPerWeek: 0,
+      members: [
+        { id: "viewer", name: "Viewer", initials: "V", color: "#000", role: "member" },
+        { id: "peer", name: "Peer", initials: "P", color: "#111", role: "member" },
+      ],
+      metricConfiguration: [
+        { id: "water" },
+      ],
+    },
+  },
+  "viewer",
+  "group",
+);
+assert.deepEqual(
+  scopedActivity?.entries.map((entry) => entry.id),
+  ["shared-peer"],
+  "startup group cache hydration must retain only peer, active-member, configured-metric, exact-group rows",
+);
+assert.equal(
+  scopedActivity?.dailyMetricStatuses.length,
+  1,
+  "cached compact statuses must be scoped to the current group shell",
+);
+assert.equal(
+  scopeCachedGroupActivity(
+    scopedActivity,
+    {
+      currentUserId: "other-account",
+      group: {
+        id: "group",
+        name: "Test",
+        inviteCode: "TEST",
+        templateName: "Test",
+        streakRestDaysPerWeek: 0,
+        members: [],
+      },
+    },
+    "viewer",
+    "group",
+  ),
+  null,
+  "a cached group snapshot must fail closed across an account or membership boundary",
+);
+assert.match(
+  provider,
+  /startupGroupCacheHydrationRef[\s\S]{0,1400}accountBoundaryReadyUserId !== auth\.user\.id[\s\S]{0,500}hydrateCachedGroupActivity/,
+  "cold open must start scoped cache hydration as soon as the account boundary is ready",
+);
+assert.match(
+  provider,
+  /observedVersion[\s\S]{0,500}scopedCached\.version >= observedVersion/,
+  "a cache older than an observed server activity revision must be rejected",
+);
+assert.match(
+  provider,
+  /stillAuthorized = scopeCachedGroupActivity[\s\S]{0,1500}replaceState\(next, \{ source: "cloud" \}\)/,
+  "cache hydration must recheck authorization after async reads and remain presentation-only",
+);
+assert.match(
+  provider,
+  /entry\.localDate >= cacheSinceDate &&[\s\S]{0,100}entry\.visibility === "group"/,
+  "the shared activity cache must never store item-level private/status-only rows",
+);
+assert.match(
+  provider,
+  /entry\.visibility === "group" &&[\s\S]{0,100}entry\.userId !== state\.currentUserId/,
+  "account-owned rows must stay in the account cache rather than a reusable group cache",
+);
+assert.match(
+  provider,
+  /status\.groupId === groupId &&[\s\S]{0,100}status\.visibility !== "private"/,
+  "private compact statuses must never be written to the reusable group cache",
 );
 assert.match(
   explicitProjectionMigration,

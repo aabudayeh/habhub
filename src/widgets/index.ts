@@ -108,6 +108,8 @@ export type WidgetConfiguration = {
   trackerId: string;
   range: "week" | "month" | "year";
   leaderboardMetricIds?: string[];
+  /** Per-widget Leaderboard text scale selected in Android configuration. */
+  leaderboardFontScale?: number;
 };
 
 type HabHubAndroidModule = {

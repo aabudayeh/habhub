@@ -715,7 +715,6 @@ function LeaderboardScreen() {
     const fittingCapacity = leaderboardPageCapacity(
       viewportHeight,
       state.group.members.length,
-      dateNavigatorOpen,
     );
     const preferredCapacity = configuredPageCapacity(
       state.settings.leaderboardCardsPerPage,
@@ -723,9 +722,13 @@ function LeaderboardScreen() {
       1,
       4,
     );
+    // Web pages can use the surrounding vertical scroll when a chosen card
+    // count is taller than the visual viewport. Honouring the saved count here
+    // also prevents the history/date disclosure from rechunking and remounting
+    // every leaderboard card.
+    if (Platform.OS === "web") return preferredCapacity;
     return Math.min(fittingCapacity, preferredCapacity);
   }, [
-    dateNavigatorOpen,
     state.group.members.length,
     state.settings.leaderboardCardsPerPage,
     viewportHeight,

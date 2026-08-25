@@ -55,7 +55,10 @@ import {
   metricIdsForHealthDataTypes,
   reconcileGoogleHealthNativeMirrors,
 } from "@/src/domain/health";
-import { mergeLocalCurrentDayDeviceStepEntries } from "@/src/domain/healthDedup";
+import {
+  mergeLocalCurrentDayDeviceHealthEntries,
+} from "@/src/domain/healthDedup";
+import { scopeCachedGroupActivity } from "@/src/domain/groupActivityCacheScope";
 import { applySharedMetricPrivacyFences } from "@/src/domain/sharedMetricPrivacy";
 import {
   applyGoogleHealthEntryOverrides,
@@ -1688,19 +1691,22 @@ function mergeEntriesFromBase(
   return [...byKey.values()];
 }
 
-function preserveLocalCurrentDayDeviceSteps(
+function preserveLocalCurrentDayDeviceHealth(
   incoming: AppState,
   local: AppState,
 ): AppState {
   if (incoming.currentUserId !== local.currentUserId) return incoming;
-  const entries = mergeLocalCurrentDayDeviceStepEntries(
+  const entries = mergeLocalCurrentDayDeviceHealthEntries(
     incoming.entries,
     local.entries,
     {
       userId: local.currentUserId,
       currentLocalDate: dateKey(),
       stepMetricIds: new Set(
-        metricIdsForHealthDataTypes(["steps"], local.metrics),
+        metricIdsForHealthDataTypes(
+          ["steps"],
+          [...local.metrics, ...incoming.metrics],
+        ),
       ),
     },
   );
@@ -1912,7 +1918,7 @@ function mergeStates(
       local.currentUserId,
     ),
   };
-  return preserveLocalCurrentDayDeviceSteps(
+  return preserveLocalCurrentDayDeviceHealth(
     applyAccountMemberProfile(withNativeGoogleOwnership, profile),
     local,
   );
@@ -1988,7 +1994,7 @@ function acceptCleanRemoteState(remote: AppState, local: AppState): AppState {
   const keepForeignStatuses = local.dailyMetricStatuses.filter(
     (item) => item.userId !== userId,
   );
-  const acceptedOwnedEntries = mergeLocalCurrentDayDeviceStepEntries(
+  const acceptedOwnedEntries = mergeLocalCurrentDayDeviceHealthEntries(
     remoteWithDeviceSettings.entries.filter(
       (entry) => entry.userId === userId,
     ),
@@ -1997,7 +2003,10 @@ function acceptCleanRemoteState(remote: AppState, local: AppState): AppState {
       userId: local.currentUserId,
       currentLocalDate: dateKey(),
       stepMetricIds: new Set(
-        metricIdsForHealthDataTypes(["steps"], local.metrics),
+        metricIdsForHealthDataTypes(
+          ["steps"],
+          [...local.metrics, ...remoteWithDeviceSettings.metrics],
+        ),
       ),
     },
   );
@@ -2268,6 +2277,8 @@ function cachedGroupActivity(
       .filter(
         (entry) =>
           entry.localDate >= cacheSinceDate &&
+          entry.visibility === "group" &&
+          entry.userId !== state.currentUserId &&
           metricIds.has(entry.metricId) &&
           memberIds.has(entry.userId),
       )
@@ -2277,7 +2288,12 @@ function cachedGroupActivity(
           : entry,
       ),
     dailyMetricStatuses: state.dailyMetricStatuses.filter(
-      (status) => status.groupId === groupId,
+      (status) =>
+        status.groupId === groupId &&
+        status.visibility !== "private" &&
+        status.userId !== state.currentUserId &&
+        metricIds.has(status.metricId) &&
+        memberIds.has(status.userId),
     ),
   };
 }
@@ -2707,6 +2723,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     new Map<string, Promise<void>>(),
   );
   const historicalHydrationStartedRef = useRef(new Set<string>());
+  const startupGroupCacheHydrationRef = useRef(new Set<string>());
   // undefined = no queued request, null = full activity refresh, string =
   // earliest local date requested by coalesced realtime events.
   const queuedActivitySinceRef = useRef<string | null | undefined>(undefined);
@@ -3188,6 +3205,109 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     [],
   );
 
+  const hydrateCachedGroupActivity = useCallback(
+    async (groupId: string, expectedUserId: string) => {
+      const [cached, protectedGoogleStatuses] = await Promise.all([
+        readGroupActivityCache(groupId).catch(() => null),
+        readGoogleHealthGroupCheckpoint(expectedUserId, groupId).catch(
+          () => undefined,
+        ),
+      ]);
+      await yieldCloudMaintenanceToUi();
+
+      const live = stateRef.current;
+      const scopedCached = cached
+        ? scopeCachedGroupActivity(
+            cached,
+            live,
+            expectedUserId,
+            groupId,
+          )
+        : null;
+      const scopedGoogleStatuses = protectedGoogleStatuses
+        ? scopeCachedGroupActivity(
+            {
+              groupId,
+              entries: [],
+              dailyMetricStatuses:
+                protectedGoogleStatuses.dailyMetricStatuses,
+            },
+            live,
+            expectedUserId,
+            groupId,
+            true,
+          )
+        : null;
+      if (!scopedCached && !scopedGoogleStatuses) return false;
+
+      // A slow disk read must never reintroduce rows that a newer server
+      // snapshot already deleted or fenced after a visibility change.
+      const observedVersion = activityVersionByGroupRef.current.get(groupId);
+      const reusableCached =
+        scopedCached &&
+        (observedVersion === undefined ||
+          (scopedCached.version !== undefined &&
+            scopedCached.version >= observedVersion))
+          ? scopedCached
+          : null;
+      const reusableGoogleStatuses =
+        observedVersion === undefined || reusableCached
+          ? scopedGoogleStatuses
+          : null;
+      const entries = reusableCached?.entries ?? [];
+      const statuses = [
+        ...(reusableCached?.dailyMetricStatuses ?? []),
+        ...(reusableGoogleStatuses?.dailyMetricStatuses ?? []),
+      ];
+      if (!entries.length && !statuses.length) return false;
+
+      const current = stateRef.current;
+      // Recheck after all async reads/yields. This is the account/membership
+      // fence that prevents an old group read from painting after sign-out,
+      // account replacement, removal, or a group switch.
+      const stillAuthorized = scopeCachedGroupActivity(
+        {
+          groupId,
+          entries,
+          dailyMetricStatuses: statuses,
+        },
+        current,
+        expectedUserId,
+        groupId,
+        true,
+      );
+      if (!stillAuthorized) return false;
+
+      const next = {
+        ...current,
+        entries: mergeActivityEntries(
+          current.entries,
+          stillAuthorized.entries,
+          current.currentUserId,
+        ),
+        dailyMetricStatuses: mergeActivityStatuses(
+          current.dailyMetricStatuses,
+          stillAuthorized.dailyMetricStatuses,
+        ),
+      };
+      if (
+        reusableCached?.version !== undefined &&
+        (observedVersion === undefined ||
+          reusableCached.version > observedVersion)
+      )
+        activityVersionByGroupRef.current.set(
+          groupId,
+          reusableCached.version,
+        );
+      stateRef.current = next;
+      // This is presentation-only cache hydration. `source: cloud` keeps the
+      // rows out of the local/account and relational group outboxes.
+      replaceState(next, { source: "cloud" });
+      return true;
+    },
+    [replaceState],
+  );
+
   const evictUnavailableGroup = useCallback(
     async (groupId: string) => {
       const live = stateRef.current;
@@ -3498,6 +3618,38 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       if (storageRetryTimer) clearTimeout(storageRetryTimer);
     };
   }, [auth.status, auth.user, hydrated, stageState]);
+
+  useEffect(() => {
+    if (auth.status !== "signedIn" || !auth.user) {
+      startupGroupCacheHydrationRef.current.clear();
+      return;
+    }
+    const live = stateRef.current;
+    const groupId = live.group.id;
+    if (
+      accountBoundaryReadyUserId !== auth.user.id ||
+      live.currentUserId !== auth.user.id ||
+      !isCloudGroupId(groupId) ||
+      !live.group.members.some((member) => member.id === auth.user?.id)
+    )
+      return;
+
+    const cacheBoundary = `${auth.user.id}:${groupId}`;
+    if (startupGroupCacheHydrationRef.current.has(cacheBoundary)) return;
+    startupGroupCacheHydrationRef.current.add(cacheBoundary);
+    void hydrateCachedGroupActivity(groupId, auth.user.id).catch(() => {
+      // A transient IndexedDB/SQLite failure may retry after a later account or
+      // group boundary change; it never blocks startup or changes sync status.
+      startupGroupCacheHydrationRef.current.delete(cacheBoundary);
+    });
+  }, [
+    accountBoundaryReadyUserId,
+    auth.status,
+    auth.user,
+    hydrateCachedGroupActivity,
+    state.group.id,
+    state.group.members,
+  ]);
 
   const touchPresence = useCallback(
     async (force = false) => {
@@ -6088,42 +6240,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             signal,
           ),
         );
-        const [cached, protectedGoogleStatuses] = await Promise.all([
-          readGroupActivityCache(groupId).catch(() => null),
-          readGoogleHealthGroupCheckpoint(base.currentUserId, groupId).catch(
-            () => undefined,
-          ),
-        ]);
-        await yieldCloudMaintenanceToUi();
-        if (
-          (cached || protectedGoogleStatuses) &&
-          sequence === groupLoadSequenceRef.current &&
-          stateRef.current.group.id === groupId
-        ) {
-          const live = stateRef.current;
-          const next = {
-            ...live,
-            entries: mergeActivityEntries(
-              live.entries,
-              cached?.entries ?? [],
-              live.currentUserId,
-            ),
-            dailyMetricStatuses: mergeActivityStatuses(
-              mergeActivityStatuses(
-                live.dailyMetricStatuses,
-                cached?.dailyMetricStatuses ?? [],
-              ),
-              protectedGoogleStatuses?.dailyMetricStatuses ?? [],
-            ),
-          };
-          if (cached?.version !== undefined)
-            activityVersionByGroupRef.current.set(
-              groupId,
-              cached.version,
-            );
-          stateRef.current = next;
-          replaceState(next, { source: "cloud" });
-        }
+        await hydrateCachedGroupActivity(groupId, base.currentUserId);
         const workspace = await workspacePromise;
         await yieldCloudMaintenanceToUi();
         return workspace;
@@ -6185,6 +6302,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       replaceState,
       scheduleGroupReadRetry,
       evictUnavailableGroup,
+      hydrateCachedGroupActivity,
     ],
   );
   groupReadRetryRunnerRef.current = hydrateGroupInBackground;

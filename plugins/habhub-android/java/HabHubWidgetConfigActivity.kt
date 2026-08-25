@@ -22,6 +22,7 @@ import android.widget.SeekBar
 import android.widget.TextView
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlin.math.roundToInt
 
 class HabHubWidgetConfigActivity : Activity() {
   private var widgetId = AppWidgetManager.INVALID_APPWIDGET_ID
@@ -81,6 +82,37 @@ class HabHubWidgetConfigActivity : Activity() {
       }
     }
     val leaderboardChecks = mutableListOf<CheckBox>()
+    val leaderboardFontLabel = label("", 13f, true).apply {
+      setTextColor(muted)
+      setPadding(dp(2), dp(12), 0, 0)
+    }
+    val leaderboardFontSlider = SeekBar(this).apply {
+      max = HabHubWidgetStore.LEADERBOARD_FONT_PERCENT_MAX -
+        HabHubWidgetStore.LEADERBOARD_FONT_PERCENT_MIN
+      progress = (
+        existing.leaderboardFontScale * 100f
+      ).roundToInt().coerceIn(
+        HabHubWidgetStore.LEADERBOARD_FONT_PERCENT_MIN,
+        HabHubWidgetStore.LEADERBOARD_FONT_PERCENT_MAX,
+      ) - HabHubWidgetStore.LEADERBOARD_FONT_PERCENT_MIN
+      progressTintList = ColorStateList.valueOf(lime)
+      thumbTintList = ColorStateList.valueOf(lime)
+    }
+    fun refreshLeaderboardFontLabel() {
+      val percent = HabHubWidgetStore.LEADERBOARD_FONT_PERCENT_MIN +
+        leaderboardFontSlider.progress
+      leaderboardFontLabel.text = getString(
+        R.string.habhub_widget_leaderboard_text_size_value,
+        percent,
+      )
+    }
+    refreshLeaderboardFontLabel()
+    leaderboardFontSlider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+      override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) =
+        refreshLeaderboardFontLabel()
+      override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+      override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+    })
     val leaderboardPanel = LinearLayout(this).apply {
       orientation = LinearLayout.VERTICAL
       addView(label(getString(R.string.habhub_widget_leaderboard_trackers), 13f, true).apply {
@@ -103,6 +135,11 @@ class HabHubWidgetConfigActivity : Activity() {
         leaderboardChecks += check
         addView(check)
       }
+      addView(leaderboardFontLabel)
+      addView(
+        leaderboardFontSlider,
+        LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(42)),
+      )
     }
     fun refreshLeaderboardChecks() {
       val selectedCount = leaderboardChecks.count { it.isChecked }
@@ -207,6 +244,10 @@ class HabHubWidgetConfigActivity : Activity() {
           colorInput.text?.toString()?.trim().orEmpty().ifBlank { "#081B49" },
           opacitySlider.progress,
           leaderboardMetricIds = selectedLeaderboardMetricIds,
+          leaderboardFontScale = (
+            HabHubWidgetStore.LEADERBOARD_FONT_PERCENT_MIN +
+              leaderboardFontSlider.progress
+          ) / 100f,
         )
         HabHubWidgetRenderer.updateWidget(this@HabHubWidgetConfigActivity, widgetId)
         setResult(RESULT_OK, Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId))

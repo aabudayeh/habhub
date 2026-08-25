@@ -35,11 +35,11 @@ assert.equal(configuredPageCapacity(4.9, 1, 1, 4), 4);
 assert.equal(todayPageCapacity(568, false), 2);
 assert.equal(todayPageCapacity(667, false), 4);
 assert.equal(todayPageCapacity(900, false), 6);
-assert.equal(leaderboardPageCapacity(720, 2, true), 2);
-assert.equal(leaderboardPageCapacity(720, 4, true), 1);
-assert.equal(leaderboardPageCapacity(900, 4, true), 2);
-assert.equal(leaderboardPageCapacity(1200, 1, false), 4);
-assert.equal(leaderboardPageCapacity(900, 2, false), 4);
+assert.equal(leaderboardPageCapacity(720, 2), 3);
+assert.equal(leaderboardPageCapacity(720, 4), 1);
+assert.equal(leaderboardPageCapacity(900, 4), 2);
+assert.equal(leaderboardPageCapacity(1200, 1), 4);
+assert.equal(leaderboardPageCapacity(900, 2), 4);
 
 const types = source("src/types.ts");
 const seed = source("src/data/seed.ts");
@@ -102,6 +102,20 @@ assert.match(settings, /\[1, 2, 3, 4\]\.map/);
 assert.match(leaderboard, /testID="leaderboard-card-pages"/);
 assert.match(leaderboard, /chunkIntoPages\(\s*rankingCards/);
 assert.match(leaderboard, /return Math\.min\(fittingCapacity, preferredCapacity\)/);
+assert.match(
+  leaderboard,
+  /if \(Platform\.OS === "web"\) return preferredCapacity/,
+  "Web must preserve the user's saved card count and let the surrounding screen scroll",
+);
+const leaderboardPageSize = leaderboard.slice(
+  leaderboard.indexOf("const leaderboardPageSize = useMemo"),
+  leaderboard.indexOf("const requestedLeaderboardPage"),
+);
+assert.doesNotMatch(
+  leaderboardPageSize,
+  /dateNavigatorOpen/,
+  "opening date/history controls must not rechunk Leaderboard cards",
+);
 assert.match(leaderboard, /requestedPage=\{requestedLeaderboardPage\}/);
 assert.match(today, /style=\{styles\.sectionPageIndicator\}/);
 assert.match(

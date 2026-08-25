@@ -14,7 +14,11 @@ import {
   healthConnectSegmentExercise,
   healthConnectSessionExercise,
 } from "@/src/domain/exerciseCatalog";
-import { isFitbitEnergyOrigin } from "@/src/domain/health";
+import {
+  healthEnergyRecordCoversWorkout,
+  isFitbitEnergyOrigin,
+  samsungWorkoutEnergyRecords,
+} from "@/src/domain/health";
 import {
   authoritativeHealthConnectStepGroups,
   combineDisjointStepWindows,
@@ -169,9 +173,18 @@ function recordTypesFor(dataTypes: HealthDataType[]) {
     ...new Set(
       dataTypes.flatMap((type) =>
         type === "workouts"
-          ? ["ExerciseSession", "Distance", "ActiveCaloriesBurned"]
+          ? [
+              "ExerciseSession",
+              "Distance",
+              "ActiveCaloriesBurned",
+              "TotalCaloriesBurned",
+            ]
           : type === "active_energy"
-            ? ["ActiveCaloriesBurned", "ExerciseSession"]
+            ? [
+                "ActiveCaloriesBurned",
+                "TotalCaloriesBurned",
+                "ExerciseSession",
+              ]
             : [RECORD_TYPES[type]],
       ),
     ),
@@ -941,6 +954,18 @@ export const healthConnectAdapter: HealthAdapter = {
             (record) => nestedNumber(record, "energy", "inKilocalories"),
           )
         : [];
+    // Samsung maps exercise calories to TotalCaloriesBurned. Keep the raw
+    // source/session intervals for the conservative Samsung-only classifier
+    // below; the ordinary total-energy tracker still uses the platform's
+    // priority-aware daily aggregate.
+    const rawTotalCalorieRecords =
+      dataTypes.includes("active_energy") ||
+      dataTypes.includes("total_energy") ||
+      needsWorkoutDetails
+        ? individualIntervals(
+            enabledRecords(await readSafe("TotalCaloriesBurned")),
+          )
+        : [];
     const totalEnergyImports: HealthImportRecord[] = [];
     if (dataTypes.includes("total_energy")) {
       try {
@@ -1008,6 +1033,35 @@ export const healthConnectAdapter: HealthAdapter = {
     const activeCalorieRecords = rawActiveCalorieRecords.filter((record) =>
       fitbitEnergyIsWorkoutScoped(record, workoutRecords),
     );
+    const convertedWorkoutSessions = workoutRecords.map((record) =>
+      convert("workouts", record),
+    );
+    const convertedActiveEnergy = activeCalorieRecords.map((record) => {
+      const converted = convert("active_energy", record);
+      const matchingWorkout = workoutRecords.find(
+        (workout) =>
+          overlaps(workout, converted.startTime, converted.endTime) &&
+          origin(workout) === origin(record),
+      ) ?? workoutRecords.find((workout) =>
+        overlaps(workout, converted.startTime, converted.endTime),
+      );
+      return matchingWorkout
+        ? {
+            ...converted,
+            label: workoutLabel(matchingWorkout),
+            activityKey: workoutActivity(matchingWorkout)?.key,
+          }
+        : converted;
+    });
+    const samsungWorkoutEnergy = samsungWorkoutEnergyRecords(
+      rawTotalCalorieRecords.map((record) => convert("total_energy", record)),
+      convertedWorkoutSessions,
+      convertedActiveEnergy,
+    );
+    const activeEnergyImports = [
+      ...samsungWorkoutEnergy.activeEnergyRecords,
+      ...samsungWorkoutEnergy.workoutEnergyRecords,
+    ];
     const workoutImports = workoutRecords.flatMap((record) => {
       const converted = convert("workouts", record);
       const start = String(record.startTime);
@@ -1018,9 +1072,14 @@ export const healthConnectAdapter: HealthAdapter = {
         const sameSource = overlapping.filter((item) => origin(item) === source);
         return sameSource.length ? sameSource : overlapping;
       };
-      const calories = matching(activeCalorieRecords).reduce(
-        (sum, item) =>
-          sum + nestedNumber(item, "energy", "inKilocalories"),
+      const matchingEnergy = activeEnergyImports.filter(
+        (item) =>
+          item.endTime > start &&
+          item.startTime < end &&
+          item.origin === source,
+      );
+      const calories = matchingEnergy.reduce(
+        (sum, item) => sum + Number(item.value || 0),
         0,
       );
       const distance = matching(distanceRecords).reduce(
@@ -1053,34 +1112,13 @@ export const healthConnectAdapter: HealthAdapter = {
       };
       return [session, ...workoutSegmentImports(record, session)];
     });
-    const activeEnergyImports = activeCalorieRecords.map((record) => {
-      const converted = convert("active_energy", record);
-      const matchingWorkout = workoutRecords.find(
-        (workout) =>
-          overlaps(workout, converted.startTime, converted.endTime) &&
-          origin(workout) === origin(record),
-      ) ?? workoutRecords.find((workout) =>
-        overlaps(workout, converted.startTime, converted.endTime),
-      );
-      return matchingWorkout
-        ? {
-            ...converted,
-            label: workoutLabel(matchingWorkout),
-            activityKey: workoutActivity(matchingWorkout)?.key,
-          }
-        : converted;
-    });
     for (const workout of workoutImports) {
       if (workout.workoutRecordKind !== "session") continue;
       const calories = workout.measurements?.activeCalories ?? 0;
       if (
         calories > 0 &&
         !activeEnergyImports.some((energy) =>
-          overlaps(
-            { startTime: energy.startTime, endTime: energy.endTime },
-            workout.startTime,
-            workout.endTime,
-          ),
+          healthEnergyRecordCoversWorkout(energy, workout),
         )
       ) {
         activeEnergyImports.push({

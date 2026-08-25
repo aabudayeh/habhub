@@ -2131,7 +2131,6 @@ function reducer(state: AppState, action: Action): AppState {
       const synced = (completedSets > 0 ? [
         ...(qualifiesAsWorkout ? [{ metricId: "workout", value: true }] : []),
         { metricId: "workout_duration", value: session.durationMinutes },
-        { metricId: "workout_calories", value: calorieValue },
         { metricId: "exercise", value: calorieValue },
       ] : [])
         .filter(

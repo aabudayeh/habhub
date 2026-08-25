@@ -219,8 +219,8 @@ assert.equal(
   "a newer server timestamp must still fetch and merge the payload",
 );
 assert.ok(
-  (cloudProvider.match(/mergeLocalCurrentDayDeviceStepEntries\(/g)?.length ?? 0) >= 2,
-  "clean and dirty cloud snapshot merges must preserve a newer phone-confirmed current-day Steps revision",
+  (cloudProvider.match(/mergeLocalCurrentDayDeviceHealthEntries\(/g)?.length ?? 0) >= 2,
+  "clean and dirty cloud snapshot merges must preserve newer phone-confirmed current-day Health inputs, including Steps",
 );
 assert.equal(
   advanceAuthoritativeStateFromRender(cloudB, renderedA, cloudB),

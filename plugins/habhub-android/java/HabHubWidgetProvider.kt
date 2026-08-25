@@ -49,9 +49,13 @@ data class HabHubWidgetConfiguration(
   val backgroundColor: String = "#081B49",
   val backgroundOpacity: Int = 55,
   val leaderboardMetricIds: List<String> = emptyList(),
+  val leaderboardFontScale: Float = 1f,
 )
 
 object HabHubWidgetStore {
+  const val LEADERBOARD_FONT_PERCENT_MIN = 90
+  const val LEADERBOARD_FONT_PERCENT_MAX = 130
+  const val LEADERBOARD_FONT_PERCENT_DEFAULT = 100
   private const val PREFS = "habhub_widgets"
   private const val SNAPSHOT = "snapshot"
   private const val TRACKER_PREFIX = "tracker_"
@@ -60,6 +64,7 @@ object HabHubWidgetStore {
   private const val BACKGROUND_COLOR_PREFIX = "background_color_"
   private const val BACKGROUND_OPACITY_PREFIX = "background_opacity_"
   private const val LEADERBOARD_METRICS_PREFIX = "leaderboard_metrics_"
+  private const val LEADERBOARD_FONT_PERCENT_PREFIX = "leaderboard_font_percent_"
 
   private fun preferences(context: Context) =
     context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -93,6 +98,7 @@ object HabHubWidgetStore {
     backgroundColor: String = "#081B49",
     backgroundOpacity: Int = 55,
     leaderboardMetricIds: List<String>? = null,
+    leaderboardFontScale: Float? = null,
   ) {
     preferences(context).edit().apply {
       putString(
@@ -107,6 +113,15 @@ object HabHubWidgetStore {
         putString(
           "$LEADERBOARD_METRICS_PREFIX$widgetId",
           leaderboardMetricIds.map(String::trim).filter(String::isNotBlank).distinct().take(4).joinToString(","),
+        )
+      }
+      if (leaderboardFontScale != null) {
+        putInt(
+          "$LEADERBOARD_FONT_PERCENT_PREFIX$widgetId",
+          (leaderboardFontScale * 100f).roundToInt().coerceIn(
+            LEADERBOARD_FONT_PERCENT_MIN,
+            LEADERBOARD_FONT_PERCENT_MAX,
+          ),
         )
       }
     }.apply()
@@ -128,6 +143,13 @@ object HabHubWidgetStore {
       prefs.getInt("$BACKGROUND_OPACITY_PREFIX$widgetId", 55).coerceIn(0, 100),
       prefs.getString("$LEADERBOARD_METRICS_PREFIX$widgetId", "").orEmpty()
         .split(",").map(String::trim).filter(String::isNotBlank).distinct().take(4),
+      prefs.getInt(
+        "$LEADERBOARD_FONT_PERCENT_PREFIX$widgetId",
+        LEADERBOARD_FONT_PERCENT_DEFAULT,
+      ).coerceIn(
+        LEADERBOARD_FONT_PERCENT_MIN,
+        LEADERBOARD_FONT_PERCENT_MAX,
+      ) / 100f,
     )
   }
 
@@ -146,6 +168,7 @@ object HabHubWidgetStore {
         remove("$BACKGROUND_COLOR_PREFIX$widgetId")
         remove("$BACKGROUND_OPACITY_PREFIX$widgetId")
         remove("$LEADERBOARD_METRICS_PREFIX$widgetId")
+        remove("$LEADERBOARD_FONT_PERCENT_PREFIX$widgetId")
         // Clean the retired count preference. The selected tracker list is
         // now the single source of truth for Leaderboard widget content.
         remove("leaderboard_count_$widgetId")
@@ -714,8 +737,14 @@ object HabHubWidgetRenderer {
     item: JSONObject,
     configuration: HabHubWidgetConfiguration,
   ) {
+    val leaderboardFontScale = configuration.leaderboardFontScale.coerceIn(
+      HabHubWidgetStore.LEADERBOARD_FONT_PERCENT_MIN / 100f,
+      HabHubWidgetStore.LEADERBOARD_FONT_PERCENT_MAX / 100f,
+    )
     val pad = (min(size.widthDp, size.heightDp) * 0.065f).coerceIn(4f, 12f)
-    val headerSize = min(size.widthDp / 14f, size.heightDp / 6.5f).coerceIn(6.2f, 15f)
+    val headerSize = (
+      min(size.widthDp / 14f, size.heightDp / 6.5f) * leaderboardFontScale
+    ).coerceIn(6.2f, 17f)
     val headerBaseline = pad + headerSize
     val datePaint = textPaint(
       (headerSize * 0.72f).coerceIn(5f, 10.5f),
@@ -772,6 +801,16 @@ object HabHubWidgetRenderer {
       gridBottom - gridTop,
       gap,
     )
+    val wideTwoMetricLayout =
+      metrics.size == 2 &&
+        grid.columns == 2 &&
+        grid.rows == 1 &&
+        size.widthDp >= 220f &&
+        size.heightDp >= 90f &&
+        size.widthDp / size.heightDp <= 3f
+    val rowTextFloor = (
+      MIN_LEADERBOARD_ROW_TEXT_SIZE * leaderboardFontScale
+    ).coerceAtLeast(MIN_LEADERBOARD_ROW_TEXT_SIZE)
     metrics.forEachIndexed { index, metric ->
       val column = index % grid.columns
       val row = index / grid.columns
@@ -780,12 +819,18 @@ object HabHubWidgetRenderer {
       val rect = RectF(left, top, left + grid.cellWidth, top + grid.cellHeight)
       val metricRows = metric.optJSONArray("rows") ?: JSONArray()
       val desiredRows = min(metricRows.length(), 5)
-      val cellScale = min(grid.cellWidth / 68f, grid.cellHeight / 39f).coerceIn(0.62f, 2.6f)
+      val maximumCellScale = if (wideTwoMetricLayout) 1.45f else 2.6f
+      val cellScale = min(grid.cellWidth / 68f, grid.cellHeight / 39f)
+        .coerceIn(0.62f, maximumCellScale)
       val denseMemberHeader = desiredRows >= 3 && grid.cellHeight < 32f + desiredRows * 14f
       val headerScale = if (denseMemberHeader) 0.78f else 1f
       val innerPad = (4.5f * cellScale * headerScale).coerceIn(2.4f, 10f)
-      val metricTitleSize = (8.2f * cellScale * headerScale).coerceIn(5.4f, 18f)
-      val baseRowTextSize = (6.6f * cellScale * headerScale).coerceIn(4.5f, 14.5f)
+      val metricTitleSize = (
+        8.2f * cellScale * headerScale * leaderboardFontScale
+      ).coerceIn(5.4f, 18f)
+      val baseRowTextSize = (
+        6.6f * cellScale * headerScale * leaderboardFontScale
+      ).coerceIn(4.5f, 14.5f)
       val iconRadius = (4.8f * cellScale * headerScale).coerceIn(3f, 12f)
       val cornerRadius = (7f * cellScale).coerceIn(5f, 15f)
       canvas.drawRoundRect(rect, cornerRadius, cornerRadius, fillPaint(Color.argb(34, 255, 255, 255)))
@@ -843,7 +888,7 @@ object HabHubWidgetRenderer {
       // scale only as far as needed to fit the available member list.
       val compactRows = desiredRows > 0 && desiredRows * preferredRowHeight > availableHeight
       val compactRowHeight = max(
-        MIN_LEADERBOARD_ROW_TEXT_SIZE * 1.35f,
+        rowTextFloor * 1.35f,
         min(10f, max(6.4f, baseRowTextSize * 0.9f)),
       )
       val visibleRows = min(
@@ -854,9 +899,9 @@ object HabHubWidgetRenderer {
       val stackRows = roomyStackRows && !compactRows
       val rowTextSize = if (compactRows) {
         min(
-          max(baseRowTextSize, MIN_LEADERBOARD_ROW_TEXT_SIZE),
+          max(baseRowTextSize, rowTextFloor),
           rowHeight * 0.66f,
-        ).coerceAtLeast(MIN_LEADERBOARD_ROW_TEXT_SIZE)
+        ).coerceAtLeast(rowTextFloor)
       } else {
         // With only a few members, consume the spare height with larger,
         // easier-to-read names and values instead of leaving dead space.
@@ -890,7 +935,7 @@ object HabHubWidgetRenderer {
             labelLeft,
             firstBaseline,
             max(5f, right - labelLeft),
-            fittedTextPaint(name, max(5f, right - labelLeft), rowTextSize, MIN_LEADERBOARD_ROW_TEXT_SIZE, Color.argb(224, 242, 246, 255), false),
+            fittedTextPaint(name, max(5f, right - labelLeft), rowTextSize, rowTextFloor, Color.argb(224, 242, 246, 255), false),
           )
           val valueWidth = max(8f, right - (left + innerPad))
           drawRightAlignedEllipsizedText(
@@ -899,17 +944,24 @@ object HabHubWidgetRenderer {
             right,
             centerY + rowTextSize * 1.16f,
             valueWidth,
-            fittedTextPaint(value, valueWidth, rowTextSize, MIN_LEADERBOARD_ROW_TEXT_SIZE, valueColor, true),
+            fittedTextPaint(value, valueWidth, rowTextSize, rowTextFloor, valueColor, true),
           )
         } else {
           val baseline = centerY + rowTextSize * 0.34f
           drawText(canvas, rank, left + innerPad, baseline, rankWidth, rankPaint)
           val naturalValuePaint = textPaint(rowTextSize, valueColor, true)
-          val minimumNameWidth = min(32f, grid.cellWidth * 0.30f)
+          val minimumNameWidth = if (wideTwoMetricLayout) {
+            min(38f, grid.cellWidth * 0.34f)
+          } else {
+            min(32f, grid.cellWidth * 0.30f)
+          }
           val maximumValueWidth = max(10f, right - labelLeft - minimumNameWidth - innerPad * 0.55f)
           val valueWidth = min(
             maximumValueWidth,
-            max(grid.cellWidth * 0.34f, naturalValuePaint.measureText(value) + 1f),
+            max(
+              grid.cellWidth * if (wideTwoMetricLayout) 0.24f else 0.34f,
+              naturalValuePaint.measureText(value) + 1f,
+            ),
           )
           val nameWidth = max(5f, right - labelLeft - valueWidth - innerPad * 0.55f)
           drawText(
@@ -918,7 +970,7 @@ object HabHubWidgetRenderer {
             labelLeft,
             baseline,
             nameWidth,
-            fittedTextPaint(name, nameWidth, rowTextSize, MIN_LEADERBOARD_ROW_TEXT_SIZE, Color.argb(224, 242, 246, 255), false),
+            fittedTextPaint(name, nameWidth, rowTextSize, rowTextFloor, Color.argb(224, 242, 246, 255), false),
           )
           drawRightAlignedEllipsizedText(
             canvas,
@@ -926,7 +978,7 @@ object HabHubWidgetRenderer {
             right,
             baseline,
             valueWidth,
-            fittedTextPaint(value, valueWidth, rowTextSize, MIN_LEADERBOARD_ROW_TEXT_SIZE, valueColor, true),
+            fittedTextPaint(value, valueWidth, rowTextSize, rowTextFloor, valueColor, true),
           )
         }
       }

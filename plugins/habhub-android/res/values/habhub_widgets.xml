@@ -11,6 +11,7 @@
   <string name="habhub_widget_status_avatar">Status avatar</string>
   <string name="habhub_widget_leaderboard">Leaderboard</string>
   <string name="habhub_widget_leaderboard_trackers">Leaderboard trackers</string>
+  <string name="habhub_widget_leaderboard_text_size_value">Leaderboard text size: %1$d%%</string>
   <string name="habhub_widget_choose">Choose what this widget shows</string>
   <string name="habhub_widget_size_hint">%1$s home-screen widget</string>
   <string name="habhub_widget_content">Content</string>

@@ -710,7 +710,6 @@ function LogScreen() {
         (
           [
             ["workout_duration", workoutDuration],
-            ["workout_calories", workoutCalories],
             ["exercise", workoutCalories],
             ["workout_distance", workoutDistance],
           ] as const

@@ -54,11 +54,28 @@ const RESOURCE_FILES = [
 ];
 
 const PROVIDERS = [
-  ["HabHubSmallWidgetProvider", "@xml/habhub_widget_small_info", "HabHub"],
-  ["HabHubSquareWidgetProvider", "@xml/habhub_widget_square_info", "HabHub"],
-  ["HabHubWideCompactWidgetProvider", "@xml/habhub_widget_wide_compact_info", "HabHub"],
-  ["HabHubWideWidgetProvider", "@xml/habhub_widget_wide_info", "HabHub"],
-  ["HabHubLeaderboardWidgetProvider", "@xml/habhub_widget_leaderboard_info", "@string/habhub_widget_leaderboard"],
+  [
+    "HabHubSmallWidgetProvider",
+    "@xml/habhub_widget_small_info",
+    "@string/habhub_widget_featured_progress",
+  ],
+  [
+    "HabHubSquareWidgetProvider",
+    "@xml/habhub_widget_square_info",
+    "@string/habhub_widget_status_avatar",
+  ],
+  [
+    "HabHubLeaderboardWidgetProvider",
+    "@xml/habhub_widget_leaderboard_info",
+    "@string/habhub_widget_leaderboard",
+  ],
+];
+// These classes remain in the Kotlin template only so upgrades can recognize
+// old installations. They are deliberately removed from the manifest and are
+// therefore not exposed as duplicate launcher-picker choices.
+const RETIRED_WIDGET_PROVIDERS = [
+  "HabHubWideCompactWidgetProvider",
+  "HabHubWideWidgetProvider",
 ];
 
 function appWidgetReceiver(packageName, className, infoResource, label) {
@@ -152,7 +169,8 @@ function withNativeManifest(config, packageName) {
     const workoutPersistenceReceiver =
       `${packageName}.HabHubWorkoutNotificationPersistenceReceiver`;
     const providerNames = new Set(
-      PROVIDERS.map(([className]) => `${packageName}.${className}`),
+      [...PROVIDERS.map(([className]) => className), ...RETIRED_WIDGET_PROVIDERS]
+        .map((className) => `${packageName}.${className}`),
     );
     application.receiver = (application.receiver ?? []).filter(
       (receiver) =>

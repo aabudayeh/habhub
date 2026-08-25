@@ -61,11 +61,13 @@ export function todayPageCapacity(viewportHeight: number, compact: boolean) {
 export function leaderboardPageCapacity(
   viewportHeight: number,
   memberCount: number,
-  dateNavigatorExpanded: boolean,
 ) {
   const height = Number.isFinite(viewportHeight) ? viewportHeight : 720;
   const members = Math.max(1, Math.floor(memberCount));
-  const reservedHeight = dateNavigatorExpanded ? 285 : 220;
+  // Page membership must stay stable while the date/history controls open.
+  // Those controls live in the surrounding vertical screen, so their
+  // temporary height is not part of the collapsed-card packing estimate.
+  const reservedHeight = 220;
   const availableHeight = Math.max(180, height - reservedHeight);
   const estimatedCardHeight = 55 + members * 48;
   return Math.max(

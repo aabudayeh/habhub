@@ -137,8 +137,20 @@ assert.match(pluginConfig, /habhub_widget_preview_square/);
 assert.match(pluginConfig, /habhub_widget_preview_wide_compact/);
 assert.match(pluginConfig, /habhub_widget_preview_wide/);
 assert.match(pluginConfig, /habhub_widget_preview_leaderboard/);
-assert.match(pluginConfig, /HabHubWideCompactWidgetProvider/);
 assert.match(pluginConfig, /HabHubLeaderboardWidgetProvider/);
+const exposedProviderRegistry = pluginConfig.slice(
+  pluginConfig.indexOf("const PROVIDERS ="),
+  pluginConfig.indexOf("const RETIRED_WIDGET_PROVIDERS"),
+);
+assert.match(exposedProviderRegistry, /HabHubSmallWidgetProvider/);
+assert.match(exposedProviderRegistry, /HabHubSquareWidgetProvider/);
+assert.match(exposedProviderRegistry, /HabHubLeaderboardWidgetProvider/);
+assert.doesNotMatch(exposedProviderRegistry, /HabHubWideCompactWidgetProvider|HabHubWideWidgetProvider/);
+assert.match(
+  pluginConfig,
+  /RETIRED_WIDGET_PROVIDERS[\s\S]*HabHubWideCompactWidgetProvider[\s\S]*HabHubWideWidgetProvider[\s\S]*providerNames/,
+  "Prebuild must remove obsolete duplicate picker providers from an existing manifest",
+);
 assert.match(widgetLayout, /android:id="@\+id\/widget_card_image"/);
 assert.match(widgetLayout, /android:scaleType="fitXY"/);
 assert.doesNotMatch(widgetLayout, /ProgressBar|widget_goal_|widget_completion_badge/);
@@ -156,10 +168,22 @@ assert.match(widgetConfig, /else -> "2-5 x 1 \(starts 2 x 1\)"/);
 assert.match(widgetConfig, /"theme"[\s\S]*"transparent"[\s\S]*"custom"/);
 assert.match(widgetConfig, /SeekBar\(this\)[\s\S]*max = 100/);
 assert.match(widgetConfig, /habhub_widget_blur_note/);
+assert.match(
+  widgetConfig,
+  /LEADERBOARD_FONT_PERCENT_MAX -[\s\S]*LEADERBOARD_FONT_PERCENT_MIN[\s\S]*leaderboardFontScale \* 100f[\s\S]*habhub_widget_leaderboard_text_size_value/,
+  "Leaderboard configuration must expose the stored per-widget text scale",
+);
+assert.match(widgetConfig, /leaderboardFontScale = \([\s\S]*leaderboardFontSlider\.progress[\s\S]*\) \/ 100f/);
 assert.match(pluginSource, /BACKGROUND_MODE_PREFIX/);
 assert.match(pluginSource, /BACKGROUND_COLOR_PREFIX/);
 assert.match(pluginSource, /BACKGROUND_OPACITY_PREFIX/);
 assert.match(pluginSource, /LEADERBOARD_METRICS_PREFIX/);
+assert.match(pluginSource, /LEADERBOARD_FONT_PERCENT_PREFIX/);
+assert.match(
+  pluginSource,
+  /LEADERBOARD_FONT_PERCENT_MIN = 90[\s\S]*LEADERBOARD_FONT_PERCENT_MAX = 130[\s\S]*LEADERBOARD_FONT_PERCENT_DEFAULT = 100/,
+  "Leaderboard text customization must have bounded, readable defaults",
+);
 assert.doesNotMatch(pluginSource, /LEADERBOARD_COUNT_PREFIX|val leaderboardCount:/);
 assert.match(pluginSource, /setOf\("theme", "transparent", "custom"\)/);
 assert.match(
@@ -197,6 +221,13 @@ assert.match(widgetValues, /Featured card - resizes from 2-5 x 1/);
 assert.match(widgetValues, /Status avatar - resizes from 2-3 x 1-5/);
 assert.match(widgetValues, /Leaderboard - resizes from 1-5 x 1-6/);
 assert.match(manifest, /HabHubLeaderboardWidgetProvider[\s\S]*@xml\/habhub_widget_leaderboard_info/);
+assert.match(manifest, /HabHubSmallWidgetProvider[\s\S]*@xml\/habhub_widget_small_info/);
+assert.match(manifest, /HabHubSquareWidgetProvider[\s\S]*@xml\/habhub_widget_square_info/);
+assert.doesNotMatch(
+  manifest,
+  /HabHubWideCompactWidgetProvider|HabHubWideWidgetProvider/,
+  "The launcher picker must expose one Featured and one Avatar provider, not duplicate starting sizes",
+);
 assert.match(pluginSource, /paceboard:\/\/status/);
 assert.match(pluginSource, /paceboard:\/\/group/);
 assert.doesNotMatch(pluginSource, /paceboard:\/\/leaderboard"/);
@@ -223,13 +254,18 @@ assert.match(
 );
 assert.match(
   pluginSource,
-  /MIN_LEADERBOARD_ROW_TEXT_SIZE = 6\.2f[\s\S]*denseMemberHeader = desiredRows >= 3[\s\S]*desiredRows \* preferredRowHeight > availableHeight[\s\S]*MIN_LEADERBOARD_ROW_TEXT_SIZE \* 1\.35f[\s\S]*rowHeight \* 0\.66f[\s\S]*coerceAtLeast\(MIN_LEADERBOARD_ROW_TEXT_SIZE\)[\s\S]*baseRowTextSize \* 1\.28f/,
+  /MIN_LEADERBOARD_ROW_TEXT_SIZE = 6\.2f[\s\S]*rowTextFloor = \([\s\S]*MIN_LEADERBOARD_ROW_TEXT_SIZE \* leaderboardFontScale[\s\S]*denseMemberHeader = desiredRows >= 3[\s\S]*desiredRows \* preferredRowHeight > availableHeight[\s\S]*rowTextFloor \* 1\.35f[\s\S]*rowHeight \* 0\.66f[\s\S]*coerceAtLeast\(rowTextFloor\)[\s\S]*baseRowTextSize \* 1\.28f/,
   "Leaderboard rows must keep a legible floor while compacting larger groups and scaling into spare height",
 );
+assert.match(
+  pluginSource,
+  /wideTwoMetricLayout =[\s\S]*metrics\.size == 2[\s\S]*grid\.columns == 2[\s\S]*size\.widthDp >= 220f[\s\S]*size\.widthDp \/ size\.heightDp <= 3f[\s\S]*maximumCellScale = if \(wideTwoMetricLayout\) 1\.45f[\s\S]*grid\.cellWidth \* if \(wideTwoMetricLayout\) 0\.24f else 0\.34f/,
+  "A 4 x 2 two-tracker widget must cap oversized typography and return spare width to member names",
+);
 const MIN_LEADERBOARD_ROW_TEXT_SIZE = 6.2;
-function singleMetricLeaderboardDensity(widthDp, heightDp, members) {
+function singleMetricLeaderboardDensity(widthDp, heightDp, members, fontScale = 1) {
   const pad = Math.min(12, Math.max(4, Math.min(widthDp, heightDp) * 0.065));
-  const headerSize = Math.min(15, Math.max(6.2, Math.min(widthDp / 14, heightDp / 6.5)));
+  const headerSize = Math.min(17, Math.max(6.2, Math.min(widthDp / 14, heightDp / 6.5) * fontScale));
   const cellWidth = widthDp - pad * 2;
   const cellHeight = heightDp - (pad + headerSize + Math.max(3, headerSize * 0.45)) - pad;
   const desiredRows = Math.min(members, 5);
@@ -237,8 +273,8 @@ function singleMetricLeaderboardDensity(widthDp, heightDp, members) {
   const denseMemberHeader = desiredRows >= 3 && cellHeight < 32 + desiredRows * 14;
   const headerScale = denseMemberHeader ? 0.78 : 1;
   const innerPad = Math.min(10, Math.max(2.4, 4.5 * cellScale * headerScale));
-  const metricTitleSize = Math.min(18, Math.max(5.4, 8.2 * cellScale * headerScale));
-  const baseRowTextSize = Math.min(14.5, Math.max(4.5, 6.6 * cellScale * headerScale));
+  const metricTitleSize = Math.min(18, Math.max(5.4, 8.2 * cellScale * headerScale * fontScale));
+  const baseRowTextSize = Math.min(14.5, Math.max(4.5, 6.6 * cellScale * headerScale * fontScale));
   const iconRadius = Math.min(12, Math.max(3, 4.8 * cellScale * headerScale));
   const titleBandHeight = Math.max(
     iconRadius * 2 + innerPad * 1.45,
@@ -247,8 +283,9 @@ function singleMetricLeaderboardDensity(widthDp, heightDp, members) {
   const availableHeight = Math.max(0, cellHeight - titleBandHeight - innerPad * 0.45);
   const preferredRowHeight = Math.max(10, baseRowTextSize * 2.15);
   const compactRows = desiredRows > 0 && desiredRows * preferredRowHeight > availableHeight;
+  const rowTextFloor = Math.max(MIN_LEADERBOARD_ROW_TEXT_SIZE, MIN_LEADERBOARD_ROW_TEXT_SIZE * fontScale);
   const compactRowHeight = Math.max(
-    MIN_LEADERBOARD_ROW_TEXT_SIZE * 1.35,
+    rowTextFloor * 1.35,
     Math.min(10, Math.max(6.4, baseRowTextSize * 0.9)),
   );
   const visibleRows = Math.min(
@@ -258,9 +295,9 @@ function singleMetricLeaderboardDensity(widthDp, heightDp, members) {
   const rowHeight = availableHeight / Math.max(1, visibleRows);
   const rowTextSize = compactRows
     ? Math.max(
-        MIN_LEADERBOARD_ROW_TEXT_SIZE,
+        rowTextFloor,
         Math.min(
-          Math.max(baseRowTextSize, MIN_LEADERBOARD_ROW_TEXT_SIZE),
+          Math.max(baseRowTextSize, rowTextFloor),
           rowHeight * 0.66,
         ),
       )
@@ -285,6 +322,44 @@ assert.ok(
   compactLeaderboard.rowTextSize >= MIN_LEADERBOARD_ROW_TEXT_SIZE,
   "A crowded 2 x 1 leaderboard must never shrink member text below the legible floor",
 );
+const smallerSparseLeaderboard = singleMetricLeaderboardDensity(203, 105, 1, 0.9);
+const largerSparseLeaderboard = singleMetricLeaderboardDensity(203, 105, 1, 1.3);
+assert.ok(
+  largerSparseLeaderboard.rowTextSize > smallerSparseLeaderboard.rowTextSize,
+  "The per-widget text scale must materially change roomy Leaderboard rows",
+);
+function bestLeaderboardGrid(count, width, height, gap) {
+  let best = { columns: 1, rows: count, cellWidth: width, cellHeight: height / Math.max(1, count), readability: 0 };
+  for (let columns = 1; columns <= count; columns += 1) {
+    const rows = Math.ceil(count / columns);
+    const cellWidth = (width - gap * (columns - 1)) / columns;
+    const cellHeight = (height - gap * (rows - 1)) / rows;
+    const readability = Math.min(cellWidth / 68, cellHeight / 39);
+    if (readability > best.readability)
+      best = { columns, rows, cellWidth, cellHeight, readability };
+  }
+  return best;
+}
+function wideTwoMetricSizing(widthDp, heightDp) {
+  const pad = Math.min(12, Math.max(4, Math.min(widthDp, heightDp) * 0.065));
+  const headerSize = Math.min(17, Math.max(6.2, Math.min(widthDp / 14, heightDp / 6.5)));
+  const gap = Math.min(7, Math.max(2, Math.min(widthDp, heightDp) * 0.035));
+  const gridTop = pad + headerSize + Math.max(3, headerSize * 0.45);
+  const grid = bestLeaderboardGrid(2, widthDp - pad * 2, heightDp - pad - gridTop, gap);
+  const cellScale = Math.min(1.45, Math.max(0.62, Math.min(grid.cellWidth / 68, grid.cellHeight / 39)));
+  return {
+    ...grid,
+    cellScale,
+    baseRowTextSize: Math.min(14.5, Math.max(4.5, 6.6 * cellScale)),
+    minimumNameWidth: Math.min(38, grid.cellWidth * 0.34),
+    minimumValueWidth: grid.cellWidth * 0.24,
+  };
+}
+const fourByTwoPair = wideTwoMetricSizing(250, 105);
+assert.deepEqual([fourByTwoPair.columns, fourByTwoPair.rows], [2, 1]);
+assert.ok(fourByTwoPair.baseRowTextSize <= 9.6);
+assert.ok(fourByTwoPair.minimumNameWidth >= 37);
+assert.ok(fourByTwoPair.minimumValueWidth < fourByTwoPair.cellWidth * 0.25);
 assert.match(
   pluginSource,
   /icon\.startsWith\("walk"\)[\s\S]*conventional walking-person glyph/,
@@ -506,6 +581,8 @@ assert.match(widgetConfig, /selectedLeaderboardMetricIds[\s\S]*\.ifEmpty/);
 assert.doesNotMatch(widgetConfig, /leaderboardCountSlider|leaderboardCountLabel|habhub_widget_leaderboard_count/);
 assert.doesNotMatch(widgetValues, /habhub_widget_leaderboard_count/);
 assert.match(nativeModule, /putArray\([\s\S]*"leaderboardMetricIds"/);
+assert.match(nativeModule, /putDouble\([\s\S]*"leaderboardFontScale"/);
+assert.match(widgetTypes, /leaderboardFontScale\?: number/);
 assert.doesNotMatch(nativeModule, /leaderboardCount/);
 assert.doesNotMatch(pluginSource, /mergedTrackers|previous\.optJSONArray\("trackers"\)/);
 assert.match(nativeModule, /fun clearWidgetSnapshot\(promise: Promise\)[\s\S]*HabHubWidgetStore\.clearSnapshot[\s\S]*HabHubWidgetRenderer\.updateAll/);

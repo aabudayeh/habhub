@@ -6,6 +6,7 @@ import {
   consolidateWorkoutTrackers,
 } from "../src/domain/workoutTrackers.ts";
 import { completeGymWorkout } from "../src/domain/gym.ts";
+import { migrateRetiredWorkoutCaloriesEntries } from "../src/domain/workoutCaloriesMigration.ts";
 import {
   ANY_RECORDED_WORKOUT_QUALIFICATION,
   DEFAULT_WORKOUT_QUALIFICATION,
@@ -207,6 +208,153 @@ assert.deepEqual(
   "workout consolidation must be idempotent",
 );
 
+const activeEnergyMetric = metric("exercise", {
+  name: "Active energy",
+  icon: "flash-outline",
+  unit: "kcal",
+  dataType: "number",
+  aggregation: "sum",
+  healthMapping: { dataType: "active_energy", field: "value" },
+  order: 2,
+});
+const legacyWorkoutCaloriesMetric = metric("workout_calories", {
+  name: "Workout calories",
+  icon: "flame-outline",
+  unit: "kcal",
+  dataType: "number",
+  aggregation: "sum",
+  goal: { kind: "at_least", target: 250 },
+  defaultVisibility: "private",
+  healthMapping: { dataType: "workouts", field: "active_calories" },
+  order: 19,
+});
+const retiredEntryId =
+  "health:health_connect:workouts:legacy-session:workout_calories";
+const canonicalActiveEntryId =
+  "health:health_connect:workouts:legacy-session:exercise:workout-energy";
+const legacyCaloriesState = {
+  currentUserId: "owner",
+  metrics: [activeEnergyMetric, legacyWorkoutCaloriesMetric],
+  entries: [
+    {
+      id: retiredEntryId,
+      metricId: "workout_calories",
+      userId: "owner",
+      value: 184,
+      localDate: "2026-08-24",
+      recordedAt: "2026-08-24T18:45:00.000Z",
+      visibility: "private",
+      source: "imported",
+      sourceProvider: "health_connect",
+      sourceRecordId: "legacy-session",
+      sourceOrigin: "com.sec.android.app.shealth",
+      label: "Strength training",
+    },
+  ],
+  group: {
+    id: "group",
+    metricConfiguration: [activeEnergyMetric, legacyWorkoutCaloriesMetric],
+  },
+  groups: [
+    {
+      id: "group",
+      metricConfiguration: [activeEnergyMetric, legacyWorkoutCaloriesMetric],
+    },
+  ],
+  dailyMetricStatuses: [],
+  trackedGoalPeriods: { workout_calories: [{ from: "2026-08-01" }] },
+  journalNotes: [],
+  calendarReminders: [],
+  activityTimers: [],
+  selectedGroupMetricId: "workout_calories",
+  settings: {
+    selectedGoals: ["workout_calories"],
+    progressMetricIds: ["workout_calories"],
+    progressMetricOrderIds: ["workout_calories"],
+    progressPinnedMetricIds: ["workout_calories"],
+    performanceMetricIds: ["workout_calories"],
+    performanceMetricOrderIds: ["workout_calories"],
+    performancePinnedMetricIds: ["workout_calories"],
+    leaderboardMetricIdsByGroup: { group: ["workout_calories"] },
+    leaderboardPinnedMetricIdsByGroup: { group: ["workout_calories"] },
+    leaderboardCardOrderByGroup: { group: ["workout_calories"] },
+    comparisonMetricIdsByGroup: { group: ["workout_calories"] },
+    todayHistoryByMetric: { workout_calories: "month" },
+    trackerViewFilters: [
+      { id: "all", name: "All", metricIds: ["workout_calories"] },
+    ],
+    scheduleViewFilters: [
+      {
+        id: "all",
+        name: "All",
+        includeTodos: true,
+        includeReminders: true,
+        logMetricIds: ["workout_calories"],
+      },
+    ],
+    featuredTodayCard: "workout_calories",
+    notifications: { metricIds: ["workout_calories"] },
+  },
+};
+const retiredEntryMigration = migrateRetiredWorkoutCaloriesEntries(
+  legacyCaloriesState.entries,
+  legacyCaloriesState.currentUserId,
+);
+assert.equal(
+  retiredEntryMigration.entries.some(
+    (item) => item.metricId === "workout_calories",
+  ),
+  false,
+  "Workout calories rows must be removed by the retirement migration",
+);
+const migratedActiveEntry = retiredEntryMigration.entries.find(
+  (entry) => entry.id === canonicalActiveEntryId,
+);
+assert.equal(migratedActiveEntry?.metricId, "exercise");
+assert.equal(migratedActiveEntry?.value, 184);
+assert.equal(
+  migratedActiveEntry?.visibility,
+  "private",
+  "retiring the duplicate tracker must preserve entry privacy exactly",
+);
+assert.equal(migratedActiveEntry?.sourceRecordId, "legacy-session");
+assert.ok(
+  retiredEntryMigration.removedOwnEntryIds.includes(retiredEntryId),
+  "the state migration must receive every retired owner id for durable tombstones",
+);
+assert.equal(
+  migrateRetiredWorkoutCaloriesEntries(
+    retiredEntryMigration.entries,
+    legacyCaloriesState.currentUserId,
+  ).entries.filter((entry) => entry.id === canonicalActiveEntryId).length,
+  1,
+  "the retirement migration must remain idempotent",
+);
+const deletionWinsEntries = migrateRetiredWorkoutCaloriesEntries(
+  legacyCaloriesState.entries,
+  legacyCaloriesState.currentUserId,
+  [canonicalActiveEntryId],
+);
+assert.equal(
+  deletionWinsEntries.entries.some(
+    (entry) => entry.id === canonicalActiveEntryId,
+  ),
+  false,
+  "an explicit prior Active-energy deletion must not be resurrected by retirement",
+);
+const retiredDeletionWinsEntries = migrateRetiredWorkoutCaloriesEntries(
+  legacyCaloriesState.entries,
+  legacyCaloriesState.currentUserId,
+  [retiredEntryId],
+);
+assert.equal(
+  retiredDeletionWinsEntries.entries.some(
+    (entry) => entry.id === canonicalActiveEntryId,
+  ),
+  false,
+  "a deleted legacy Workout-calories row must not return as ghost Active energy",
+);
+
 const seed = fs.readFileSync("src/data/seed.ts", "utf8");
 const catalog = fs.readFileSync("src/domain/trackerCatalog.ts", "utf8");
 const onboarding = fs.readFileSync("app/onboarding.tsx", "utf8");
@@ -224,24 +372,18 @@ const workoutNotifications = fs.readFileSync(
 assert.match(seed, /id: "workout"[\s\S]{0,500}gymMapping: \{ kind: "session_completed" \}/);
 assert.match(seed, /id: "workout_duration"[\s\S]{0,500}gymMapping: \{ kind: "session_duration" \}/);
 assert.match(seed, /id: "workout"[\s\S]{0,600}workoutQualification: DEFAULT_WORKOUT_QUALIFICATION/);
-assert.match(seed, /id: "workout_calories"/);
-assert.match(seed, /workout_calories: \{ dataType: "workouts", field: "active_calories" \}/);
-assert.match(provider, /metricId: "workout_calories"/);
+assert.doesNotMatch(seed, /id: "workout_calories"/);
+assert.doesNotMatch(seed, /workout_calories: \{ dataType: "workouts", field: "active_calories" \}/);
+assert.doesNotMatch(provider, /metricId: "workout_calories"/);
 assert.match(provider, /workoutQualifies\(/);
 assert.match(health, /workoutCompletionQualifies/);
-assert.match(migration, /restoreWorkoutCalories\(state, defaults\)/);
 assert.match(
   migration,
-  /state\.settings\.workoutCaloriesRestored === true[\s\S]{0,40}return state/,
-  "Workout-calorie restoration must run once, not after a later user deletion",
+  /retireWorkoutCalories\(state, defaults\)/,
+  "every upgraded snapshot must converge on Active energy without the duplicate tracker",
 );
 assert.match(migration, /workoutCaloriesRestored: true/);
-assert.doesNotMatch(
-  migration,
-  /\? \["workout_duration", WORKOUT_CALORIES_METRIC_ID, "workout_distance"\]/,
-  "the general companion repair must not re-add Workout calories after a later user deletion",
-);
-assert.doesNotMatch(migration, /RETIRED_METRIC_IDS/);
+assert.match(migration, /RETIRED_METRIC_IDS/);
 assert.match(editor, /What counts as a workout/);
 assert.doesNotMatch(catalog, /templateId: "gym_completed"/);
 assert.doesNotMatch(catalog, /templateId: "gym_duration"/);
@@ -256,9 +398,10 @@ assert.match(
 );
 assert.match(
   log,
-  /\["workout_calories", workoutCalories\][\s\S]{0,80}\["exercise", workoutCalories\]/,
-  "a manually logged workout must restore both Workout calories and Active energy",
+  /\["exercise", workoutCalories\]/,
+  "a manually logged workout must save calories directly to Active energy",
 );
+assert.doesNotMatch(log, /\["workout_calories", workoutCalories\]/);
 assert.match(types, /gymTimerMode\?: GymTimerMode/);
 assert.match(
   gymScreen,

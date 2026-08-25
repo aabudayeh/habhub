@@ -1007,6 +1007,10 @@ class HabHubNativeModule(
                 configuration.leaderboardMetricIds.forEach { pushString(it) }
               },
             )
+            putDouble(
+              "leaderboardFontScale",
+              configuration.leaderboardFontScale.toDouble(),
+            )
           },
         )
       }

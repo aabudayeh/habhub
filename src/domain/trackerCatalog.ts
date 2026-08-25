@@ -410,7 +410,6 @@ export const TRACKER_PRESET_DESCRIPTIONS: Readonly<Record<string, string>> = {
   blood_pressure_systolic: "A paired systolic and diastolic blood-pressure reading. HabHub keeps both numbers together and lets you personalize the preferred range.",
   blood_pressure_diastolic: "The lower number in a blood-pressure reading. It is stored with the systolic value rather than shown as a separate tracker.",
   pulse: "Heart rate in beats per minute. Connected readings can be summarized for the day, with a personal preferred range if useful.",
-  workout_calories: "Active calories attributed specifically to workout sessions. Compatible connected-health sessions can provide this value.",
   workout_distance: "Distance covered during compatible workouts such as walking, running, or cycling, combined into a daily total.",
   sugar: "Total sugar across logged food, shown in grams. Use it for reference or set a personal daily limit.",
   saturated_fat: "Saturated fat across logged food, shown in grams. It can be observed or compared with a personal limit.",
