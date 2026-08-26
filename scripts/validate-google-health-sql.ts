@@ -12,6 +12,7 @@ const migrationPaths = [
   "supabase/migrations/202608240006_worker_and_challenge_guard_hardening.sql",
   "supabase/migrations/202608240007_google_health_group_projection.sql",
   "supabase/migrations/202608240011_google_health_cloud_protocol_gate.sql",
+  "supabase/migrations/202608260001_suppress_passive_walking_push.sql",
 ];
 
 function statements(source: string) {

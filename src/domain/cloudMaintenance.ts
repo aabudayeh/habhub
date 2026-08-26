@@ -112,10 +112,17 @@ export function cloudEntryNeedsItemDetail(
       entry.note?.startsWith("Synced from ") &&
       !entry.note.includes(" · "),
   );
+  const namedWorkoutDetail = Boolean(
+    entry.label &&
+      ["workout", "workout_duration", "workout_distance", "exercise"].includes(
+        entry.metricId,
+      ),
+  );
   return Boolean(
     entry.imageStoragePath ||
       (entry.note && !providerProvenanceOnly) ||
       entry.nutrition ||
+      namedWorkoutDetail ||
       (entry.label &&
         (entry.metricId === "food" ||
           entry.metricId === "workout" ||

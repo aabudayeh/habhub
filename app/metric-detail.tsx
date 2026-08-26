@@ -83,7 +83,12 @@ import {
 import { useApp } from "@/src/state/AppProvider";
 import { useCloudSyncActions } from "@/src/cloud/CloudSyncProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
-import { AppLanguage, MetricChartStyle, MetricDefinition } from "@/src/types";
+import {
+  AppLanguage,
+  GymSession,
+  MetricChartStyle,
+  MetricDefinition,
+} from "@/src/types";
 import { cycleForecast } from "@/src/domain/cycle";
 import { isVacationDate } from "@/src/domain/vacation";
 import {
@@ -168,6 +173,7 @@ export default function TrackerDetail() {
   const {
     state: persistedState,
     deleteEntry,
+    deleteGymSession,
     purgeGoogleHealthEntry,
     updateFoodEntryTime,
     deletePhoto,
@@ -529,6 +535,20 @@ export default function TrackerDetail() {
           text: "Delete",
           style: "destructive",
           onPress: () => void dismissEntry(entry),
+        },
+      ],
+    );
+  }
+  function promptGymSessionRemoval(session: GymSession) {
+    Alert.alert(
+      "Delete workout?",
+      `${session.name || "Workout"} will be removed from this tracker and the Workout page. Its linked duration and active-energy entries will be removed too.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: () => deleteGymSession(session.id),
         },
       ],
     );
@@ -2007,6 +2027,8 @@ export default function TrackerDetail() {
         </Text>
         {tracker.id === "food" ? (
           <Text style={[styles.entryEditHint, { color: colors.faint }]}>Double-tap a meal to edit its time</Text>
+        ) : gymSourceSessions.length ? (
+          <Text style={[styles.entryEditHint, { color: colors.faint }]}>Hold a saved workout to delete it</Text>
         ) : null}
       </View> : null}
       <View style={styles.entries}>
@@ -2047,6 +2069,10 @@ export default function TrackerDetail() {
               </Pressable>
             ) : null}
             {!collapsed ? (
+            <Pressable
+              delayLongPress={450}
+              onLongPress={() => promptGymSessionRemoval(session)}
+            >
             <Card style={styles.entry}>
               <View style={styles.entryTop}>
                 <View style={styles.grow}>
@@ -2060,9 +2086,23 @@ export default function TrackerDetail() {
                       : ` | ${formatClockTime(session.recordedAt, state.settings.timeFormat, locale)}`}
                   </Text>
                 </View>
-                <Text style={[styles.entryValue, { color: tracker.color }]}>
-                  {formatMetricValue(tracker, contribution)}
-                </Text>
+                <View style={styles.gymEntryActions}>
+                  <Text style={[styles.entryValue, { color: tracker.color }]}>
+                    {formatMetricValue(tracker, contribution)}
+                  </Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={t(`Delete ${session.name || "Workout"}`)}
+                    onPress={() => promptGymSessionRemoval(session)}
+                    hitSlop={6}
+                    style={[
+                      styles.gymEntryDelete,
+                      { borderColor: `${palette.red}66` },
+                    ]}
+                  >
+                    <Ionicons name="trash-outline" size={14} color={palette.red} />
+                  </Pressable>
+                </View>
               </View>
               <Text style={[styles.note, { color: colors.muted }]}>
                 {completedGymSets(session.exercises)} completed sets |{" "}
@@ -2073,6 +2113,7 @@ export default function TrackerDetail() {
                 {session.exercises.map((exercise) => localizeExerciseName(language, exercise)).join(", ")}
               </Text>
             </Card>
+            </Pressable>
             ) : null}
             </React.Fragment>
           );
@@ -5403,6 +5444,15 @@ const styles = StyleSheet.create({
   entryTitle: { fontSize: 11, fontWeight: "900" },
   time: { fontSize: 8, marginTop: 3 },
   entryValue: { fontSize: 12, fontWeight: "900" },
+  gymEntryActions: { alignItems: "flex-end", gap: 6 },
+  gymEntryDelete: {
+    width: 29,
+    height: 29,
+    borderWidth: 1,
+    borderRadius: 9,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   foodTimeBackdrop: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,.46)",

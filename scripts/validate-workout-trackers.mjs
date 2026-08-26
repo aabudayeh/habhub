@@ -882,6 +882,7 @@ const editor = fs.readFileSync("app/metric-editor.tsx", "utf8");
 const health = fs.readFileSync("src/domain/health.ts", "utf8");
 const log = fs.readFileSync("app/(tabs)/log.tsx", "utf8");
 const gymScreen = fs.readFileSync("app/(tabs)/gym.tsx", "utf8");
+const metricDetail = fs.readFileSync("app/metric-detail.tsx", "utf8");
 const types = fs.readFileSync("src/types.ts", "utf8");
 const workoutNotifications = fs.readFileSync(
   "src/notifications/workoutTimer.ts",
@@ -952,6 +953,62 @@ assert.match(
   "Complete all must stay hidden until the workout contains at least one planned set",
 );
 assert.match(gymScreen, /setExercises\(\(current\) => completeGymWorkout\(current\)\)/);
+assert.match(
+  metricDetail,
+  /function promptGymSessionRemoval[\s\S]{0,500}deleteGymSession\(session\.id\)/,
+  "Holding a derived gym entry must delete its source session rather than only one metric projection",
+);
+assert.match(
+  metricDetail,
+  /gymSourceSessions\.map[\s\S]{0,3200}onLongPress=\{\(\) => promptGymSessionRemoval\(session\)\}/,
+  "Saved gym sessions must expose deletion from the workout tracker detail page",
+);
+assert.match(
+  metricDetail,
+  /accessibilityRole="button"[\s\S]{0,220}accessibilityLabel=\{t\(`Delete \$\{session\.name \|\| "Workout"\}`\)\}[\s\S]{0,220}onPress=\{\(\) => promptGymSessionRemoval\(session\)\}/,
+  "Saved gym sessions must expose a keyboard-accessible delete button on web",
+);
+assert.match(
+  provider,
+  /case "deleteGymSession"[\s\S]{0,1400}gymSessions:[\s\S]{0,260}item\.id !== action\.sessionId[\s\S]{0,500}entries:[\s\S]{0,300}!entry\.id\.startsWith\(`gym-sync:\$\{action\.sessionId\}:`\)/,
+  "Deleting a gym session must remove both the Workout-page source and all linked tracker rows",
+);
+assert.match(gymScreen, />Logged today</);
+assert.match(
+  gymScreen,
+  /selectedSession \? "Logged workout" : "Plan & log workout"/,
+  "Workout must clearly distinguish a saved session from the current plan",
+);
+assert.match(
+  gymScreen,
+  /const workoutEditorTitle = selectedSession[\s\S]{0,180}"Logged exercises"[\s\S]{0,180}"Exercises to complete"/,
+  "Exercise hierarchy must state whether the user is reviewing logged work or preparing a workout",
+);
+assert.match(
+  gymScreen,
+  /label=\{selectedSession \? "Update workout" : "Save workout"\}/,
+  "The primary action must distinguish updating a logged workout from saving a new one",
+);
+assert.match(
+  gymScreen,
+  /const loadedSavedSessionId = useRef<string \| null>\(null\)/,
+  "Workout must retain the identity of the saved session currently being reviewed",
+);
+const externalDeletionReconciliation = gymScreen.slice(
+  gymScreen.indexOf("const loadedId = loadedSavedSessionId.current"),
+  gymScreen.indexOf("}, [hydrated, sessions]);") + "}, [hydrated, sessions]);".length,
+);
+assert.ok(externalDeletionReconciliation.length > 0);
+assert.match(
+  externalDeletionReconciliation,
+  /sessions\.some\(\(session\) => session\.id === loadedId\)[\s\S]{0,360}loadedSavedSessionId\.current = null[\s\S]{0,120}setSessionId\(uniqueId\("gym"\)\)/,
+  "An externally deleted saved workout must be detached before another save can recreate it",
+);
+assert.doesNotMatch(
+  externalDeletionReconciliation,
+  /seedNewSession|setWorkoutTimer|setSelectedPlanId|setExercises/,
+  "External deletion reconciliation must preserve the visible draft, timer, and selected template",
+);
 const exercisePicker = gymScreen.slice(
   gymScreen.indexOf('visible={pickerOpen}'),
   gymScreen.indexOf('visible={recapOpen}'),

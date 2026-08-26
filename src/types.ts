@@ -1130,6 +1130,8 @@ export type UserSettings = {
   seenChallengeCelebrationIdsByGroup?: Record<string, string[]>;
   /** Personal calendar range shown inside expanded Leaderboard member rows. */
   leaderboardGridRangeByGroup?: Record<string, HistoryRange>;
+  /** Personal per-group disclosure state for the Leaderboard date controls. */
+  leaderboardDateNavigatorCollapsedByGroup?: Record<string, boolean>;
   comparisonMetricIdsByGroup: Record<string, string[]>;
   comparisonPeriodByGroup: Record<
     string,

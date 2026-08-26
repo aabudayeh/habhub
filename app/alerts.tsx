@@ -1,10 +1,10 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 
 import { AppText as Text } from "@/src/components/AppText";
-import { useLocale } from "@/src/i18n";
+import { useLocale, useTranslation } from "@/src/i18n";
 import {
   Avatar,
   Card,
@@ -29,30 +29,75 @@ export default function Alerts() {
   const colors = useAppColors();
   const accent = useGroupAccent();
   const locale = useLocale();
+  const t = useTranslation();
   const [filter, setFilter] = useState<Filter>("all");
+  const initializedFeedKey = useRef<string | undefined>(undefined);
   const alertScope = scope === "group" ? "group" : "personal";
+  const feedKey = `${alertScope}:${state.group.id}`;
   const {
     events: groupFeedEvents,
+    loading: groupFeedLoading,
+    loaded: groupFeedLoaded,
+    loadedGroupId: groupFeedLoadedGroupId,
     markRead: markGroupFeedRead,
   } = useGroupNotificationEvents(
     state.group.id,
     state.settings.notifications.groupPreferencesByGroup?.[state.group.id],
   );
-  const alerts = useMemo(
+  const allAlerts = useMemo(
     () =>
       buildAlerts(state, groupFeedEvents).filter(
-        (alert) =>
-          alert.scope === alertScope &&
-          (filter === "all" ||
-            (filter !== "badges" && alert.category === filter)),
+        (alert) => alert.scope === alertScope,
       ),
     [
       alertScope,
-      filter,
       groupFeedEvents,
       state,
     ],
   );
+  const alerts = useMemo(
+    () =>
+      allAlerts.filter(
+        (alert) =>
+          filter === "all" ||
+          (filter !== "badges" && alert.category === filter),
+      ),
+    [allAlerts, filter],
+  );
+  const unreadCategories = useMemo(
+    () =>
+      new Set(
+        allAlerts
+          .filter((alert) => alert.unread === true)
+          .map((alert) => alert.category),
+      ),
+    [allAlerts],
+  );
+  useEffect(() => {
+    if (
+      initializedFeedKey.current === feedKey ||
+      (alertScope === "group" &&
+        (!groupFeedLoaded ||
+          groupFeedLoading ||
+          groupFeedLoadedGroupId !== state.group.id))
+    )
+      return;
+    initializedFeedKey.current = feedKey;
+    const latestUnread = allAlerts.find((alert) => alert.unread === true);
+    setFilter(latestUnread?.category ?? "all");
+  }, [
+    alertScope,
+    allAlerts,
+    feedKey,
+    groupFeedLoaded,
+    groupFeedLoadedGroupId,
+    groupFeedLoading,
+    state.group.id,
+  ]);
+  const chooseFilter = (next: Filter) => {
+    initializedFeedKey.current = feedKey;
+    setFilter(next);
+  };
   const unreadEventIds = useMemo(
     () =>
       groupFeedEvents
@@ -61,14 +106,19 @@ export default function Alerts() {
     [groupFeedEvents],
   );
   useEffect(() => {
-    if (alertScope !== "group" || unreadEventIds.length === 0) return;
-    // Opening the bell feed is the read boundary. A short delay lets the user
-    // see which cards were new before the private server cursors advance.
+    if (
+      alertScope !== "group" ||
+      (filter !== "all" && filter !== "challenge") ||
+      unreadEventIds.length === 0
+    )
+      return;
+    // Viewing All or Challenges is the read boundary for challenge events.
+    // Other tabs keep their orange category dot until the user visits them.
     const timer = setTimeout(() => {
       void markGroupFeedRead(unreadEventIds).catch(() => undefined);
     }, 600);
     return () => clearTimeout(timer);
-  }, [alertScope, markGroupFeedRead, unreadEventIds]);
+  }, [alertScope, filter, markGroupFeedRead, unreadEventIds]);
   const badges = useMemo(
     () =>
       buildBadges(state)
@@ -141,29 +191,38 @@ export default function Alerts() {
         <Chip
           label="All"
           selected={filter === "all"}
-          onPress={() => setFilter("all")}
+          onPress={() => chooseFilter("all")}
         />
-        <Chip
-          label="Leaderboard"
-          selected={filter === "lead"}
-          onPress={() => setFilter("lead")}
-        />
-        <Chip
-          label="Messages"
-          selected={filter === "message"}
-          onPress={() => setFilter("message")}
-        />
-        <Chip
-          label="Challenges"
-          translate={false}
-          selected={filter === "challenge"}
-          onPress={() => setFilter("challenge")}
-        />
+        <View style={styles.filterChip}>
+          <Chip
+            label="Leaderboard"
+            selected={filter === "lead"}
+            onPress={() => chooseFilter("lead")}
+          />
+          {unreadCategories.has("lead") ? <View style={styles.filterUnreadDot} /> : null}
+        </View>
+        <View style={styles.filterChip}>
+          <Chip
+            label="Messages"
+            selected={filter === "message"}
+            onPress={() => chooseFilter("message")}
+          />
+          {unreadCategories.has("message") ? <View style={styles.filterUnreadDot} /> : null}
+        </View>
+        <View style={styles.filterChip}>
+          <Chip
+            label="Challenges"
+            translate={false}
+            selected={filter === "challenge"}
+            onPress={() => chooseFilter("challenge")}
+          />
+          {unreadCategories.has("challenge") ? <View style={styles.filterUnreadDot} /> : null}
+        </View>
         <Chip
           label="Badge cabinet"
           icon="ribbon-outline"
           selected={filter === "badges"}
-          onPress={() => setFilter("badges")}
+          onPress={() => chooseFilter("badges")}
         />
       </View>
 
@@ -238,15 +297,35 @@ export default function Alerts() {
               return (
                 <Pressable
                   key={alert.id}
-                  onPress={() =>
-                    alert.category === "message"
-                      ? router.push("/chat" as never)
-                      : alert.category === "challenge"
-                        ? router.navigate("/group" as never)
-                      : alert.memberId
-                        ? router.push(`/member/${alert.memberId}` as never)
-                        : undefined
-                  }
+                  onPress={() => {
+                    if (alert.category === "message") {
+                      router.push("/chat" as never);
+                      return;
+                    }
+                    if (alert.category === "challenge") {
+                      router.navigate({
+                        pathname: "/group",
+                        params: {
+                          ...(alert.challengeId
+                            ? { challengeId: alert.challengeId }
+                            : {}),
+                          ...(alert.challengeOccurrenceDate
+                            ? {
+                                challengeOccurrenceDate:
+                                  alert.challengeOccurrenceDate,
+                              }
+                            : {}),
+                          ...(alert.groupId ? { groupId: alert.groupId } : {}),
+                          // A fresh nonce lets the same alert refocus its card
+                          // after the user has browsed to another period/page.
+                          challengeFocusAt: String(Date.now()),
+                        },
+                      } as never);
+                      return;
+                    }
+                    if (alert.memberId)
+                      router.push(`/member/${alert.memberId}` as never);
+                  }}
                 >
                   <Card
                     style={[styles.alert, { borderLeftColor: alert.color }]}
@@ -292,9 +371,9 @@ export default function Alerts() {
                       size={17}
                       color={colors.faint}
                     />
-                    {alert.category === "challenge" && !alert.readAt ? (
+                    {alert.unread === true ? (
                       <View
-                        accessibilityLabel="Challenge started"
+                        accessibilityLabel={t("Unread notification")}
                         style={[styles.unreadDot, { borderColor: colors.card }]}
                       />
                     ) : null}
@@ -325,6 +404,16 @@ const styles = StyleSheet.create({
   headerActions: { flexDirection: "row", gap: 6 },
   joinRequest: { marginBottom: 12 },
   filters: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 4 },
+  filterChip: { position: "relative" },
+  filterUnreadDot: {
+    position: "absolute",
+    top: -2,
+    right: -2,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#F06A45",
+  },
   link: { fontSize: 10, fontWeight: "900" },
   badges: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   badge: {

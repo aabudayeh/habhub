@@ -9,10 +9,7 @@ import {
   canUseCachedSharedRaw,
   projectionSurvivesSharedMetricPrivacyFences,
 } from "../src/domain/sharedMetricPrivacy.ts";
-import {
-  sharedLeaderboardLogEntries,
-  SHARED_DAILY_SUMMARY_LABEL,
-} from "../src/domain/sharedLeaderboardLogs.ts";
+import { sharedLeaderboardLogEntries } from "../src/domain/sharedLeaderboardLogs.ts";
 import { accountOwnedCollections } from "../src/domain/accountCollections.ts";
 import { scopeCachedGroupActivity } from "../src/domain/groupActivityCacheScope.ts";
 import { memberDisplayName } from "../src/domain/members.ts";
@@ -50,6 +47,22 @@ const explicitProjectionMigration = read(
 );
 const cacheFenceMigration = read(
   "supabase/migrations/202608130006_metric_privacy_cache_fences.sql",
+);
+const passiveWalkingPushMigration = read(
+  "supabase/migrations/202608260001_suppress_passive_walking_push.sql",
+);
+const passiveWalkingLeadFunction = passiveWalkingPushMigration.slice(
+  passiveWalkingPushMigration.indexOf(
+    "create or replace function public.enqueue_group_lead_push_event",
+  ),
+);
+const compactedImportedDetailFence = cloud.slice(
+  cloud.indexOf("const compactedImportedDetailFences"),
+  cloud.indexOf("const oldEntries:", cloud.indexOf("const compactedImportedDetailFences")),
+);
+assert.ok(
+  passiveWalkingLeadFunction.startsWith("create or replace function"),
+  "the passive walking migration must replace the lead-event RPC",
 );
 
 assert.match(cloud, /remoteStatusCount < expectedStatusCount/);
@@ -380,7 +393,7 @@ assert.equal(
 );
 assert.equal(
   selectedSharedLogs.at(-1)?.label,
-  SHARED_DAILY_SUMMARY_LABEL,
+  "Shared daily total",
   "a compact-only sensor total should retain the explicit summary fallback",
 );
 assert.deepEqual(
@@ -509,7 +522,99 @@ assert.match(cloud, /groupVisibleMetricValue/);
 assert.match(cloud, /goal_target: statusOnly \? null : target/);
 assert.match(cloud, /coarseSharedProgress\(rawGoalProgress, 300\)/);
 assert.match(cloud, /privacy_projection_version: 2/);
-assert.match(cloud, /if \(entry\.visibility !== "group"\) return/);
+assert.match(
+  cloud,
+  /entry\.visibility !== "group" \|\|[\s\S]{0,100}isPassiveCalculatedWalkingEntry\(entry\)/,
+  "passive calculated walking rows must not drive client-side lead alerts",
+);
+assert.match(
+  cloud,
+  /const newSharedEntries[\s\S]{0,350}!isPassiveCalculatedWalkingEntry\(entry\)/,
+  "passive calculated walking rows must not trigger a pending metric-push drain",
+);
+assert.match(
+  cloud,
+  /await Promise\.allSettled\(\[[\s\S]{0,160}dispatchCommittedEntryNotifications\(\)[\s\S]{0,120}dispatchCommittedLeadNotifications\(\)/,
+  "post-commit push transport failures must not turn a durable group save into a retrying Bad Request",
+);
+assert.match(
+  cloud,
+  /cloudEntryProjectionDiffers\([\s\S]{0,180}idBySlug\.get\(entry\.metricId\)/,
+  "existing item rows must self-heal missing labels, nutrition, notes, values, and media even without a newer provider timestamp",
+);
+assert.match(
+  cloud,
+  /function cloudTimestampEqual[\s\S]{0,500}leftMs === rightMs/,
+  "equivalent Z and +00:00 timestamps must not reopen an endless detailed-entry upsert loop",
+);
+assert.match(
+  cloud,
+  /!cloudTimestampEqual\(remote\.recorded_at, entry\.recordedAt\)/,
+);
+assert.match(
+  cloud,
+  /!cloudTimestampEqual\(remote\.source_updated_at, entry\.sourceUpdatedAt\)/,
+);
+assert.match(
+  cloud,
+  /Preserve previously RLS-authorized exact rows[\s\S]{0,900}entry\.userId === state\.currentUserId \|\|[\s\S]{0,80}entry\.visibility === "group"[\s\S]{0,220}entry\.userId !== state\.currentUserId/,
+  "a group-visible item-detail cache must survive omission until a tombstone or privacy fence revokes it",
+);
+assert.match(
+  cloud,
+  /list_owned_detailed_imported_metric_entry_ids/,
+  "a cold process must bootstrap its previously published detailed imported row ids",
+);
+assert.match(
+  compactedImportedDetailFence,
+  /visibility: "private"[\s\S]{0,220}nutrition: undefined[\s\S]{0,220}imageStoragePath: undefined/,
+  "removing the final imported note, nutrition payload, or photo must privacy-fence its previously shared raw projection",
+);
+assert.match(
+  cloud,
+  /if \(!entry \|\| entry\.source !== "imported"\) return \[\];/,
+  "a bounded local cache omission must never be inferred as a remote entry deletion or privacy edit",
+);
+assert.match(
+  passiveWalkingPushMigration,
+  /create or replace function public\.list_owned_detailed_imported_metric_entry_ids[\s\S]*security invoker[\s\S]*entry\.user_id = \(select auth\.uid\(\)\)[\s\S]*entry\.visibility = 'group'/,
+  "the detailed-entry bootstrap must return only the caller's own currently shared imported projections",
+);
+assert.match(
+  passiveWalkingPushMigration,
+  /revoke all on function public\.list_owned_detailed_imported_metric_entry_ids\(uuid\)[\s\S]*from public, anon;[\s\S]*grant execute[\s\S]*to authenticated/,
+  "the projection bootstrap RPC must be authenticated-only",
+);
+assert.match(
+  passiveWalkingPushMigration,
+  /begin[\s\S]{0,500}new\.source = 'calculated'[\s\S]{0,100}new\.label = 'Estimated unrecorded walking from steps'[\s\S]{0,80}return new;[\s\S]{0,300}select definition\.group_id/,
+  "the database metric emitter must suppress passive calculated walking updates before its metric lookup",
+);
+assert.match(
+  passiveWalkingLeadFunction,
+  /v_source = 'calculated'[\s\S]{0,100}v_label = 'Estimated unrecorded walking from steps'[\s\S]{0,80}return null/,
+  "the server lead-event RPC must also reject passive calculated walking updates",
+);
+assert.match(
+  passiveWalkingLeadFunction,
+  /'Lead changed'[\s\S]{0,180}'New ' \|\| v_metric_name/,
+  "the passive filter migration must preserve identity/value-free lead-alert copy",
+);
+assert.doesNotMatch(
+  passiveWalkingLeadFunction,
+  /v_member_name/,
+  "the passive filter migration must not reintroduce member identity into lead-alert copy",
+);
+assert.match(
+  passiveWalkingPushMigration,
+  /event\.dispatched_at is null[\s\S]{0,220}event\.data ->> 'entryId' = entry\.client_generated_id/,
+  "only pending passive metric alerts should be cleaned up",
+);
+assert.match(
+  passiveWalkingPushMigration,
+  /event\.category = 'lead'[\s\S]{0,500}entry\.source = 'calculated'[\s\S]{0,350}entry\.id::text \|\| ':%'/,
+  "only pending lead alerts linked to a passive calculated entry should be cleaned up",
+);
 assert.match(
   cloud,
   /entry\.userId !== source\.currentUserId \|\|[\s\S]*entry\.visibility === "group"/,
@@ -818,6 +923,11 @@ assert.match(
   provider,
   /startupGroupCacheHydrationRef[\s\S]{0,1400}accountBoundaryReadyUserId !== auth\.user\.id[\s\S]{0,500}hydrateCachedGroupActivity/,
   "cold open must start scoped cache hydration as soon as the account boundary is ready",
+);
+assert.match(
+  provider,
+  /const shellsPromise = readCloudResponsively[\s\S]{0,350}const cachePromise = hydrateCachedGroupActivity[\s\S]{0,300}await Promise\.all\(\[shellsPromise, cachePromise\]\)[\s\S]{0,350}loadCloudWorkspace\(\s*stateRef\.current/,
+  "a workspace refresh must merge its RLS snapshot from the hydrated durable cache, not an immutable pre-cache state",
 );
 assert.match(
   provider,

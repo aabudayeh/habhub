@@ -19,6 +19,7 @@ import {
   compareChallengeValues,
   isChallengeMetric,
   mergedLeaderboardCardOrder,
+  openChallengeGoalProgress,
   validChallengeDate,
   validChallengePeriod,
   validateGroupChallenge,
@@ -43,6 +44,9 @@ assert.equal(validChallengePeriod("2026-08-22", "2027-08-22"), true);
 assert.equal(validChallengePeriod("2026-08-22", "2027-08-24"), false);
 assert.equal(challengeReminderIntervalDays("2026-08-22", "2026-08-28"), 1);
 assert.equal(challengeReminderIntervalDays("2026-08-22", "2026-09-21"), 2);
+assert.equal(openChallengeGoalProgress(0.72, 0.4), 0.72);
+assert.equal(openChallengeGoalProgress(1.4, 0.4), 1);
+assert.equal(openChallengeGoalProgress(undefined, 0.4), 0.4);
 assert.equal(
   validChallengeRecurrence(
     {
@@ -612,6 +616,54 @@ assert.match(
 );
 assert.match(groupScreen, /expandGroupChallengeOccurrences/);
 assert.match(groupScreen, /groupChallengeResponseDeadline\(challenge\) >= dateKey\(\)/);
+assert.match(groupScreen, /routeParams\.challengeId/);
+assert.match(groupScreen, /routeParams\.groupId/);
+assert.match(
+  groupScreen,
+  /state\.groups\.some\(\(group\) => group\.id === requestedChallengeGroupId\)[\s\S]{0,650}cloud\.switchGroup\(requestedChallengeGroupId\)/,
+  "a challenge push must switch to its locally authorized group before resolving the card",
+);
+assert.match(
+  groupScreen,
+  /requestedChallengeGroupId &&[\s\S]{0,100}state\.group\.id !== requestedChallengeGroupId/,
+  "challenge focus must wait until the requested group is active",
+);
+assert.match(
+  groupScreen,
+  /setPeriod\("custom"\)[\s\S]{0,100}setAnchor\(focusDate\)/,
+  "challenge deep links must select the notification occurrence's date",
+);
+assert.match(
+  groupScreen,
+  /setPendingChallengeCardId\(cardId\)[\s\S]{0,120}armChallengeHighlight\(cardId\)/,
+  "challenge deep links must select the containing page and highlight the exact card",
+);
+assert.match(
+  groupScreen,
+  /!scrollToChallengeCard\(cardId\)[\s\S]{0,220}handledChallengeFocus\.current = focusKey/,
+  "a challenge focus must only be acknowledged after its card can be scrolled into view",
+);
+assert.ok(
+  (groupScreen.match(/completePendingChallengeFocus\(/g) ?? []).length >= 5,
+  "cold challenge cards must retry focus from body, section, card, and pager layout boundaries",
+);
+assert.match(
+  groupScreen,
+  /pendingChallengeFocusKey\.current\)[\s\S]{0,160}completePendingChallengeFocus\(pendingChallengeCardId\)/,
+  "paged challenge focus must remain pending until the requested page/card is laid out",
+);
+assert.match(groupScreen, /styles\.challengeHighlightRing/);
+assert.match(
+  groupScreen,
+  /leaderboardDateNavigatorCollapsedByGroup[\s\S]{0,180}\[state\.group\.id\]: dateNavigatorOpen/,
+  "Leaderboard date disclosure must persist per group",
+);
+assert.match(
+  progress,
+  /target === undefined[\s\S]{0,300}openChallengeGoalProgress/,
+  "open challenges must use each member's tracker-goal bar instead of a leader percentage",
+);
+assert.match(groupScreen, /openCompetition[\s\S]{0,180}"Your goal"[\s\S]{0,80}"Their goal"/);
 assert.match(groupScreen, /<ChallengeCompletionCelebration/);
 assert.match(groupScreen, /const CHALLENGE_CELEBRATION_SCAN_LIMIT = 500/);
 assert.match(

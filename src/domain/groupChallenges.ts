@@ -10,6 +10,7 @@ import {
   groupChallengeEndDate,
   challengePeriodDates,
   groupChallengeSourceId,
+  openChallengeGoalProgress,
 } from "@/src/domain/groupChallengeRules";
 import { scheduleAppliesOnDate } from "@/src/domain/schedule";
 import { periodMetricResult } from "@/src/domain/leaderboard";
@@ -38,6 +39,7 @@ export {
   groupChallengeSourceId,
   isChallengeMetric,
   mergedLeaderboardCardOrder,
+  openChallengeGoalProgress,
   validChallengeDate,
   validChallengePeriod,
   validChallengeRecurrence,
@@ -185,7 +187,16 @@ export function groupChallengeProgress(
       if (result.mode === "exact" && result.visibleDays > 0) {
         const value = result.total;
         const outcome = target === undefined
-          ? { progress: 0, complete: false }
+          ? {
+              // An open competition has no challenge percentage. Its bar
+              // remains meaningful by reflecting this member's own tracker
+              // goal, while the numeric value/rank decides who is ahead.
+              progress: openChallengeGoalProgress(
+                result.averageDisplayProgress,
+                result.averageGoalProgress,
+              ),
+              complete: false,
+            }
           : challengeValueOutcome(value, target, metric.rankingDirection);
         return {
           member,
@@ -213,7 +224,6 @@ export function groupChallengeProgress(
     const best = Math.max(0, ...exact.map((row) => row.value));
     const final = groupChallengeEndDate(challenge) < dateKey();
     for (const row of exact) {
-      row.progress = best > 0 ? Math.max(0, row.value / best) : 0;
       row.complete = final && row.value === best;
     }
   }

@@ -133,6 +133,20 @@ assert.match(alertDomain, /groupPreferences\?\.leadChanges/);
 assert.match(alertDomain, /allowedMetricIds\.includes\(metric\.id\)/);
 assert.match(alertDomain, /allowedMemberIds\.includes\(current\.member\.id\)/);
 assert.match(alertDomain, /if \(!changed\) return \[\]/);
+assert.match(alertDomain, /challengeId: event\.challengeId/);
+assert.match(alertDomain, /challengeOccurrenceDate: event\.occurrenceDate/);
+assert.match(alertDomain, /groupId: event\.groupId/);
+assert.match(alertDomain, /unread: !event\.readAt/);
+assert.match(alerts, /latestUnread = allAlerts\.find/);
+assert.match(alerts, /setFilter\(latestUnread\?\.category \?\? "all"\)/);
+assert.match(alerts, /unreadCategories\.has\("challenge"\)/);
+assert.match(
+  alerts,
+  /pathname: "\/group"[\s\S]{0,300}challengeId: alert\.challengeId[\s\S]{0,300}challengeOccurrenceDate/,
+  "an in-app challenge alert must preserve the exact challenge and occurrence route",
+);
+assert.match(alerts, /groupId: alert\.groupId/);
+assert.match(groupNotificationHook, /loaded,[\s\S]{0,80}markRead/);
 
 const transitionFenceStart = auth.indexOf(
   "const beginIdentityTransitionCleanup",
@@ -717,6 +731,17 @@ assert.match(group, /groupFeedUnreadCount/);
 assert.match(group, /router\.navigate\("\/alerts\?scope=group"/);
 assert.match(alerts, /markGroupFeedRead\(unreadEventIds\)/);
 assert.match(alerts, /filter === "challenge"/);
+assert.match(
+  alerts,
+  /const feedKey = `\$\{alertScope\}:\$\{state\.group\.id\}`/,
+  "the newest-unread tab initializer must be scoped to both alert feed and active group",
+);
+assert.match(
+  alerts,
+  /groupFeedLoadedGroupId !== state\.group\.id/,
+  "a reused Alerts route must wait for the active group's notification feed before selecting its tab",
+);
+assert.match(groupNotificationHook, /loadedGroupId/);
 
 console.log(
   "Push validation passed: native and Web Push account lifecycle, PWA service worker, staged canonical outbox, private challenge feed, cursor drain, and per-target retry checkpoints.",

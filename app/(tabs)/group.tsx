@@ -103,6 +103,7 @@ import {
   groupChallengeSourceId,
   isChallengeMetric,
   mergedLeaderboardCardOrder,
+  validChallengeDate,
 } from "@/src/domain/groupChallenges";
 import {
   chunkIntoPages,
@@ -289,6 +290,11 @@ function LeaderboardScreen() {
   const routeParams = useLocalSearchParams<{
     focusGroupTodo?: string | string[];
     todoFocusAt?: string | string[];
+    challengeId?: string | string[];
+    challengeOccurrenceDate?: string | string[];
+    challengeEvent?: string | string[];
+    challengeFocusAt?: string | string[];
+    groupId?: string | string[];
   }>();
   const requestedGroupTodoId = Array.isArray(routeParams.focusGroupTodo)
     ? routeParams.focusGroupTodo[0]
@@ -296,6 +302,23 @@ function LeaderboardScreen() {
   const requestedGroupTodoAt = Array.isArray(routeParams.todoFocusAt)
     ? routeParams.todoFocusAt[0]
     : routeParams.todoFocusAt;
+  const requestedChallengeId = Array.isArray(routeParams.challengeId)
+    ? routeParams.challengeId[0]
+    : routeParams.challengeId;
+  const requestedChallengeOccurrenceDate = Array.isArray(
+    routeParams.challengeOccurrenceDate,
+  )
+    ? routeParams.challengeOccurrenceDate[0]
+    : routeParams.challengeOccurrenceDate;
+  const requestedChallengeEvent = Array.isArray(routeParams.challengeEvent)
+    ? routeParams.challengeEvent[0]
+    : routeParams.challengeEvent;
+  const requestedChallengeFocusAt = Array.isArray(routeParams.challengeFocusAt)
+    ? routeParams.challengeFocusAt[0]
+    : routeParams.challengeFocusAt;
+  const requestedChallengeGroupId = Array.isArray(routeParams.groupId)
+    ? routeParams.groupId[0]
+    : routeParams.groupId;
   const screenIsFocused = useIsFocused();
   const tutorialSandbox = useTutorialSandboxActive();
   const tutorial = useTutorial();
@@ -308,7 +331,10 @@ function LeaderboardScreen() {
   const t = useTranslation();
   const [period, setPeriod] = useState<LeaderboardPeriod>("today");
   const [anchor, setAnchor] = useState(dateKey());
-  const [dateNavigatorOpen, setDateNavigatorOpen] = useState(true);
+  const dateNavigatorOpen =
+    state.settings.leaderboardDateNavigatorCollapsedByGroup?.[
+      state.group.id
+    ] !== true;
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const leaderboardUsesPages =
@@ -317,6 +343,8 @@ function LeaderboardScreen() {
   const [showHistoryOptions, setShowHistoryOptions] = useState(false);
   const [challengeEditorOpen, setChallengeEditorOpen] = useState(false);
   const [pendingChallengeCardId, setPendingChallengeCardId] = useState<string>();
+  const [highlightedChallengeCardId, setHighlightedChallengeCardId] =
+    useState<string>();
   const [editingChallenge, setEditingChallenge] = useState<GroupChallenge>();
   const [expandedGridRows, setExpandedGridRows] = useState<string[]>([]);
   const [screenFocused, setScreenFocused] = useState(false);
@@ -330,6 +358,15 @@ function LeaderboardScreen() {
   const [draggingCardId, setDraggingCardId] = useState<string | null>(null);
   const screenScrollRef = useRef<ScrollView>(null);
   const groupTodoY = useRef<number | undefined>(undefined);
+  const leaderboardBodyY = useRef<number | undefined>(undefined);
+  const rankingSectionY = useRef<number | undefined>(undefined);
+  const challengeCardYById = useRef(new Map<string, number>());
+  const handledChallengeFocus = useRef<string | undefined>(undefined);
+  const pendingChallengeFocusKey = useRef<string | undefined>(undefined);
+  const pendingChallengeCardIdRef = useRef<string | undefined>(undefined);
+  const attemptedChallengeGroupSwitch = useRef<string | undefined>(undefined);
+  const challengeHighlightTimer =
+    useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const rankingStateRef = useRef(state);
   rankingStateRef.current = state;
   useFocusEffect(
@@ -711,6 +748,160 @@ function LeaderboardScreen() {
       return orderedCardIds.indexOf(left) - orderedCardIds.indexOf(right);
     });
   }, [editing, orderedCardIds, pinnedIds]);
+  const scrollToChallengeCard = useCallback((cardId: string) => {
+    const sectionY = rankingSectionY.current;
+    const cardY = challengeCardYById.current.get(cardId);
+    const bodyY = leaderboardBodyY.current;
+    if (bodyY === undefined || sectionY === undefined || cardY === undefined)
+      return false;
+    const scrollView = screenScrollRef.current;
+    if (!scrollView) return false;
+    scrollView.scrollTo({
+      y: Math.max(0, bodyY + sectionY + cardY - 12),
+      animated: true,
+    });
+    return true;
+  }, []);
+  const armChallengeHighlight = useCallback((cardId: string) => {
+    setHighlightedChallengeCardId(cardId);
+    if (challengeHighlightTimer.current)
+      clearTimeout(challengeHighlightTimer.current);
+    challengeHighlightTimer.current = setTimeout(() => {
+      setHighlightedChallengeCardId((current) =>
+        current === cardId ? undefined : current,
+      );
+    }, 4_500);
+  }, []);
+  const completePendingChallengeFocus = useCallback(
+    (cardId: string) => {
+      const focusKey = pendingChallengeFocusKey.current;
+      if (
+        !focusKey ||
+        pendingChallengeCardIdRef.current !== cardId ||
+        !scrollToChallengeCard(cardId)
+      )
+        return false;
+      handledChallengeFocus.current = focusKey;
+      pendingChallengeFocusKey.current = undefined;
+      pendingChallengeCardIdRef.current = undefined;
+      setPendingChallengeCardId((current) =>
+        current === cardId ? undefined : current,
+      );
+      // Start a full visible pulse only after the target was actually reached.
+      armChallengeHighlight(cardId);
+      return true;
+    },
+    [armChallengeHighlight, scrollToChallengeCard],
+  );
+  useEffect(
+    () => () => {
+      if (challengeHighlightTimer.current)
+        clearTimeout(challengeHighlightTimer.current);
+    },
+    [],
+  );
+  useEffect(() => {
+    if (
+      !requestedChallengeId ||
+      !requestedChallengeGroupId ||
+      requestedChallengeGroupId === state.group.id ||
+      !state.groups.some((group) => group.id === requestedChallengeGroupId)
+    )
+      return;
+    const attemptKey = [
+      requestedChallengeGroupId,
+      requestedChallengeId,
+      requestedChallengeEvent,
+      requestedChallengeFocusAt,
+    ].join("|");
+    if (attemptedChallengeGroupSwitch.current === attemptKey) return;
+    attemptedChallengeGroupSwitch.current = attemptKey;
+    // Pushes can arrive for any locally authorized group. Activate its cached
+    // shell first; CloudSyncProvider hydrates that group in the background,
+    // after which the challenge/date/card focus effect below can resolve it.
+    void cloud.switchGroup(requestedChallengeGroupId).catch(() => undefined);
+  }, [
+    cloud,
+    requestedChallengeEvent,
+    requestedChallengeFocusAt,
+    requestedChallengeGroupId,
+    requestedChallengeId,
+    state.group.id,
+    state.groups,
+  ]);
+  useEffect(() => {
+    if (
+      !requestedChallengeId ||
+      (requestedChallengeGroupId &&
+        state.group.id !== requestedChallengeGroupId)
+    )
+      return;
+    const sourceChallenge = challengeCloud.challenges.find(
+      (challenge) =>
+        challenge.id === requestedChallengeId ||
+        groupChallengeSourceId(challenge) === requestedChallengeId,
+    );
+    if (!sourceChallenge) return;
+    const focusDate = validChallengeDate(
+      requestedChallengeOccurrenceDate ?? "",
+    )
+      ? requestedChallengeOccurrenceDate!
+      : sourceChallenge.localDate;
+    // A challenge alert can point outside the currently selected date range.
+    // Select its exact occurrence first; the next render can then resolve the
+    // generated recurring card and its page without guessing an index.
+    if (period !== "custom" || anchor !== focusDate) {
+      setPeriod("custom");
+      setAnchor(focusDate);
+      setCalendarOpen(false);
+      return;
+    }
+    const occurrence =
+      visibleChallenges.find(
+        (challenge) =>
+          groupChallengeSourceId(challenge) === requestedChallengeId &&
+          challenge.localDate === focusDate,
+      ) ??
+      visibleChallenges.find(
+        (challenge) => challenge.id === requestedChallengeId,
+      );
+    if (!occurrence) return;
+    const focusKey = [
+      requestedChallengeId,
+      focusDate,
+      requestedChallengeEvent,
+      requestedChallengeFocusAt,
+    ].join("|");
+    if (handledChallengeFocus.current === focusKey) return;
+    const cardId = challengeCardId(occurrence.id);
+    if (
+      pendingChallengeFocusKey.current !== focusKey ||
+      pendingChallengeCardIdRef.current !== cardId
+    ) {
+      pendingChallengeFocusKey.current = focusKey;
+      pendingChallengeCardIdRef.current = cardId;
+      setPendingChallengeCardId(cardId);
+      armChallengeHighlight(cardId);
+    }
+    const scrollTimer = setTimeout(() => {
+      completePendingChallengeFocus(cardId);
+    }, leaderboardUsesPages ? 320 : 80);
+    return () => clearTimeout(scrollTimer);
+  }, [
+    anchor,
+    armChallengeHighlight,
+    challengeCloud.challenges,
+    completePendingChallengeFocus,
+    leaderboardUsesPages,
+    period,
+    requestedChallengeEvent,
+    requestedChallengeFocusAt,
+    requestedChallengeGroupId,
+    requestedChallengeId,
+    requestedChallengeOccurrenceDate,
+    state.group.id,
+    visibleChallenges,
+  ]);
   const leaderboardPageSize = useMemo(() => {
     const fittingCapacity = leaderboardPageCapacity(
       viewportHeight,
@@ -884,7 +1075,12 @@ function LeaderboardScreen() {
   }
   function toggleDateNavigator() {
     if (dateNavigatorOpen) setCalendarOpen(false);
-    setDateNavigatorOpen((open) => !open);
+    updateSettings({
+      leaderboardDateNavigatorCollapsedByGroup: {
+        ...(state.settings.leaderboardDateNavigatorCollapsedByGroup ?? {}),
+        [state.group.id]: dateNavigatorOpen,
+      },
+    });
   }
   function shiftRange(direction: -1 | 1) {
     const next = shiftedPeriodAnchor(period, anchor, direction);
@@ -1186,7 +1382,17 @@ function LeaderboardScreen() {
           )
         }
       />
-      <View {...pageSwipeResponder.panHandlers}>
+      <View
+        {...pageSwipeResponder.panHandlers}
+        onLayout={(event) => {
+          leaderboardBodyY.current = event.nativeEvent.layout.y;
+          const cardId = pendingChallengeCardIdRef.current;
+          if (cardId)
+            requestAnimationFrame(() => {
+              completePendingChallengeFocus(cardId);
+            });
+        }}
+      >
         <PeriodChoiceBar
           period={period}
           onChange={choosePeriod}
@@ -1229,6 +1435,16 @@ function LeaderboardScreen() {
           }}
         />
       ) : null}
+      <View
+        onLayout={(event) => {
+          rankingSectionY.current = event.nativeEvent.layout.y;
+          const cardId = pendingChallengeCardIdRef.current;
+          if (cardId)
+            requestAnimationFrame(() => {
+              completePendingChallengeFocus(cardId);
+            });
+        }}
+      >
       {(() => {
         const rankingCards = displayedSelected.map((id, cardIndex) => {
         const challengeId = challengeIdFromCard(id);
@@ -1244,7 +1460,20 @@ function LeaderboardScreen() {
           const editable =
             manageable && groupChallengeResponseDeadline(challenge) >= dateKey();
           return (
-            <ReorderItem key={id} active={draggingCardId === id}>
+            <ReorderItem
+              key={id}
+              active={draggingCardId === id}
+              onLayout={(event) => {
+                challengeCardYById.current.set(
+                  id,
+                  event.nativeEvent.layout.y,
+                );
+                if (pendingChallengeCardIdRef.current === id)
+                  requestAnimationFrame(() => {
+                    completePendingChallengeFocus(id);
+                  });
+              }}
+            >
               <EditableRankingCard
                 editing={editing}
                 index={cardIndex}
@@ -1273,6 +1502,7 @@ function LeaderboardScreen() {
                   colors={colors}
                   accent={accent}
                   editing={editing}
+                  highlighted={highlightedChallengeCardId === id}
                   pinned={pinnedIds.includes(id)}
                   onLongPress={() => setEditing(true)}
                   onRespond={(response) =>
@@ -1632,12 +1862,22 @@ function LeaderboardScreen() {
             webNaturalHeight
             requestedPage={requestedLeaderboardPage}
             onPageChange={(page) => {
-              if (page === requestedLeaderboardPage)
+              if (page !== requestedLeaderboardPage || !pendingChallengeCardId)
+                return;
+              if (pendingChallengeFocusKey.current)
+                setTimeout(
+                  () => completePendingChallengeFocus(pendingChallengeCardId),
+                  80,
+                );
+              else
+                // Locally created challenges already selected their page and
+                // do not carry an external focus request to acknowledge.
                 setPendingChallengeCardId(undefined);
             }}
           />
         );
       })()}
+      </View>
       {state.settings.groupTodosBelowTrackers !== false ? (
         <GroupTodoLeaderboardSection
           editing={editing}
@@ -1972,6 +2212,7 @@ function ChallengeRankingCard({
   colors,
   accent,
   editing,
+  highlighted,
   pinned,
   onLongPress,
   onRespond,
@@ -1982,11 +2223,37 @@ function ChallengeRankingCard({
   colors: ReturnType<typeof useAppColors>;
   accent: string;
   editing: boolean;
+  highlighted: boolean;
   pinned: boolean;
   onLongPress: () => void;
   onRespond: (response: "accepted" | "declined") => Promise<void>;
 }) {
   const [responding, setResponding] = useState<"accepted" | "declined">();
+  const highlightPulse = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!highlighted) {
+      highlightPulse.stopAnimation();
+      highlightPulse.setValue(0);
+      return;
+    }
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(highlightPulse, {
+          toValue: 1,
+          duration: 450,
+          useNativeDriver: true,
+        }),
+        Animated.timing(highlightPulse, {
+          toValue: 0,
+          duration: 450,
+          useNativeDriver: true,
+        }),
+      ]),
+      { iterations: 5 },
+    );
+    animation.start();
+    return () => animation.stop();
+  }, [highlightPulse, highlighted]);
   const rows = useMemo(
     () => (metric ? groupChallengeProgress(state, challenge, metric) : []),
     [challenge, metric, state],
@@ -2032,6 +2299,28 @@ function ChallengeRankingCard({
   }
   return (
     <Card style={[styles.ranking, styles.challengeCard]}>
+      {highlighted ? (
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.challengeHighlightRing,
+            {
+              opacity: highlightPulse.interpolate({
+                inputRange: [0, 1],
+                outputRange: [0.62, 1],
+              }),
+              transform: [
+                {
+                  scale: highlightPulse.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [1, 0.994],
+                  }),
+                },
+              ],
+            },
+          ]}
+        />
+      ) : null}
       <Pressable disabled={editing} onLongPress={onLongPress} style={styles.challengeHead}>
         <View style={[styles.challengeMark, { backgroundColor: `${accent}1F` }]}>
           <Ionicons name="trophy" size={18} color={accent} />
@@ -2125,7 +2414,13 @@ function ChallengeRankingCard({
             <View style={styles.challengeProgress}>
               <View style={styles.challengeProgressLabel}>
                 <Text style={[styles.challengePercent, { color: row.mode === "exact" ? colors.ink : colors.faint }]}>
-                  {row.mode === "exact" ? `${Math.round(row.progress * 100)}%` : "—"}
+                  {row.mode !== "exact"
+                    ? "—"
+                    : openCompetition
+                      ? row.member.id === state.currentUserId
+                        ? "Your goal"
+                        : "Their goal"
+                      : `${Math.round(row.progress * 100)}%`}
                 </Text>
                 {row.complete ? <Ionicons name="checkmark-circle" size={14} color={palette.lime} /> : null}
               </View>
@@ -2335,7 +2630,14 @@ const styles = StyleSheet.create({
   historyBulkButton: { flex: 1, minHeight: 42, borderWidth: 1, borderRadius: 13, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
   historyBulkText: { fontSize: 9, fontWeight: "900" },
   ranking: { padding: 7 },
-  challengeCard: { overflow: "hidden" },
+  challengeCard: { overflow: "hidden", position: "relative" },
+  challengeHighlightRing: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 20,
+    borderWidth: 3,
+    borderRadius: 18,
+    borderColor: palette.amber,
+  },
   challengeHead: { flexDirection: "row", alignItems: "center", gap: 9, padding: 5, paddingBottom: 8 },
   challengeMark: { width: 38, height: 38, borderRadius: 13, alignItems: "center", justifyContent: "center" },
   challengeHeadingCopy: { flex: 1, minWidth: 0 },

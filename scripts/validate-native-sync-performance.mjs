@@ -460,6 +460,28 @@ assert.equal(
   true,
   "named workouts must remain available in the shared item log",
 );
+assert.equal(
+  cloudEntryNeedsItemDetail({
+    metricId: "workout_duration",
+    source: "imported",
+    sourceOrigin: "com.sec.android.app.shealth",
+    label: "Walking",
+    note: "Synced from Samsung Health",
+  }),
+  true,
+  "named workout sidecars must retain their per-session shared-log detail",
+);
+assert.equal(
+  cloudEntryNeedsItemDetail({
+    metricId: "exercise",
+    source: "imported",
+    sourceOrigin: "com.sec.android.app.shealth",
+    label: "Walking",
+    note: "Synced from Samsung Health",
+  }),
+  true,
+  "workout-scoped active energy must retain its per-session shared-log detail",
+);
 
 const member = {
   id: "owner",

@@ -21,6 +21,11 @@ export type PaceAlert = {
   memberId?: string;
   scope: "personal" | "group";
   readAt?: string;
+  /** Explicit unread state; absence means this alert has no durable read cursor. */
+  unread?: boolean;
+  challengeId?: string;
+  challengeOccurrenceDate?: string;
+  groupId?: string;
 };
 export function buildAlerts(
   state: AppState,
@@ -103,6 +108,13 @@ export function buildAlerts(
       const groupConversation =
         conversation === "group" ||
         conversation === `group:${state.group.id}`;
+      const readAt =
+        notifications.chatReadAtByConversation?.[conversation] ??
+        (groupConversation
+          ? notifications.chatReadAtByConversation?.[
+              `group:${state.group.id}`
+            ]
+          : undefined);
       return {
         id: `message-${message.id}`,
         category: achievement ? "achievement" : "message",
@@ -126,6 +138,10 @@ export function buildAlerts(
         createdAt: message.createdAt,
         memberId: sender?.id,
         scope: groupConversation || achievement ? "group" : "personal",
+        unread:
+          !achievement &&
+          message.senderId !== state.currentUserId &&
+          (!readAt || message.createdAt > readAt),
       };
     });
   const challengeEvents = groupNotificationEvents.map((event): PaceAlert => {
@@ -180,6 +196,10 @@ export function buildAlerts(
       memberId: actor?.id,
       scope: "group",
       readAt: event.readAt,
+      unread: !event.readAt,
+      challengeId: event.challengeId,
+      challengeOccurrenceDate: event.occurrenceDate,
+      groupId: event.groupId,
     };
   });
   return [...leads, ...messages, ...challengeEvents].sort((a, b) =>

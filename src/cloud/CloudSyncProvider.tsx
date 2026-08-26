@@ -6227,21 +6227,30 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       const hydrate = async () => {
         await yieldCloudMaintenanceToUi();
         if (stateRef.current.group.id !== groupId) return base;
-        // Start the authoritative request immediately. Reading SQLite must not
-        // sit in front of the network request; the cache and server race in
-        // parallel, while each still commits as one complete snapshot.
-        const workspacePromise = readCloudResponsively((signal) =>
+        // Start the membership/profile shell request immediately while the
+        // durable item-detail cache hydrates in parallel. Feed that hydrated
+        // state into the subsequent RLS activity snapshot; otherwise the
+        // immutable pre-cache `base` caused the completed workspace response
+        // to erase peer meals/workouts that the range response did not repeat.
+        const shellsPromise = readCloudResponsively((signal) =>
+          loadCloudGroupShells(signal),
+        );
+        const cachePromise = hydrateCachedGroupActivity(
+          groupId,
+          base.currentUserId,
+        );
+        const [shells] = await Promise.all([shellsPromise, cachePromise]);
+        if (stateRef.current.group.id !== groupId) return base;
+        const workspace = await readCloudResponsively((signal) =>
           loadCloudWorkspace(
-            base,
+            stateRef.current,
             groupId,
             (metadata) => recordActivityMetadata(groupId, metadata),
             undefined,
-            undefined,
+            shells,
             signal,
           ),
         );
-        await hydrateCachedGroupActivity(groupId, base.currentUserId);
-        const workspace = await workspacePromise;
         await yieldCloudMaintenanceToUi();
         return workspace;
       };

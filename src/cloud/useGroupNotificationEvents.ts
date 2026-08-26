@@ -42,6 +42,8 @@ export function useGroupNotificationEvents(
   const auth = useAuth();
   const [events, setEvents] = useState<GroupNotificationEvent[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [loadedGroupId, setLoadedGroupId] = useState<string>();
   const [error, setError] = useState<string>();
   const requestRef = useRef<Promise<void> | null>(null);
   const groupIdRef = useRef(groupId);
@@ -51,6 +53,8 @@ export function useGroupNotificationEvents(
     if (!isCloudGroupId(groupId) || !supabase) {
       setEvents([]);
       setError(undefined);
+      setLoaded(true);
+      setLoadedGroupId(groupId);
       return Promise.resolve();
     }
     if (requestRef.current) return requestRef.current;
@@ -68,7 +72,11 @@ export function useGroupNotificationEvents(
       })
       .finally(() => {
         if (requestRef.current === request) requestRef.current = null;
-        if (groupIdRef.current === groupId) setLoading(false);
+        if (groupIdRef.current === groupId) {
+          setLoading(false);
+          setLoaded(true);
+          setLoadedGroupId(groupId);
+        }
       });
     requestRef.current = request;
     return request;
@@ -77,6 +85,8 @@ export function useGroupNotificationEvents(
   useEffect(() => {
     requestRef.current = null;
     setEvents([]);
+    setLoaded(false);
+    setLoadedGroupId(undefined);
     void refresh();
   }, [refresh]);
 
@@ -131,6 +141,8 @@ export function useGroupNotificationEvents(
     events: visibleEvents,
     unreadCount,
     loading,
+    loaded,
+    loadedGroupId,
     error,
     refresh,
     markRead,

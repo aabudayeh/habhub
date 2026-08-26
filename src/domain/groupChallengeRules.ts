@@ -177,6 +177,15 @@ export function challengeWinnerIds(
     .map((row) => row.member.id);
 }
 
+/** Goal-relative bar for open competitions; ranking still uses raw values. */
+export function openChallengeGoalProgress(
+  displayProgress?: number,
+  normalizedProgress?: number,
+) {
+  const progress = displayProgress ?? normalizedProgress ?? 0;
+  return Number.isFinite(progress) ? Math.max(0, Math.min(1, progress)) : 0;
+}
+
 export function challengeCardId(id: string) {
   return `${CHALLENGE_CARD_PREFIX}${id}`;
 }

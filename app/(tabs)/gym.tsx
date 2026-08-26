@@ -591,6 +591,7 @@ function GymScreen() {
     allowProgression: boolean;
   } | null>(null);
   const initializedDate = useRef<string | null>(null);
+  const loadedSavedSessionId = useRef<string | null>(null);
   const [workoutDraftReady, setWorkoutDraftReady] = useState(false);
   useEffect(() => {
     if (!workoutDraftReady) return;
@@ -1153,6 +1154,11 @@ function GymScreen() {
     exercises.every((exercise) =>
       exercise.sets.every((set) => set.completed),
     );
+  const workoutEditorTitle = selectedSession
+    ? "Logged exercises"
+    : completedSets > 0
+      ? "Workout in progress"
+      : "Exercises to complete";
   const volume = trainingVolumeKg(exercises);
   const loggedRestSeconds = totalGymRestSeconds(exercises);
   const recordedWorkoutMinutes =
@@ -1293,6 +1299,7 @@ function GymScreen() {
   );
 
   const loadSavedSession = useCallback((session: GymSession) => {
+    loadedSavedSessionId.current = session.id;
     setWorkoutTimer(null);
     setSessionId(session.id);
     setSessionName(session.name);
@@ -1317,6 +1324,7 @@ function GymScreen() {
   }, []);
 
   const seedNewSession = useCallback(() => {
+    loadedSavedSessionId.current = null;
     setWorkoutTimer(null);
     setSessionId(uniqueId("gym"));
     setDuration("");
@@ -1384,6 +1392,18 @@ function GymScreen() {
     }
     seedNewSession();
   }, [loadSavedSession, localDate, seedNewSession, sessionsForDate]);
+
+  useEffect(() => {
+    const loadedId = loadedSavedSessionId.current;
+    if (!hydrated || !loadedId) return;
+    if (sessions.some((session) => session.id === loadedId)) return;
+    // A cloud pull or tracker-detail deletion removed the saved source while
+    // this screen still had it open. Preserve the visible draft, active timer,
+    // and chosen template, but detach the deleted identity so Save cannot
+    // silently recreate the removed session.
+    loadedSavedSessionId.current = null;
+    setSessionId(uniqueId("gym"));
+  }, [hydrated, sessions]);
 
   useEffect(() => {
     if (!hydrated || workoutDraftReady) return;
@@ -2845,57 +2865,57 @@ function GymScreen() {
                   <Ionicons name="alarm-outline" size={15} color={accent} />
                 </Pressable>
               ) : null}
-              <TutorialTarget id="workout-modes">
-              <View
-                accessibilityRole="tablist"
-                style={[
-                  styles.modeSegment,
-                  { backgroundColor: colors.card, borderColor: colors.border },
-                ]}
-              >
-                {(["workout", "progress", "performance"] as const).map(
-                  (item) => {
-                    const selected = mode === item;
-                    const label =
-                      item === "workout"
-                        ? "Workout"
-                        : item === "progress"
-                          ? "Progress"
-                          : "Performance";
-                    return (
-                      <Pressable
-                        key={item}
-                        accessibilityLabel={t(label)}
-                        accessibilityRole="tab"
-                        accessibilityState={{ selected }}
-                        onPress={() => selectMode(item)}
-                        style={({ pressed }) => [
-                          styles.modeChoice,
-                          selected && { backgroundColor: accent },
-                          pressed && styles.modeChoicePressed,
-                        ]}
-                      >
-                        <Text
-                          style={[
-                            styles.modeChoiceText,
-                            {
-                              color: selected
-                                ? readableTextColor(accent)
-                                : colors.muted,
-                            },
-                          ]}
-                        >
-                          {label}
-                        </Text>
-                      </Pressable>
-                    );
-                  },
-                )}
-              </View>
-              </TutorialTarget>
             </View>
           }
         />
+        <TutorialTarget id="workout-modes">
+        <View
+          accessibilityRole="tablist"
+          style={[
+            styles.modeSegment,
+            { backgroundColor: colors.card, borderColor: colors.border },
+          ]}
+        >
+          {(["workout", "progress", "performance"] as const).map(
+            (item) => {
+              const selected = mode === item;
+              const label =
+                item === "workout"
+                  ? "Workout"
+                  : item === "progress"
+                    ? "Progress"
+                    : "Performance";
+              return (
+                <Pressable
+                  key={item}
+                  accessibilityLabel={t(label)}
+                  accessibilityRole="tab"
+                  accessibilityState={{ selected }}
+                  onPress={() => selectMode(item)}
+                  style={({ pressed }) => [
+                    styles.modeChoice,
+                    selected && { backgroundColor: accent },
+                    pressed && styles.modeChoicePressed,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.modeChoiceText,
+                      {
+                        color: selected
+                          ? readableTextColor(accent)
+                          : colors.muted,
+                      },
+                    ]}
+                  >
+                    {label}
+                  </Text>
+                </Pressable>
+              );
+            },
+          )}
+        </View>
+        </TutorialTarget>
 
         {mode === "workout" ? (
           <>
@@ -2929,10 +2949,10 @@ function GymScreen() {
                   </View>
                   <Text style={[styles.meta, { color: colors.muted }]}>
                     {selectedSession
-                      ? `${sessionsForDate.length} saved workout${sessionsForDate.length === 1 ? "" : "s"} · editing this session`
+                      ? `${sessionsForDate.length} saved workout${sessionsForDate.length === 1 ? "" : "s"} · reviewing a logged session`
                       : sessionsForDate.length
-                        ? `New workout · ${sessionsForDate.length} already saved today`
-                        : "New workout · seeded from your active template"}
+                        ? `Plan the next workout · ${sessionsForDate.length} already logged today`
+                        : "Plan today's workout · seeded from your active template"}
                   </Text>
                 </Pressable>
                 <Pressable
@@ -2989,11 +3009,37 @@ function GymScreen() {
                   ]}
                 >
                   <View style={styles.sessionPickerHeader}>
-                    <View style={styles.grow}>
-                      <Text style={[styles.label, { color: colors.muted }]}>Workouts this day</Text>
+                    <View style={styles.loggedTodayHeading}>
+                      <View
+                        style={[
+                          styles.loggedTodayIcon,
+                          { backgroundColor: `${palette.lime}1F` },
+                        ]}
+                      >
+                        <Ionicons
+                          name="checkmark-circle"
+                          size={16}
+                          color={palette.lime}
+                        />
+                      </View>
+                      <View style={styles.grow}>
+                      <View style={styles.loggedTodayTitleRow}>
+                        <Text style={[styles.loggedTodayTitle, { color: colors.ink }]}>Logged today</Text>
+                        <View
+                          style={[
+                            styles.loggedCount,
+                            { backgroundColor: `${palette.lime}1F` },
+                          ]}
+                        >
+                          <Text style={[styles.loggedCountText, { color: palette.lime }]}>
+                            {sessionsForDate.length}
+                          </Text>
+                        </View>
+                      </View>
                       <Text style={[styles.sessionChoiceMeta, { color: colors.muted }]}>
                         {`${Math.round(savedDayTotals.durationMinutes * 10) / 10} min · ~${Math.round(savedDayTotals.calories)} active kcal total`}
                       </Text>
+                      </View>
                     </View>
                     <Pressable
                       accessibilityLabel="Start another workout"
@@ -3045,16 +3091,24 @@ function GymScreen() {
                             },
                           ]}
                         >
-                          <Text
-                            translate={false}
-                            numberOfLines={1}
-                            style={[
-                              styles.sessionChoiceName,
-                              { color: colors.ink },
-                            ]}
-                          >
-                            {session.name}
-                          </Text>
+                          <View style={styles.sessionChoiceTop}>
+                            <Ionicons
+                              name="checkmark-circle"
+                              size={13}
+                              color={palette.lime}
+                            />
+                            <Text
+                              translate={false}
+                              numberOfLines={1}
+                              style={[
+                                styles.sessionChoiceName,
+                                { color: colors.ink },
+                              ]}
+                            >
+                              {session.name}
+                            </Text>
+                            <Text style={[styles.sessionChoiceStatus, { color: palette.lime }]}>Logged</Text>
+                          </View>
                           <Text
                             style={[
                               styles.sessionChoiceMeta,
@@ -3069,10 +3123,76 @@ function GymScreen() {
                   </ScrollView>
                 </View>
               ) : null}
+              <View
+                style={[
+                  styles.workoutEditorHeading,
+                  {
+                    borderColor: selectedSession ? `${palette.lime}66` : colors.border,
+                    backgroundColor: selectedSession
+                      ? `${palette.lime}0D`
+                      : colors.card,
+                  },
+                ]}
+              >
+                <View
+                  style={[
+                    styles.workoutEditorIcon,
+                    {
+                      backgroundColor: selectedSession
+                        ? `${palette.lime}1F`
+                        : colors.primarySoft,
+                    },
+                  ]}
+                >
+                  <Ionicons
+                    name={selectedSession ? "checkmark-done" : "barbell-outline"}
+                    size={17}
+                    color={selectedSession ? palette.lime : accent}
+                  />
+                </View>
+                <View style={styles.grow}>
+                  <Text style={[styles.workoutEditorTitle, { color: colors.ink }]}>
+                    {selectedSession ? "Logged workout" : "Plan & log workout"}
+                  </Text>
+                  <Text style={[styles.meta, { color: colors.muted }]}>
+                    {selectedSession
+                      ? "Review or update this saved session. Start a new workout to log another."
+                      : exercises.length
+                        ? "Complete the sets below, then save the workout."
+                        : "Choose a template or add exercises to begin."}
+                  </Text>
+                </View>
+                <View
+                  style={[
+                    styles.workoutEditorStatus,
+                    {
+                      borderColor: selectedSession ? `${palette.lime}66` : colors.border,
+                      backgroundColor: selectedSession
+                        ? `${palette.lime}14`
+                        : "transparent",
+                    },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.workoutEditorStatusText,
+                      { color: selectedSession ? palette.lime : colors.muted },
+                    ]}
+                  >
+                    {selectedSession ? "Saved" : "Draft"}
+                  </Text>
+                </View>
+              </View>
               <TutorialTarget id="workout-session-details">
               <Pressable
                 onPress={() => setSessionDetailsOpen((value) => !value)}
-                style={[styles.detailsToggle, { borderColor: colors.border }]}
+                style={[
+                  styles.detailsToggle,
+                  {
+                    borderColor: selectedSession ? `${palette.lime}55` : colors.border,
+                    backgroundColor: selectedSession ? `${palette.lime}08` : "transparent",
+                  },
+                ]}
               >
                 <View style={styles.grow}>
                   <Text style={[styles.exerciseName, { color: colors.ink }]}>
@@ -3403,7 +3523,7 @@ function GymScreen() {
             ) : null}
 
             <SectionHeader
-              title="Exercises"
+              title={workoutEditorTitle}
               action={
                 exerciseEditMode ? (
                   <Pressable
@@ -3950,7 +4070,7 @@ function GymScreen() {
                   ) : null}
                   <View style={styles.actionCell}>
                     <Button
-                      label="Save workout"
+                      label={selectedSession ? "Update workout" : "Save workout"}
                       icon="checkmark"
                       size="small"
                       onPress={saveDay}
@@ -4705,7 +4825,9 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   modeSegment: {
+    width: "100%",
     height: 34,
+    marginBottom: 10,
     borderWidth: 1,
     borderRadius: 11,
     padding: 2,
@@ -4713,7 +4835,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   modeChoice: {
-    minWidth: 50,
+    flex: 1,
     height: 28,
     borderRadius: 8,
     paddingHorizontal: 4,
@@ -4746,6 +4868,35 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     gap: 8,
   },
+  loggedTodayHeading: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+  loggedTodayIcon: {
+    width: 29,
+    height: 29,
+    borderRadius: 9,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  loggedTodayTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  loggedTodayTitle: { fontSize: 10, fontWeight: "900" },
+  loggedCount: {
+    minWidth: 19,
+    height: 18,
+    borderRadius: 9,
+    paddingHorizontal: 5,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  loggedCountText: { fontSize: 7, fontWeight: "900" },
   newSessionButton: {
     minHeight: 29,
     borderWidth: 1,
@@ -4767,8 +4918,41 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     justifyContent: "center",
   },
-  sessionChoiceName: { fontSize: 9, fontWeight: "900" },
+  sessionChoiceTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  sessionChoiceName: { flex: 1, minWidth: 0, fontSize: 9, fontWeight: "900" },
+  sessionChoiceStatus: { marginLeft: "auto", fontSize: 6, fontWeight: "900" },
   sessionChoiceMeta: { fontSize: 7, lineHeight: 10, marginTop: 2 },
+  workoutEditorHeading: {
+    minHeight: 55,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  workoutEditorIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  workoutEditorTitle: { fontSize: 11, fontWeight: "900" },
+  workoutEditorStatus: {
+    minHeight: 23,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 7,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  workoutEditorStatusText: { fontSize: 7, fontWeight: "900" },
   templateMenu: { borderWidth: 1, borderRadius: 11, overflow: "hidden" },
   templateToggle: {
     minHeight: 44,

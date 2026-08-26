@@ -1,5 +1,5 @@
 import { PropsWithChildren, useLayoutEffect } from "react";
-import { StyleProp, ViewStyle } from "react-native";
+import { LayoutChangeEvent, StyleProp, ViewStyle } from "react-native";
 import Animated, {
   Easing,
   useAnimatedStyle,
@@ -13,11 +13,13 @@ export function ReorderItem({
   active = false,
   shift = 0,
   settling = false,
+  onLayout,
 }: PropsWithChildren<{
   style?: StyleProp<ViewStyle>;
   active?: boolean;
   shift?: number;
   settling?: boolean;
+  onLayout?: (event: LayoutChangeEvent) => void;
 }>) {
   const offset = useSharedValue(shift);
   useLayoutEffect(() => {
@@ -36,6 +38,7 @@ export function ReorderItem({
   );
   return (
     <Animated.View
+      onLayout={onLayout}
       style={[
         {
           width: "100%",

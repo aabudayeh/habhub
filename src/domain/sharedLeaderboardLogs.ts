@@ -1,7 +1,7 @@
 import type { DailyMetricStatus, MetricEntry } from "../types";
 
 export const SHARED_DAILY_SUMMARY_LABEL =
-  "Daily summary · individual log details have not synced yet";
+  "Shared daily total";
 
 type SharedLeaderboardLogInput = {
   currentUserId: string;

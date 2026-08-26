@@ -21,6 +21,7 @@ import {
 } from "@/src/domain/metrics";
 import { leaderboardRows } from "@/src/domain/leaderboard";
 import { confirmedCloudPublishRevision } from "@/src/domain/cloudConflict";
+import { stableValueHash } from "@/src/domain/cloudHash";
 import {
   cloudEntryNeedsItemDetail,
   cloudSourceTimestampIsNewer,
@@ -95,6 +96,12 @@ const historicalSummaryAuditByGroup = new Map<
   string,
   HistoricalSummaryAuditCache
 >();
+// The relational table stores only imported rows that carry item-level detail.
+// Remember the server-confirmed projection for this process so a later edit
+// that removes the last note/photo/nutrition field can be privacy-fenced
+// without scanning a user's full sensor history on every sync. A cold process
+// bootstraps this small set once through an indexed server function.
+const publishedDetailedImportedEntryIdsByGroup = new Map<string, Set<string>>();
 const COLORS = [
   "#0FBFB8",
   "#FF5750",
@@ -153,6 +160,26 @@ type CloudActivityEntryRow = {
   image_path?: string | null;
   account_revision?: number | string | null;
 };
+
+type ExistingCloudActivityEntryRow = Pick<
+  CloudActivityEntryRow,
+  | "client_generated_id"
+  | "metric_id"
+  | "value"
+  | "local_date"
+  | "recorded_at"
+  | "visibility"
+  | "source"
+  | "label"
+  | "note"
+  | "nutrition"
+  | "submetric_values"
+  | "source_provider"
+  | "source_record_id"
+  | "source_origin"
+  | "source_updated_at"
+  | "image_path"
+>;
 
 type CloudActivityStatusRow = {
   metric_id: string;
@@ -224,6 +251,61 @@ function batches<T>(items: T[], size = 500) {
   for (let index = 0; index < items.length; index += size)
     result.push(items.slice(index, index + size));
   return result;
+}
+
+function cloudJsonEqual(left: unknown, right: unknown) {
+  return stableValueHash(left ?? null) === stableValueHash(right ?? null);
+}
+
+function cloudTimestampEqual(
+  left: string | null | undefined,
+  right: string | null | undefined,
+) {
+  const normalizedLeft = left ?? null;
+  const normalizedRight = right ?? null;
+  if (normalizedLeft === normalizedRight) return true;
+  if (!normalizedLeft || !normalizedRight) return false;
+  const leftMs = Date.parse(normalizedLeft);
+  const rightMs = Date.parse(normalizedRight);
+  return Number.isFinite(leftMs) && Number.isFinite(rightMs) && leftMs === rightMs;
+}
+
+/**
+ * Compare the complete item-level projection, not only a provider timestamp.
+ * Manual rows commonly have no sourceUpdatedAt, and older releases could
+ * create a relational row before meal/workout detail or an attachment was
+ * available. Treating that existing id as an acknowledgement forever left the
+ * leaderboard with a compact daily total and no way to self-heal its details.
+ */
+function cloudEntryProjectionDiffers(
+  entry: MetricEntry,
+  remote: ExistingCloudActivityEntryRow,
+  cloudMetricId: string | undefined,
+) {
+  return (
+    remote.metric_id !== cloudMetricId ||
+    !cloudJsonEqual(remote.value, entry.value) ||
+    remote.local_date !== entry.localDate ||
+    !cloudTimestampEqual(remote.recorded_at, entry.recordedAt) ||
+    remote.visibility !== entry.visibility ||
+    remote.source !== entry.source ||
+    (remote.label ?? null) !== (entry.label ?? null) ||
+    (remote.note ?? null) !== (entry.note ?? null) ||
+    !cloudJsonEqual(remote.nutrition, entry.nutrition) ||
+    !cloudJsonEqual(remote.submetric_values, entry.submetricValues) ||
+    (remote.source_provider ?? null) !== (entry.sourceProvider ?? null) ||
+    (remote.source_record_id ?? null) !== (entry.sourceRecordId ?? null) ||
+    (remote.source_origin ?? null) !== (entry.sourceOrigin ?? null) ||
+    !cloudTimestampEqual(remote.source_updated_at, entry.sourceUpdatedAt) ||
+    (remote.image_path ?? null) !== (entry.imageStoragePath ?? null)
+  );
+}
+
+function isPassiveCalculatedWalkingEntry(entry: MetricEntry) {
+  return (
+    entry.source === "calculated" &&
+    entry.label === "Estimated unrecorded walking from steps"
+  );
 }
 
 /** Supabase REST responses are capped by the project's max_rows setting. */
@@ -1186,10 +1268,11 @@ export async function loadCloudGroupActivity(
   );
   const groupMetricSlugs = new Set(slugById.values());
   const groupMemberIds = new Set(state.group.members.map((member) => member.id));
-  // A range response is a delta, not proof that an absent cached row was
-  // deleted. Seed the result with the matching local cache so an overlapping
-  // realtime/manual refresh cannot temporarily erase a friend's leaderboard
-  // value while related entry/status writes are still settling.
+  // A range response is not proof that an absent item-detail row was deleted.
+  // Preserve previously RLS-authorized exact rows until a precise tombstone or
+  // privacy fence removes them. The shared-log selector additionally requires
+  // this refresh to succeed and checks the current daily visibility before it
+  // renders any peer detail, so this durability does not weaken revocation.
   const entriesById = new Map(
     applySharedMetricPrivacyFences(
       state.entries,
@@ -1201,11 +1284,10 @@ export async function loadCloudGroupActivity(
           !deletedEntryKeys.has(metricEntryKey(entry.userId, entry.id)) &&
           groupMetricSlugs.has(entry.metricId) &&
           groupMemberIds.has(entry.userId) &&
-          (!authoritativeSnapshot ||
-            entry.userId === state.currentUserId) &&
-          (!authoritativeSnapshot ||
-            entry.localDate >=
-              (snapshot?.entries_since_date ?? requestedEntrySince)),
+          (entry.userId === state.currentUserId ||
+            entry.visibility === "group") &&
+          (entry.userId !== state.currentUserId ||
+            entry.localDate >= requestedEntrySince),
       )
       .map((entry) => [metricEntryKey(entry.userId, entry.id), entry]),
   );
@@ -2639,6 +2721,30 @@ export async function pushCloudWorkspace(
     today,
     dateRangeEnding(today, 2).reverse(),
   );
+  const publishedDetailCacheKey = `${state.currentUserId}:${state.group.id}`;
+  let publishedDetailedImportedEntryIds =
+    publishedDetailedImportedEntryIdsByGroup.get(publishedDetailCacheKey);
+  if (!publishedDetailedImportedEntryIds) {
+    const publishedDetailRows = await client.rpc(
+      "list_owned_detailed_imported_metric_entry_ids",
+      { p_group_id: state.group.id },
+    );
+    if (publishedDetailRows.error) throw publishedDetailRows.error;
+    publishedDetailedImportedEntryIds = new Set(
+      (
+        (publishedDetailRows.data ?? []) as {
+          client_generated_id?: string | null;
+        }[]
+      )
+        .map((row) => row.client_generated_id)
+        .filter((id): id is string => Boolean(id)),
+    );
+    publishedDetailedImportedEntryIdsByGroup.set(
+      publishedDetailCacheKey,
+      publishedDetailedImportedEntryIds,
+    );
+  }
+  const ownedEntriesById = new Map(ownedEntries.map((entry) => [entry.id, entry]));
   const fastRecentStatuses = buildCloudDailyStatusRows(
     state,
     idBySlug,
@@ -2681,29 +2787,53 @@ export async function pushCloudWorkspace(
   const rawOwnedEntries = detailedOwnedEntries.filter(
     (entry) => entry.visibility === "group",
   );
-  const oldEntries: {
-    client_generated_id: string;
-    metric_id: string;
-    source_updated_at?: string | null;
-    image_path?: string | null;
-    visibility: MetricEntry["visibility"];
-    source?: MetricEntry["source"] | null;
-    label?: string | null;
-    note?: string | null;
-    nutrition?: MetricEntry["nutrition"] | null;
-  }[] = [];
+  // A row that previously carried a meal/workout note, nutrition, or photo can
+  // stop qualifying for raw sharing while the underlying imported measurement
+  // remains valid. Fence that old relational projection as private and clear
+  // its former item detail; absence from the bounded local cache still never
+  // implies deletion or a privacy change.
+  const compactedImportedDetailFences = [
+    ...publishedDetailedImportedEntryIds,
+  ].flatMap((entryId): MetricEntry[] => {
+    const entry = ownedEntriesById.get(entryId);
+    if (!entry || entry.source !== "imported") return [];
+    const metric =
+      state.metrics.find((candidate) => candidate.id === entry.metricId) ??
+      state.group.metricConfiguration?.find(
+        (candidate) => candidate.id === entry.metricId,
+      );
+    if (cloudEntryNeedsItemDetail(entry, metric?.category)) return [];
+    return [
+      {
+        ...entry,
+        visibility: "private",
+        label: undefined,
+        note: undefined,
+        nutrition: undefined,
+        submetricValues: undefined,
+        imageUri: undefined,
+        imageStoragePath: undefined,
+      },
+    ];
+  });
+  const oldEntries: ExistingCloudActivityEntryRow[] = [];
   // Diff only stable ids that can actually be uploaded. The previous routine
   // scanned every historical metric row on every color/name/log change, which
   // left Cloud pending for minutes on accounts with long Health Connect
   // histories. Compact sensor data is represented by daily status rows and
   // therefore never belongs in this raw-entry lookup.
-  const candidateIds = detailedOwnedEntries.map((entry) => entry.id);
+  const candidateIds = [
+    ...new Set([
+      ...detailedOwnedEntries.map((entry) => entry.id),
+      ...compactedImportedDetailFences.map((entry) => entry.id),
+    ]),
+  ];
   for (const ids of batches(candidateIds, 250)) {
     if (!ids.length) continue;
     const result = await client
       .from("metric_entries")
       .select(
-        "client_generated_id, metric_id, source_updated_at, image_path, visibility, source, label, note, nutrition",
+        "client_generated_id, metric_id, value, local_date, recorded_at, visibility, source, label, note, nutrition, submetric_values, source_provider, source_record_id, source_origin, source_updated_at, image_path",
       )
       .eq("user_id", state.currentUserId)
       .in("client_generated_id", ids);
@@ -2717,6 +2847,9 @@ export async function pushCloudWorkspace(
   const rawCandidateById = new Map(
     rawOwnedEntries.map((entry) => [entry.id, entry]),
   );
+  compactedImportedDetailFences.forEach((entry) =>
+    rawCandidateById.set(entry.id, entry),
+  );
   ownedEntries.forEach((entry) => {
     const remote = oldEntriesById.get(entry.id);
     if (remote && remote.visibility !== entry.visibility)
@@ -2726,7 +2859,11 @@ export async function pushCloudWorkspace(
     const remote = oldEntriesById.get(entry.id);
     return (
       !remote ||
-      remote.visibility !== entry.visibility ||
+      cloudEntryProjectionDiffers(
+        entry,
+        remote,
+        idBySlug.get(entry.metricId),
+      ) ||
       cloudSourceTimestampIsNewer(
         entry.sourceUpdatedAt,
         remote.source_updated_at,
@@ -2773,6 +2910,7 @@ export async function pushCloudWorkspace(
     (entry) =>
       !oldEntriesById.has(entry.id) &&
       entry.visibility !== "private" &&
+      !isPassiveCalculatedWalkingEntry(entry) &&
       Date.now() - new Date(entry.recordedAt).getTime() <=
         METRIC_PUSH_FRESHNESS_MS,
   );
@@ -2804,7 +2942,11 @@ export async function pushCloudWorkspace(
   changedSharedEntries.forEach((entry) => {
     // Goal-status-only rows may drive the compact status card, but their raw
     // values must never decide an exact lead-change or winner notification.
-    if (entry.visibility !== "group") return;
+    if (
+      entry.visibility !== "group" ||
+      isPassiveCalculatedWalkingEntry(entry)
+    )
+      return;
     const entries = leadEntriesByMetric.get(entry.metricId);
     if (entries) entries.push(entry);
     else leadEntriesByMetric.set(entry.metricId, [entry]);
@@ -3237,7 +3379,12 @@ export async function pushCloudWorkspace(
   // activity checkpoint are all durable. A stale publish that loses its CAS
   // race therefore cannot announce data that the group never received.
   await yieldMaintenance();
-  await Promise.all([
+  // Push is an arrival convenience after the shared rows and checkpoint are
+  // already committed. A temporary/non-2xx gateway response must not relabel
+  // that durable group save as `Group data will retry: Bad Request` or cause
+  // the same entry/history projection to be uploaded again. The durable push
+  // outbox is retried independently on startup/reconnect.
+  await Promise.allSettled([
     dispatchCommittedEntryNotifications(),
     dispatchCommittedLeadNotifications(),
   ]);
@@ -3544,6 +3691,21 @@ export async function pushCloudWorkspace(
     p_aliases: aliasRows,
   });
   if (aliasProjection.error) throw aliasProjection.error;
+  const nextPublishedDetailedImportedEntryIds = new Set(
+    [...publishedDetailedImportedEntryIds].filter(
+      (entryId) =>
+        !remoteEntryIdsToDelete.includes(entryId) &&
+        !ownedEntriesById.has(entryId),
+    ),
+  );
+  detailedOwnedEntries.forEach((entry) => {
+    if (entry.source === "imported" && entry.visibility === "group")
+      nextPublishedDetailedImportedEntryIds.add(entry.id);
+  });
+  publishedDetailedImportedEntryIdsByGroup.set(
+    publishedDetailCacheKey,
+    nextPublishedDetailedImportedEntryIds,
+  );
   return {
     deletedEntryIds: explicitDeletedEntryIds,
     deletedPhotoIds,
