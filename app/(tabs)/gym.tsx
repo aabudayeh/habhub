@@ -59,6 +59,7 @@ import {
   gymRecap,
   muscleGroupStats,
   recommendedRestSeconds,
+  setGymExerciseCompletion,
   totalGymRestSeconds,
   totalGymSetWorkSeconds,
   trainingVolumeKg,
@@ -541,6 +542,7 @@ function GymScreen() {
   const [sessionDetailsOpen, setSessionDetailsOpen] = useState(false);
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [templatesOpen, setTemplatesOpen] = useState(false);
+  const [templateOptionsOpen, setTemplateOptionsOpen] = useState(false);
   const [workoutTimer, setWorkoutTimer] = useState<WorkoutTimer | null>(null);
   const configuredTimerMode: GymTimerMode =
     state.settings.gymTimerMode === "whole_workout"
@@ -829,6 +831,12 @@ function GymScreen() {
   const plans = useMemo(
     () => [...sharedPlans, ...personalPlans],
     [personalPlans, sharedPlans],
+  );
+  const selectedPersonalPlan = personalPlans.find(
+    (plan) => plan.id === selectedPlanId,
+  );
+  const selectedGroupPlan = sharedPlans.find(
+    (plan) => plan.id === selectedPlanId,
   );
   const trackerExerciseItems = useMemo(() => {
     const catalogByKey = new Map(
@@ -1345,8 +1353,10 @@ function GymScreen() {
     setIntensity("moderate");
     setSetStartDelaySeconds(0);
     setSessionNotes("");
+    setVisibility("group");
     setOpenExerciseId(null);
     setSessionDetailsOpen(false);
+    setTemplateOptionsOpen(false);
     const plan =
       plans.find((item) => item.id === selectedPlanId) ?? plans[0];
     if (plan) {
@@ -1740,13 +1750,42 @@ function GymScreen() {
         scope: "isolated-preview",
       });
     }
-    updateSet(exerciseId, set.id, { completed: !set.completed });
+    const nextCompleted = !set.completed;
+    setExercises((current) =>
+      current.map((exercise) => {
+        if (exercise.id !== exerciseId) return exercise;
+        const sets = exercise.sets.map((item) =>
+          item.id === set.id
+            ? { ...item, completed: nextCompleted }
+            : item,
+        );
+        return {
+          ...exercise,
+          sets,
+          completed:
+            sets.length > 0 && sets.every((item) => item.completed),
+        };
+      }),
+    );
+  }
+
+  function setExerciseCompletion(
+    exercise: GymExercise,
+    completed: boolean,
+  ) {
+    if (workoutTimer && workoutTimer.mode !== "whole_workout") return;
+    setExercises((current) =>
+      current.map((item) =>
+        item.id === exercise.id
+          ? setGymExerciseCompletion(item, completed)
+          : item,
+      ),
+    );
+    if (completed) setOpenExerciseId(null);
   }
 
   function finishExercise(exercise: GymExercise) {
-    if (workoutTimer && workoutTimer.mode !== "whole_workout") return;
-    patchExercise(exercise.id, { completed: true });
-    setOpenExerciseId(null);
+    setExerciseCompletion(exercise, true);
   }
 
   function completeAllSets() {
@@ -2299,8 +2338,11 @@ function GymScreen() {
       (plan) => plan.id === selectedPlanId,
     );
     const now = new Date().toISOString();
+    const groupPlanId =
+      selectedShared?.id ??
+      `group-plan:${state.group.id}:${Date.now().toString(36)}`;
     saveGroupGymPlan({
-      id: selectedShared?.id ?? uniqueId("group-plan"),
+      id: groupPlanId,
       userId: `group:${state.group.id}`,
       name: sessionName.trim() || "Group workout",
       exercises: exercises.map((exercise) => ({
@@ -2332,9 +2374,10 @@ function GymScreen() {
       createdAt: selectedShared?.createdAt ?? now,
       updatedAt: now,
     });
+    setSelectedPlanId(groupPlanId);
     Alert.alert(
       selectedShared ? "Group workout updated" : "Shared with the group",
-      "This standardized workout now appears in every active member's Workout templates. Raw completed sets and notes are still shared only through mapped group trackers.",
+      "This reusable exercise template now appears in every active member's Workout templates. It does not share this workout log.",
     );
   }
 
@@ -3635,11 +3678,27 @@ function GymScreen() {
                       </View>
                     ) : null}
                     {exercise.completed ? (
-                      <Ionicons
-                        name="checkmark-circle"
-                        size={18}
-                        color={palette.lime}
-                      />
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={`Mark ${exercise.name} incomplete`}
+                        disabled={Boolean(
+                          exerciseEditMode ||
+                            (workoutTimer &&
+                              workoutTimer.mode !== "whole_workout")
+                        )}
+                        hitSlop={8}
+                        onPress={(event) => {
+                          event.stopPropagation();
+                          setExerciseCompletion(exercise, false);
+                        }}
+                        style={styles.exerciseCompletionToggle}
+                      >
+                        <Ionicons
+                          name="checkmark-circle"
+                          size={18}
+                          color={palette.lime}
+                        />
+                      </Pressable>
                     ) : (
                       <View style={[styles.exerciseDot, { backgroundColor: statusColor }]} />
                     )}
@@ -4022,58 +4081,101 @@ function GymScreen() {
                     />
                   </Card>
                 ) : null}
-                <View style={styles.privacyRow}>
-                  <View style={styles.grow}>
-                    <Text style={[styles.label, { color: colors.muted }]}>
-                      Share mapped workout results
-                    </Text>
-                    <Text style={[styles.meta, { color: colors.muted }]}>
-                      Group trackers receive standardized totals; set notes stay private.
-                    </Text>
-                  </View>
-                  <View style={styles.privacyChoices}>
-                    <Chip label="Group" selected={visibility === "group"} onPress={() => setVisibility("group")} />
-                    <Chip label="Private" selected={visibility === "private"} onPress={() => setVisibility("private")} />
-                  </View>
+                <View
+                  style={[
+                    styles.templateMenu,
+                    styles.templateOptionsMenu,
+                    { borderColor: colors.border },
+                  ]}
+                >
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityState={{ expanded: templateOptionsOpen }}
+                    onPress={() =>
+                      setTemplateOptionsOpen((current) => !current)
+                    }
+                    style={styles.templateToggle}
+                  >
+                    <Ionicons
+                      name="albums-outline"
+                      size={18}
+                      color={accent}
+                    />
+                    <View style={styles.grow}>
+                      <Text
+                        style={[styles.exerciseName, { color: colors.ink }]}
+                      >
+                        Template options
+                      </Text>
+                      <Text style={[styles.meta, { color: colors.muted }]}>
+                        Save, duplicate, or share this reusable exercise plan
+                      </Text>
+                    </View>
+                    <Ionicons
+                      name={
+                        templateOptionsOpen ? "chevron-up" : "chevron-down"
+                      }
+                      size={17}
+                      color={colors.muted}
+                    />
+                  </Pressable>
+                  {templateOptionsOpen ? (
+                    <View
+                      style={[
+                        styles.templateOptionsBody,
+                        { borderTopColor: colors.border },
+                      ]}
+                    >
+                      <Text style={[styles.meta, { color: colors.muted }]}>
+                        {t(
+                          "These actions affect the reusable template—not this workout log. Logged results follow each tracker's visibility setting.",
+                        )}
+                      </Text>
+                      <View style={styles.templateActionGrid}>
+                        <View style={styles.actionCell}>
+                          <Button
+                            label={
+                              selectedPersonalPlan
+                                ? "Update personal template"
+                                : "Save personal template"
+                            }
+                            variant="secondary"
+                            size="small"
+                            onPress={() => savePlan(false)}
+                          />
+                        </View>
+                        {selectedPersonalPlan ? (
+                          <View style={styles.actionCell}>
+                            <Button
+                              label="Save personal copy"
+                              variant="secondary"
+                              size="small"
+                              onPress={() => savePlan(true)}
+                            />
+                          </View>
+                        ) : null}
+                        {canManageGroup ? (
+                          <View style={styles.actionCell}>
+                            <Button
+                              label={
+                                selectedGroupPlan
+                                  ? "Update group template"
+                                  : "Share template with group"
+                              }
+                              icon="people-outline"
+                              variant="secondary"
+                              size="small"
+                              onPress={publishGroupPlan}
+                            />
+                          </View>
+                        ) : null}
+                      </View>
+                    </View>
+                  ) : null}
                 </View>
                 <TutorialTarget id="workout-save">
                 <View style={styles.bottomActions}>
-                  <View style={styles.actionCell}>
-                    <Button
-                      label={selectedPlanId ? "Update" : "Save template"}
-                      variant="secondary"
-                      size="small"
-                      onPress={() => savePlan(false)}
-                    />
-                  </View>
-                  {selectedPlanId ? (
-                    <View style={styles.actionCell}>
-                      <Button
-                        label="Save copy"
-                        variant="secondary"
-                        size="small"
-                        onPress={() => savePlan(true)}
-                      />
-                    </View>
-                  ) : null}
-                  {canManageGroup ? (
-                    <View style={styles.actionCell}>
-                      <Button
-                        label={
-                          sharedPlans.some(
-                            (plan) => plan.id === selectedPlanId,
-                          )
-                            ? "Update group"
-                            : "Share with group"
-                        }
-                        icon="people-outline"
-                        variant="secondary"
-                        size="small"
-                        onPress={publishGroupPlan}
-                      />
-                    </View>
-                  ) : null}
-                  <View style={styles.actionCell}>
+                  <View style={styles.primaryActionCell}>
                     <Button
                       label={selectedSession ? "Update workout" : "Save workout"}
                       icon="checkmark"
@@ -4940,11 +5042,22 @@ const styles = StyleSheet.create({
   },
   workoutStatusTitle: { fontSize: 10, fontWeight: "900" },
   templateMenu: { borderWidth: 1, borderRadius: 11, overflow: "hidden" },
+  templateOptionsMenu: { marginTop: 8 },
   templateToggle: {
     minHeight: 44,
     paddingHorizontal: 10,
     flexDirection: "row",
     alignItems: "center",
+    gap: 8,
+  },
+  templateOptionsBody: {
+    borderTopWidth: 1,
+    padding: 8,
+    gap: 8,
+  },
+  templateActionGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
     gap: 8,
   },
   planRow: { borderTopWidth: 1, gap: 3, padding: 6 },
@@ -5018,6 +5131,12 @@ const styles = StyleSheet.create({
   exerciseContainer: { width: "100%", marginBottom: 6 },
   exerciseCard: { paddingVertical: 2, paddingHorizontal: 9 },
   exerciseHeader: { minHeight: 50, flexDirection: "row", alignItems: "center", gap: 8 },
+  exerciseCompletionToggle: {
+    width: 26,
+    minHeight: 34,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   exerciseDot: { width: 8, height: 8, borderRadius: 4 },
   grow: { flex: 1, minWidth: 0 },
   exerciseName: { fontSize: 11, fontWeight: "900" },
@@ -5112,8 +5231,6 @@ const styles = StyleSheet.create({
   removeText: { color: palette.red, fontSize: 8, fontWeight: "900" },
   addExercise: { minHeight: 46, marginTop: 4, borderWidth: 1, borderStyle: "dashed", borderRadius: 13, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
   addText: { fontSize: 9, fontWeight: "900" },
-  privacyRow: { marginTop: 8, gap: 7 },
-  privacyChoices: { flexDirection: "row", gap: 7 },
   timeSummary: {
     flexDirection: "row",
     paddingVertical: 9,
@@ -5134,6 +5251,7 @@ const styles = StyleSheet.create({
     marginVertical: 4,
   },
   actionCell: { width: "48%", flexGrow: 1 },
+  primaryActionCell: { flex: 1 },
   delayButton: {
     width: 30,
     height: 30,

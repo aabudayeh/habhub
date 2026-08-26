@@ -2,7 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import * as ImagePicker from "expo-image-picker";
 import { router, useLocalSearchParams, useNavigation } from "expo-router";
-import React, { useCallback, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Keyboard,
   Modal,
@@ -84,10 +84,8 @@ export default function NoteEditor() {
   const [textColorOpen, setTextColorOpen] = useState(false);
   const [linkText, setLinkText] = useState("");
   const [linkUrl, setLinkUrl] = useState("https://");
-  const undo = useRef<string[]>([]);
-  const redo = useRef<string[]>([]);
-  const lastUndoAt = useRef(0);
   const composer = useRef<RichNoteComposerHandle>(null);
+  const composerBlurTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeTutorialTarget = tutorial.activeStep?.target;
   const tutorialFormatting = activeTutorialTarget === "note-formatting";
   const tutorialDrawing = activeTutorialTarget === "note-drawing";
@@ -166,21 +164,34 @@ export default function NoteEditor() {
 
   const change = useCallback((next: string) => {
     if (next === body.current) return;
-    const now = Date.now();
-    const structuralChange =
-      next.split("\n").length !== body.current.split("\n").length;
-    if (
-      !undo.current.length ||
-      structuralChange ||
-      now - lastUndoAt.current > 700
-    ) {
-      undo.current.push(body.current);
-      if (undo.current.length > 50) undo.current.shift();
-      lastUndoAt.current = now;
-    }
     body.current = next;
-    redo.current = [];
   }, []);
+
+  const handleComposerEditingChange = useCallback((editing: boolean) => {
+    if (composerBlurTimer.current) {
+      clearTimeout(composerBlurTimer.current);
+      composerBlurTimer.current = null;
+    }
+    if (editing) {
+      setComposerFocused(true);
+      return;
+    }
+    // Keep the native toolbar mounted through the press that blurred the DOM
+    // editor. Its command immediately refocuses the same selection; unmounting
+    // on pointer-down would swallow Bold/Italic/etc. before onPress can fire.
+    composerBlurTimer.current = setTimeout(() => {
+      composerBlurTimer.current = null;
+      setComposerFocused(false);
+    }, 220);
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (composerBlurTimer.current)
+        clearTimeout(composerBlurTimer.current);
+    },
+    [],
+  );
 
   const pickImage = async () => {
     if (tutorialSandbox) return;
@@ -337,25 +348,11 @@ export default function NoteEditor() {
     >
       <Tool
         icon="arrow-undo"
-        onPress={() => {
-          const previous = undo.current.pop();
-          if (previous !== undefined) {
-            redo.current.push(body.current);
-            body.current = previous;
-            composer.current?.replaceValue(previous);
-          }
-        }}
+        onPress={() => composer.current?.undo()}
       />
       <Tool
         icon="arrow-redo"
-        onPress={() => {
-          const next = redo.current.pop();
-          if (next !== undefined) {
-            undo.current.push(body.current);
-            body.current = next;
-            composer.current?.replaceValue(next);
-          }
-        }}
+        onPress={() => composer.current?.redo()}
       />
       <Tool text="H1" onPress={() => composer.current?.setBlock("h1")} />
       <Tool text="H2" onPress={() => composer.current?.setBlock("h2")} />
@@ -363,7 +360,7 @@ export default function NoteEditor() {
         text="B"
         onPress={() => {
           composer.current?.toggleInline("bold");
-          if (richNoteHasText(composer.current?.getValue() ?? "")) {
+          if (richNoteHasText(body.current)) {
             tutorial.reportEvent({
               actionId: "tutorial.journal.format",
               scope: "isolated-preview",
@@ -661,7 +658,7 @@ export default function NoteEditor() {
               ref={composer}
               value={initialBody}
               onChange={change}
-              onEditingChange={setComposerFocused}
+              onEditingChange={handleComposerEditingChange}
               onHashtagQuery={setHashtagQuery}
             />
             {imageUri ? <Image source={imageUri} style={styles.image} /> : null}

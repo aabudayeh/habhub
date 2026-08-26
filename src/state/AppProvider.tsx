@@ -95,7 +95,10 @@ import {
 } from "@/src/domain/todos";
 import { upgradeStateV21 } from "@/src/domain/stateMigration";
 import { formulaIdentifiers } from "@/src/domain/formula";
-import { completedGymSets } from "@/src/domain/gym";
+import {
+  completedGymSets,
+  gymSessionVisibilityForMetric,
+} from "@/src/domain/gym";
 import {
   createPersonalSetupGroup,
   DEFAULT_GROUP_THEME,
@@ -2225,11 +2228,11 @@ function reducer(state: AppState, action: Action): AppState {
           value: item.value,
           localDate: session.localDate,
           recordedAt: session.recordedAt,
-          visibility:
-            session.visibility === "private"
-              ? "private"
-              : (state.metrics.find((metric) => metric.id === item.metricId)
-                  ?.defaultVisibility ?? "group"),
+          visibility: gymSessionVisibilityForMetric(
+            session.visibility,
+            state.metrics.find((metric) => metric.id === item.metricId)
+              ?.defaultVisibility ?? "group",
+          ),
           source: "manual",
           label: session.name,
           note: `Workout session · ${completedSets} sets${session.notes ? ` · ${session.notes}` : ""}`,

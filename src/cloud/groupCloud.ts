@@ -37,6 +37,7 @@ import {
   groupActivitySnapshotProvesMembershipLoss,
 } from "@/src/domain/groupActivityRefresh";
 import { cloudAccountEnergyProjection } from "@/src/domain/energy";
+import { gymSessionVisibilityForMetric } from "@/src/domain/gym";
 import {
   isBloodPressureDiastolic,
   isBloodPressureSystolic,
@@ -548,7 +549,12 @@ function buildCloudDailyStatusRows(
             ? (photoVisibilities.get(localDate) ?? [])
             : []),
           ...(metric.gymMapping
-            ? (gymVisibilities.get(localDate) ?? [])
+            ? [...(gymVisibilities.get(localDate) ?? [])].map((visibility) =>
+                gymSessionVisibilityForMetric(
+                  visibility,
+                  metric.defaultVisibility,
+                ),
+              )
             : []),
         ]);
         const hasExactSharedSource =
@@ -2587,7 +2593,10 @@ export async function pushCloudAccountMetadata(
     p_group_metrics: null,
     p_member_roles: [],
   });
-  if (projection.error) throw projection.error;
+  if (projection.error)
+    throw new Error(
+      `Account profile metadata: ${cloudErrorText(projection.error)}`,
+    );
 }
 
 export async function pushCloudWorkspace(
@@ -2684,7 +2693,10 @@ export async function pushCloudWorkspace(
           : [],
     },
   );
-  if (metadataProjection.error) throw metadataProjection.error;
+  if (metadataProjection.error)
+    throw new Error(
+      `Account/group metadata: ${cloudErrorText(metadataProjection.error)}`,
+    );
   const projectionResult = metadataProjection.data as {
     groupMetricSetChanged?: boolean;
     groupConfigurationRevision?: number;

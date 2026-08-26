@@ -5,7 +5,11 @@ import {
   canonicalWorkoutTrackerId,
   consolidateWorkoutTrackers,
 } from "../src/domain/workoutTrackers.ts";
-import { completeGymWorkout } from "../src/domain/gym.ts";
+import {
+  completeGymWorkout,
+  gymSessionVisibilityForMetric,
+  setGymExerciseCompletion,
+} from "../src/domain/gym.ts";
 import {
   applyBackgroundGymSession,
   finishStoredWorkoutDraft,
@@ -51,6 +55,38 @@ assert.ok(
   fullyCompletedWorkout[0].sets.every((set) => set.completed),
   "Complete all must finish every set without mutating the workout draft",
 );
+const resetExercise = setGymExerciseCompletion(
+  fullyCompletedWorkout[0],
+  false,
+);
+assert.equal(resetExercise.completed, false);
+assert.ok(
+  resetExercise.sets.every((set) => !set.completed),
+  "Undoing exercise completion must also uncheck every set",
+);
+assert.ok(
+  setGymExerciseCompletion(unfinishedWorkout[0], true).sets.every(
+    (set) => set.completed,
+  ),
+  "Finishing one exercise must complete all of its sets",
+);
+for (const [sessionVisibility, metricVisibility, expected] of [
+  ["group", "group", "group"],
+  ["group", "status", "status"],
+  ["group", "private", "private"],
+  ["status", "group", "status"],
+  ["status", "status", "status"],
+  ["status", "private", "private"],
+  ["private", "group", "private"],
+  ["private", "status", "private"],
+  ["private", "private", "private"],
+]) {
+  assert.equal(
+    gymSessionVisibilityForMetric(sessionVisibility, metricVisibility),
+    expected,
+    "Workout sharing must always use the stricter session or tracker privacy",
+  );
+}
 
 const backgroundTimerBase = Date.now() - 60_000;
 const backgroundWorkoutDraft = {
@@ -888,6 +924,12 @@ const workoutNotifications = fs.readFileSync(
   "src/notifications/workoutTimer.ts",
   "utf8",
 );
+const groupCloud = fs.readFileSync("src/cloud/groupCloud.ts", "utf8");
+const metricsDomain = fs.readFileSync("src/domain/metrics.ts", "utf8");
+const backgroundFinish = fs.readFileSync(
+  "src/domain/backgroundWorkoutFinish.ts",
+  "utf8",
+);
 assert.match(seed, /id: "workout"[\s\S]{0,500}gymMapping: \{ kind: "session_completed" \}/);
 assert.match(seed, /id: "workout_duration"[\s\S]{0,500}gymMapping: \{ kind: "session_duration" \}/);
 assert.match(seed, /id: "workout"[\s\S]{0,600}workoutQualification: DEFAULT_WORKOUT_QUALIFICATION/);
@@ -953,6 +995,44 @@ assert.match(
   "Complete all must stay hidden until the workout contains at least one planned set",
 );
 assert.match(gymScreen, /setExercises\(\(current\) => completeGymWorkout\(current\)\)/);
+assert.match(gymScreen, /setGymExerciseCompletion\(item, completed\)/);
+assert.match(
+  gymScreen,
+  /accessibilityLabel=\{`Mark \$\{exercise\.name\} incomplete`\}[\s\S]{0,400}setExerciseCompletion\(exercise, false\)/,
+  "The green exercise completion control must undo the exercise and all sets",
+);
+assert.match(
+  gymScreen,
+  /sets\.length > 0 && sets\.every\(\(item\) => item\.completed\)/,
+  "Manually checking sets must keep exercise completion synchronized",
+);
+assert.match(gymScreen, />\s*Template options\s*</);
+assert.match(gymScreen, /Save personal template/);
+assert.match(gymScreen, /Save personal copy/);
+assert.match(gymScreen, /Share template with group/);
+assert.match(
+  gymScreen,
+  /\{selectedPersonalPlan \? \([\s\S]{0,500}Save personal copy/,
+  "Save copy must appear only for an existing personal template",
+);
+assert.doesNotMatch(gymScreen, /Share mapped workout results/);
+assert.match(
+  gymScreen,
+  /setIntensity\("moderate"\)[\s\S]{0,240}setVisibility\("group"\)/,
+  "New workouts must follow per-tracker visibility by default",
+);
+assert.match(
+  gymScreen,
+  /It does not share this workout log\./,
+  "Sharing a template must explain that it does not publish the workout log",
+);
+for (const privacySource of [provider, groupCloud, metricsDomain, backgroundFinish]) {
+  assert.match(
+    privacySource,
+    /gymSessionVisibilityForMetric/,
+    "Every workout projection and cloud-sharing path must enforce tracker privacy",
+  );
+}
 assert.match(
   metricDetail,
   /function promptGymSessionRemoval[\s\S]{0,500}deleteGymSession\(session\.id\)/,

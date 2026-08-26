@@ -21,7 +21,11 @@ import {
 } from "./energy";
 import { evaluateFormula, formulaIdentifiers, FormulaError } from "./formula";
 import { cycleForecast } from "./cycle";
-import { gymMetricValue, hasGymMetricData } from "./gym";
+import {
+  gymMetricValue,
+  gymSessionVisibilityForMetric,
+  hasGymMetricData,
+} from "./gym";
 import { isVacationDate } from "./vacation";
 import {
   entriesForDay,
@@ -551,7 +555,12 @@ function visibilityFilteredMetricValue(
       (session) =>
         session.userId === userId &&
         session.localDate === localDate &&
-        allowedVisibilities.has(session.visibility),
+        allowedVisibilities.has(
+          gymSessionVisibilityForMetric(
+            session.visibility,
+            metric.defaultVisibility,
+          ),
+        ),
     );
     const gymState =
       visibleGymSessions.length === (state.gymSessions ?? []).length

@@ -55,11 +55,22 @@ assert.match(
   /workspaceSessionAckHashesRef\.current\.set\(\s*pushedGroupId,\s*pushedWorkspaceHash,?\s*\)[\s\S]{0,400}workspaceAckMayPersist\(candidate\)/,
   "every successful workspace publish needs an in-session ACK even when privacy forbids durable hash storage",
 );
-assert.match(
-  cloudProvider,
-  /function workspaceHash\(state: AppState\)[\s\S]{0,180}snapshotPayload\(state\)[\s\S]{0,450}orderedValueHash\(payload\.entries\)[\s\S]{0,120}orderedValueHash\(payload\.photos\)/,
-  "the workspace hash must use the account-owned, signed-URL-free snapshot projection",
+const workspaceHashStart = cloudProvider.indexOf(
+  "function workspaceHash(state: AppState)",
 );
+const workspaceHashEnd = cloudProvider.indexOf(
+  "async function resolvePrivateMedia",
+  workspaceHashStart,
+);
+const workspaceHashBlock = cloudProvider.slice(
+  workspaceHashStart,
+  workspaceHashEnd,
+);
+assert.ok(workspaceHashStart >= 0 && workspaceHashEnd > workspaceHashStart);
+assert.match(workspaceHashBlock, /snapshotPayload\(state\)/);
+assert.match(workspaceHashBlock, /orderedValueHash\(payload\.entries\)/);
+assert.match(workspaceHashBlock, /orderedValueHash\(payload\.photos\)/);
+assert.doesNotMatch(workspaceHashBlock, /signedUrl|avatarUrl|imageUri/);
 assert.match(
   cloudProvider,
   /workspaceHashRef\.current\s*=\s*workspaceSessionAckHashesRef\.current\.get\(groupId\)\s*\?\?\s*null/,

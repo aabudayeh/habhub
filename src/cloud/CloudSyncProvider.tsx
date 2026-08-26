@@ -4162,9 +4162,9 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           accountMetadataAckPending = true;
         };
         let nextWorkspaceHash = workspaceHash(candidate);
-        const nextGroupConfigurationHash = groupConfigurationHash(candidate);
+        let nextGroupConfigurationHash = groupConfigurationHash(candidate);
         const pushedGroupId = candidate.group.id;
-        const pushedWorkspaceHash = nextWorkspaceHash;
+        let pushedWorkspaceHash = nextWorkspaceHash;
         const pendingGroupConfiguration =
           candidate.settings.pendingGroupConfigurationIds?.includes(
             candidate.group.id,
@@ -4186,38 +4186,70 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           workspaceSynced = true;
           suppressGroupRefreshUntilRef.current = Date.now() + 3000;
           try {
-            const workspaceResult = await pushCloudWorkspace(
-              candidate,
-              shouldPushGroupConfiguration,
-              ({ syncedAt }) => {
-                if (!operationIsCurrent()) return;
-                // A large historical status backfill publishes the newest
-                // month first. Reflect that durable server checkpoint now;
-                // older compact summaries may continue without making the
-                // Cloud page look frozen or delaying current leaderboard data.
-                recordServerSyncedAt(syncedAt);
-                leaderboardPublishedAtByGroupRef.current.set(
+            const publishWorkspace = () =>
+              pushCloudWorkspace(
+                candidate,
+                shouldPushGroupConfiguration,
+                ({ syncedAt }) => {
+                  if (!operationIsCurrent()) return;
+                  // A large historical status backfill publishes the newest
+                  // month first. Reflect that durable server checkpoint now;
+                  // older compact summaries may continue without making the
+                  // Cloud page look frozen or delaying current leaderboard data.
+                  recordServerSyncedAt(syncedAt);
+                  leaderboardPublishedAtByGroupRef.current.set(
+                    pushedGroupId,
+                    Date.now(),
+                  );
+                  const live = stateRef.current;
+                  const published = applyMembershipRealtimeRow(
+                    live,
+                    {
+                      group_id: pushedGroupId,
+                      user_id: stateRef.current.currentUserId,
+                      status: "active",
+                      last_data_synced_at: syncedAt,
+                    },
+                  );
+                  if (published && published !== live) {
+                    stateRef.current = published;
+                    replaceState(published, { source: "cloud" });
+                  }
+                },
+                revisionRef.current,
+                yieldCloudMaintenanceToUi,
+              );
+            let workspaceResult;
+            try {
+              workspaceResult = await publishWorkspace();
+            } catch (firstError) {
+              const firstErrorText = errorText(firstError);
+              if (!/stale_group_configuration/i.test(firstErrorText))
+                throw firstError;
+              // A pending administrator edit may race another administrator or
+              // a prior post-commit transport failure. Refresh the server-owned
+              // shell/CAS revision, retain the explicit local configuration
+              // outbox, and retry exactly once inside this serialized sync.
+              const loaded = await readCloudResponsively((signal) =>
+                loadCloudWorkspace(
+                  stateRef.current,
                   pushedGroupId,
-                  Date.now(),
-                );
-                const live = stateRef.current;
-                const published = applyMembershipRealtimeRow(
-                  live,
-                  {
-                    group_id: pushedGroupId,
-                    user_id: stateRef.current.currentUserId,
-                    status: "active",
-                    last_data_synced_at: syncedAt,
-                  },
-                );
-                if (published && published !== live) {
-                  stateRef.current = published;
-                  replaceState(published, { source: "cloud" });
-                }
-              },
-              revisionRef.current,
-              yieldCloudMaintenanceToUi,
-            );
+                  undefined,
+                  undefined,
+                  undefined,
+                  signal,
+                ),
+              );
+              if (!operationIsCurrent()) return;
+              candidate = mergeRemoteWorkspace(loaded, stateRef.current);
+              candidateHash = stableHash(candidate);
+              nextWorkspaceHash = workspaceHash(candidate);
+              pushedWorkspaceHash = nextWorkspaceHash;
+              nextGroupConfigurationHash = groupConfigurationHash(candidate);
+              stateRef.current = candidate;
+              replaceState(candidate, { source: "cloud" });
+              workspaceResult = await publishWorkspace();
+            }
             if (!operationIsCurrent()) return;
             if (!workspaceResult.workspacePushed)
               throw new Error("Group workspace is not active yet.");
@@ -4506,15 +4538,11 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             replaceState(candidate, { source: "cloud" });
           }
         }
-        // A profile rename/body-profile edit is global account metadata, not a
-        // group-history operation. Publish it even while the personal setup
-        // workspace is active, and independently while a heavy group retry is
-        // backed off. One persisted hash coalesces all such edits.
-        if (
-          accountMetadataNeedsUpload &&
-          !accountMetadataSynced &&
-          (!groupWorkspaceNeedsUpload || deferGroupRetry)
-        ) {
+        // A profile/photo/body-profile edit is global account metadata, not a
+        // group-history operation. Never let a stale or temporarily failing
+        // group publication hold it hostage: the account RPC is independently
+        // idempotent and the persisted hash coalesces repeated edits.
+        if (accountMetadataNeedsUpload && !accountMetadataSynced) {
           await pushCloudAccountMetadata(candidate, revisionRef.current);
           if (!operationIsCurrent()) return;
           accountMetadataSynced = true;

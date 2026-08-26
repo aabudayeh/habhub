@@ -98,7 +98,7 @@ assert.match(gym, /activeTutorialTarget === "workout-exercises"[\s\S]{0,180}setO
 
 const notes = read("app/note-editor.tsx");
 assert.match(notes, /toggleInline\("bold"\)[\s\S]{0,260}tutorial\.journal\.format/);
-assert.match(notes, /richNoteHasText\(composer\.current\?\.getValue\(\) \?\? ""\)/);
+assert.match(notes, /richNoteHasText\(body\.current\)/);
 assert.match(notes, /tutorialDrawing[\s\S]{0,180}setDrawingMode\(true\)/);
 
 console.log(

@@ -914,6 +914,65 @@ assert.match(
 );
 assert.match(
   cloud,
+  /Account\/group metadata: \$\{cloudErrorText\(metadataProjection\.error\)\}/,
+  "metadata failures must identify the failed group-sync stage instead of surfacing only Bad Request",
+);
+const staleRetryStart = provider.indexOf("let workspaceResult;");
+const staleRetryFirstPublish = provider.indexOf(
+  "workspaceResult = await publishWorkspace();",
+  staleRetryStart,
+);
+const staleRetryCatch = provider.indexOf(
+  "stale_group_configuration",
+  staleRetryFirstPublish,
+);
+const staleRetryHydrate = provider.indexOf(
+  "loadCloudWorkspace(",
+  staleRetryCatch,
+);
+const staleRetryMerge = provider.indexOf(
+  "candidate = mergeRemoteWorkspace(loaded, stateRef.current);",
+  staleRetryHydrate,
+);
+const staleRetrySecondPublish = provider.indexOf(
+  "workspaceResult = await publishWorkspace();",
+  staleRetryFirstPublish + 1,
+);
+const staleRetryEnd = provider.indexOf(
+  "if (!workspaceResult.workspacePushed)",
+  staleRetrySecondPublish,
+);
+assert.ok(
+  staleRetryStart >= 0 &&
+    staleRetryStart < staleRetryFirstPublish &&
+    staleRetryFirstPublish < staleRetryCatch &&
+    staleRetryCatch < staleRetryHydrate &&
+    staleRetryHydrate < staleRetryMerge &&
+    staleRetryMerge < staleRetrySecondPublish &&
+    staleRetrySecondPublish < staleRetryEnd,
+  "a stale group configuration must hydrate the server revision and retry once in the same serialized sync",
+);
+assert.equal(
+  (
+    provider
+      .slice(staleRetryStart, staleRetryEnd)
+      .match(/workspaceResult = await publishWorkspace\(\);/g) ?? []
+  ).length,
+  2,
+  "the serialized stale-configuration repair must be bounded to one retry",
+);
+assert.match(
+  provider,
+  /if \(accountMetadataNeedsUpload && !accountMetadataSynced\) \{[\s\S]{0,160}pushCloudAccountMetadata\(candidate, revisionRef\.current\)/,
+  "profile and avatar metadata must publish independently of a failing group workspace",
+);
+assert.doesNotMatch(
+  provider,
+  /accountMetadataNeedsUpload &&[\s\S]{0,100}\(!groupWorkspaceNeedsUpload \|\| deferGroupRetry\)/,
+  "a group retry must never hold account profile metadata hostage",
+);
+assert.match(
+  cloud,
   /cloudEntryProjectionDiffers\([\s\S]{0,180}idBySlug\.get\(entry\.metricId\)/,
   "existing item rows must self-heal missing labels, nutrition, notes, values, and media even without a newer provider timestamp",
 );

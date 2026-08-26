@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 
 const source = fs.readFileSync("src/components/RichNoteComposer.tsx", "utf8");
+const domEditor = fs.readFileSync(
+  "src/components/RichNoteDomEditor.tsx",
+  "utf8",
+);
+const valueDomain = fs.readFileSync("src/domain/richNoteValue.ts", "utf8");
 const editor = fs.readFileSync("app/note-editor.tsx", "utf8");
 const drawingCanvas = fs.readFileSync(
   "src/components/NoteDrawingCanvas.tsx",
@@ -13,35 +18,57 @@ const drawingDomain = fs.readFileSync(
 );
 const journal = fs.readFileSync("app/(tabs)/journal.tsx", "utf8");
 const types = fs.readFileSync("src/types.ts", "utf8");
+const packageJson = JSON.parse(fs.readFileSync("package.json", "utf8"));
 
 assert.match(
   source,
-  /setSelectionRange\?\.\(selection\.start, selection\.end\)/,
-  "Web note focus must use the textarea selection API when RN's native method is absent",
+  /Hosts one DOM-backed rich-text surface on Android, iOS, and web/,
+  "The note composer must use one cross-platform editing surface",
 );
-assert.match(
-  source,
-  /const parts = normalizedText\.split\("\\n"\)/,
-  "A typed or pasted newline must be split into durable rich-note lines",
-);
-assert.match(
-  source,
-  /updated\.splice\(lineIndex, 1, \.\.\.inserted\)/,
-  "A newline must replace the active serialized line instead of submitting the screen",
-);
-assert.match(source, /\r?\n\s+multiline(?:=\{true\})?\r?\n/);
-assert.match(source, /enterKeyHint="enter"/);
-assert.match(source, /submitBehavior="newline"/);
+assert.match(source, /<RichNoteDomEditor/);
 assert.doesNotMatch(
   source,
-  /onSubmitEditing=/,
-  "Journal Enter must never use the single-line submit path",
+  /TextInput|NativeText|overlayRunInput|runMeasure|flexWrap/,
+  "Rich text must not be split across independently wrapping native inputs",
 );
+assert.match(domEditor, /^'use dom';/);
+assert.equal(
+  domEditor.match(/<ContentEditable/g)?.length,
+  1,
+  "The body must have exactly one contenteditable caret and wrapping context",
+);
+for (const plugin of [
+  "LexicalComposer",
+  "RichTextPlugin",
+  "HistoryPlugin",
+  "OnChangePlugin",
+  "ListPlugin",
+  "CheckListPlugin",
+  "LinkPlugin",
+]) {
+  assert.match(domEditor, new RegExp(plugin));
+}
+assert.match(domEditor, /useDOMImperativeHandle/);
+assert.match(domEditor, /lastRangeSelection/);
+assert.match(domEditor, /\$setSelection\(selectionToRestore\)/);
+assert.match(domEditor, /SELECTION_CHANGE_COMMAND/);
+assert.match(domEditor, /FORMAT_TEXT_COMMAND/);
+assert.match(domEditor, /\$patchStyleText/);
+assert.match(domEditor, /white-space: pre-wrap/);
+assert.match(domEditor, /overflow-wrap: anywhere/);
+assert.match(domEditor, /font-size: \$\{Math\.max\(16, fontSize\)\}px/);
 assert.doesNotMatch(
-  source,
-  /multiline=\{false\}/,
-  "Journal body inputs must remain multiline on web and native",
+  domEditor,
+  /TextInput|split\("\\n"\)|setSelectionRange|tailRun/,
+  "The editor must leave caret movement, new lines, and wrapping to one browser editing engine",
 );
+assert.match(
+  valueDomain,
+  /Markdown is otherwise preserved byte for\s+\* byte/,
+  "Value cleanup must not flatten nested or adjacent formatting",
+);
+assert.ok(packageJson.dependencies["react-native-webview"]);
+assert.ok(packageJson.dependencies.lexical);
 
 assert.match(
   editor,
@@ -54,79 +81,15 @@ assert.doesNotMatch(
   "Text color selection must keep the palette open",
 );
 assert.match(
-  source,
-  /Keep the active native input mounted while key-repeat crosses styled/,
-  "Held Backspace must cross formatting boundaries without remounting the input",
+  editor,
+  /composer\.current\?\.undo\(\)/,
+  "Toolbar undo must use the editor's own history",
 );
+assert.match(editor, /composer\.current\?\.redo\(\)/);
+assert.match(editor, /handleComposerEditingChange/);
 assert.match(
-  source,
-  /const currentRawLines = draftRef\.current\.split\("\\n"\)/,
-  "Backspace repeats must read the latest committed draft instead of stale render state",
-);
-assert.match(
-  source,
-  /<NativeText[\s\S]*styles\.runMeasure[\s\S]*<TextInput[\s\S]*styles\.overlayRunInput/,
-  "Mixed formatted runs must use one measured layout with exactly one visible editable layer",
-);
-assert.match(
-  source,
-  /<NativeText\s+allowFontScaling=\{false\}[\s\S]*?styles\.runMeasure/,
-  "The invisible measurement text must use the same font-scaling policy as AppTextInput",
-);
-assert.match(
-  source,
-  /\{`\$\{run\.text\}\$\{EMPTY_RUN\}`\}/,
-  "The measurement sentinel must follow the run text so trailing spaces contribute to layout",
-);
-assert.doesNotMatch(
-  source,
-  /runMeasure:\s*\{[^}]*padding(?:Right|Horizontal):/,
-  "Formatting boundaries must not insert visual padding between adjacent runs",
-);
-assert.match(
-  source,
-  /selections\.current\[key\]\s*=\s*selectionAfterRichNoteTextChange/,
-  "Text mutations must synchronously advance the cached caret before formatting can use it",
-);
-assert.match(
-  source,
-  /readInputSelection\([\s\S]*?inputs\.current\[key\]/,
-  "Web formatting actions must prefer the live textarea selection over a delayed event cache",
-);
-assert.match(
-  source,
-  /measuredFontSize\s*=\s*resolveWebEditorFontSize\([\s\S]*?fontSize:\s*measuredFontSize/,
-  "The invisible measure must use the same iOS Web focus-safe font size as the editable input",
-);
-assert.match(
-  source,
-  /const isTailRun = runIndex === line\.runs\.length - 1;[\s\S]*?isTailRun && styles\.tailRun/,
-  "Every trailing run must keep a stable width after Enter moves focus to the next line",
-);
-assert.match(
-  source,
-  /tailRun:\s*\{\s*flexGrow:\s*1\s*\}/,
-  "The trailing formatted run must reserve the remainder of its visual row",
-);
-assert.doesNotMatch(
-  source,
-  /active\.line === lineIndex[\s\S]{0,160}runIndex === line\.runs\.length - 1/,
-  "Trailing-run layout must not depend on focus or the previous line will reflow after Enter",
-);
-assert.match(
-  source,
-  /multiline\s+scrollEnabled=\{false\}/,
-  "Each formatted run must wrap in the note instead of independently scrolling",
-);
-assert.match(
-  source,
-  /run:\s*\{[\s\S]*?flexShrink:\s*1,[\s\S]*?maxWidth:\s*"100%"/,
-  "Formatted runs must shrink within the wrapping row",
-);
-assert.match(
-  source,
-  /overlayRunInput:\s*\{[\s\S]*?width:\s*"100%",[\s\S]*?maxWidth:\s*"100%",[\s\S]*?overflow:\s*"hidden"/,
-  "The editable overlay must stay inside its measured wrapping run",
+  editor,
+  /Keep the native toolbar mounted through the press that blurred the DOM/,
 );
 assert.match(editor, /<NoteDrawingCanvas/);
 assert.match(editor, /drawing: normalizeJournalDrawing\(drawing\)/);
@@ -142,39 +105,27 @@ assert.match(journal, /drawing: note\.drawing/);
 assert.match(journal, /<NoteDrawingPreview drawing=\{item\.drawing\}/);
 assert.match(journal, /drawingOnlyPreview/);
 
-const drawingModule = await import(
-  "../src/domain/journalDrawing.ts"
+const valueModule = await import("../src/domain/richNoteValue.ts");
+for (const formatted of [
+  "***bold italic***",
+  "**bold *inside***",
+  "[color=#FF0000]***colored and styled***[/color]",
+  "First **bold** then *italic* without inserted spaces",
+]) {
+  assert.equal(
+    valueModule.cleanRichNoteValue(formatted),
+    formatted,
+    "Cleaning must preserve valid combined and adjacent formatting exactly",
+  );
+  assert.equal(valueModule.richNoteHasText(formatted), true);
+}
+assert.equal(
+  valueModule.cleanRichNoteValue(`**${valueModule.EMPTY_RICH_NOTE_RUN}**`),
+  "",
+  "Obsolete empty-run sentinels must be removed from stored notes",
 );
-const selectionModule = await import(
-  "../src/domain/richNoteSelection.ts"
-);
-assert.deepEqual(
-  selectionModule.selectionAfterRichNoteTextChange(
-    "hello",
-    "hello!",
-    { start: 0, end: 0 },
-  ),
-  { start: 6, end: 6 },
-  "Typing must advance the cached caret even when the selection event is stale",
-);
-assert.deepEqual(
-  selectionModule.selectionAfterRichNoteTextChange(
-    "abcdef",
-    "abcXdef",
-    { start: 3, end: 3 },
-  ),
-  { start: 4, end: 4 },
-  "Mid-word formatting must retain the caret immediately after inserted text",
-);
-assert.deepEqual(
-  selectionModule.selectionAfterRichNoteTextChange(
-    "abcXdef",
-    "abcdef",
-    { start: 4, end: 4 },
-  ),
-  { start: 3, end: 3 },
-  "Deleting at a formatting boundary must keep the caret at that boundary",
-);
+
+const drawingModule = await import("../src/domain/journalDrawing.ts");
 const first = drawingModule.createJournalDrawingStroke(
   "first",
   "#2877d4",

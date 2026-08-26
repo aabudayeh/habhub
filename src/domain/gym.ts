@@ -14,6 +14,7 @@ import {
   GymMetricMapping,
   GymSession,
   MuscleGroup,
+  Visibility,
   WorkoutQualification,
   WorkoutExerciseTrackingMode,
 } from "@/src/types";
@@ -30,13 +31,38 @@ export function completedGymSets(exercises: GymExercise[]) {
   );
 }
 
+/** Toggles an exercise and every one of its sets as a single completion unit. */
+export function setGymExerciseCompletion(
+  exercise: GymExercise,
+  completed: boolean,
+): GymExercise {
+  return {
+    ...exercise,
+    completed,
+    sets: exercise.sets.map((set) => ({ ...set, completed })),
+  };
+}
+
 /** Marks every planned set complete without mutating the editable workout. */
 export function completeGymWorkout(exercises: GymExercise[]) {
-  return exercises.map((exercise) => ({
-    ...exercise,
-    completed: true,
-    sets: exercise.sets.map((set) => ({ ...set, completed: true })),
-  }));
+  return exercises.map((exercise) =>
+    setGymExerciseCompletion(exercise, true),
+  );
+}
+
+/**
+ * Workout sessions use `group` as "follow this tracker's visibility". Legacy
+ * private/status session overrides remain stricter and are never widened.
+ */
+export function gymSessionVisibilityForMetric(
+  sessionVisibility: Visibility,
+  metricVisibility: Visibility,
+): Visibility {
+  if (sessionVisibility === "private" || metricVisibility === "private")
+    return "private";
+  if (sessionVisibility === "status" || metricVisibility === "status")
+    return "status";
+  return "group";
 }
 
 /** Derived gym trackers expose comparable totals without exposing raw set notes. */
