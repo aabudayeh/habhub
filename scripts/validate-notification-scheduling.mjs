@@ -560,6 +560,10 @@ const webScheduleRepairMigration = fs.readFileSync(
   "supabase/migrations/202608230002_web_personal_notification_worker_reliability.sql",
   "utf8",
 );
+const webScheduleRouteValidationRepair = fs.readFileSync(
+  "supabase/migrations/202608260003_fix_web_reminder_route_validation.sql",
+  "utf8",
+);
 const webScheduleCpuGuardMigration = fs.readFileSync(
   "supabase/migrations/202608240001_hourly_google_health_catchups.sql",
   "utf8",
@@ -1517,6 +1521,17 @@ assert.match(webScheduleMigration, /for update skip locked/);
 assert.match(webScheduleMigration, /web-personal-notifications-every-minute/);
 assert.match(webScheduleMigration, /web_personal_notification_worker_secret/);
 assert.match(webScheduleMigration, /delete from public\.web_personal_notification_schedule/);
+assert.doesNotMatch(
+  webScheduleRouteValidationRepair,
+  /\{\d+,\d{3,}\}/,
+  "Web reminder validation must not use repetition counts unsupported by PostgreSQL",
+);
+assert.match(
+  webScheduleRouteValidationRepair,
+  /char_length\(v_route\) not between 1 and 1001/,
+);
+assert.match(webScheduleRouteValidationRepair, /left\(v_route, 1\) <> '\/'/);
+assert.match(webScheduleRouteValidationRepair, /v_route ~ '\[\[:space:\]\]'/);
 assert.match(
   webScheduleRepairMigration,
   /configure_web_personal_notification_worker/,
