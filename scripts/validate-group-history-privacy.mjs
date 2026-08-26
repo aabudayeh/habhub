@@ -9,13 +9,121 @@ import {
   canUseCachedSharedRaw,
   projectionSurvivesSharedMetricPrivacyFences,
 } from "../src/domain/sharedMetricPrivacy.ts";
-import { sharedLeaderboardLogEntries } from "../src/domain/sharedLeaderboardLogs.ts";
+import {
+  sharedLeaderboardLogEntries,
+  sharedWorkoutBreakdownEntries,
+  withoutSharedWorkoutParentDetails,
+} from "../src/domain/sharedLeaderboardLogs.ts";
 import { accountOwnedCollections } from "../src/domain/accountCollections.ts";
 import { scopeCachedGroupActivity } from "../src/domain/groupActivityCacheScope.ts";
 import { memberDisplayName } from "../src/domain/members.ts";
+import {
+  forcedGroupActivityRequestCrossedGroupBoundary,
+  groupActivityFallbackMembershipIsActive,
+  groupActivitySnapshotProvesMembershipLoss,
+  groupActivityRangeAlreadyLoaded,
+  shouldRequeueSupersededGroupActivity,
+  shouldCommitGroupActivityResponse,
+} from "../src/domain/groupActivityRefresh.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (file) => readFileSync(path.join(root, file), "utf8");
+
+assert.equal(
+  groupActivityRangeAlreadyLoaded({
+    requestedSince: "2026-08-01",
+    loadedSince: "2026-07-01",
+    force: false,
+  }),
+  true,
+  "an ordinary covered range should remain an idempotent no-op",
+);
+assert.equal(
+  groupActivityRangeAlreadyLoaded({
+    requestedSince: "2026-08-01",
+    loadedSince: "2026-07-01",
+    force: true,
+  }),
+  false,
+  "a detail rehydration must bypass cached coverage",
+);
+assert.equal(
+  shouldCommitGroupActivityResponse({
+    responseVersion: 7,
+    lastVersion: 7,
+    extendsCoverage: false,
+    force: false,
+  }),
+  false,
+  "an ordinary same-version response should not repaint the app",
+);
+assert.equal(
+  shouldCommitGroupActivityResponse({
+    responseVersion: 7,
+    lastVersion: 7,
+    extendsCoverage: false,
+    force: true,
+  }),
+  true,
+  "a forced same-version response must restore cloud-only item rows",
+);
+assert.equal(
+  groupActivitySnapshotProvesMembershipLoss({
+    snapshotRpcMissing: false,
+    snapshotPresent: false,
+  }),
+  true,
+  "an installed activity RPC returning no row is definitive membership loss",
+);
+assert.equal(
+  groupActivitySnapshotProvesMembershipLoss({
+    snapshotRpcMissing: true,
+    snapshotPresent: false,
+  }),
+  false,
+  "a rolling migration fallback must not be mistaken for membership loss",
+);
+assert.equal(
+  groupActivityFallbackMembershipIsActive("active"),
+  true,
+  "the compatibility reader must accept a proved active membership",
+);
+assert.equal(
+  groupActivityFallbackMembershipIsActive("pending"),
+  false,
+  "a pending membership must not authorize compatibility activity reads",
+);
+assert.equal(
+  groupActivityFallbackMembershipIsActive(undefined),
+  false,
+  "an absent membership must fail closed on the compatibility reader",
+);
+assert.equal(
+  forcedGroupActivityRequestCrossedGroupBoundary({
+    force: true,
+    sameGroup: false,
+  }),
+  true,
+  "a forced detail request must be cancelled when its group changes",
+);
+assert.equal(
+  forcedGroupActivityRequestCrossedGroupBoundary({
+    force: false,
+    sameGroup: false,
+  }),
+  false,
+  "an ordinary stale refresh can be discarded without surfacing a detail failure",
+);
+assert.equal(
+  shouldRequeueSupersededGroupActivity({ force: true, sameGroup: true }),
+  true,
+  "a same-group forced response must retry when a concurrent hydration supersedes it",
+);
+assert.equal(
+  shouldRequeueSupersededGroupActivity({ force: true, sameGroup: false }),
+  false,
+  "a forced response must never cross a group boundary",
+);
 
 const cloud = read("src/cloud/groupCloud.ts");
 const provider = read("src/cloud/CloudSyncProvider.tsx");
@@ -51,6 +159,9 @@ const cacheFenceMigration = read(
 const passiveWalkingPushMigration = read(
   "supabase/migrations/202608260001_suppress_passive_walking_push.sql",
 );
+const googleWorkoutDetailMigration = read(
+  "supabase/migrations/202608260002_google_health_workout_detail_projection.sql",
+);
 const passiveWalkingLeadFunction = passiveWalkingPushMigration.slice(
   passiveWalkingPushMigration.indexOf(
     "create or replace function public.enqueue_group_lead_push_event",
@@ -66,11 +177,162 @@ assert.ok(
 );
 
 assert.match(cloud, /remoteStatusCount < expectedStatusCount/);
+assert.match(provider, /const SHARED_ENTRY_DETAIL_PROJECTION_VERSION = 2/);
+assert.match(
+  provider,
+  /sharedEntryDetailProjectionVersion:\s*SHARED_ENTRY_DETAIL_PROJECTION_VERSION/,
+  "a client upgrade must force one bounded workspace backfill for previously omitted shared item details",
+);
+assert.match(
+  cloud,
+  /requestedSince < authoritativeEntrySinceDate[\s\S]{0,700}from\("metric_entries"\)[\s\S]{0,260}\.gte\("local_date", requestedSince\)[\s\S]{0,180}\.lt\("local_date", authoritativeEntrySinceDate!\)/,
+  "an explicit older Leaderboard range must page its authorized individual logs instead of falling back permanently to a daily total",
+);
+assert.match(
+  cloud,
+  /missingSnapshotRpc[\s\S]{0,500}from\("group_members"\)[\s\S]{0,300}\.eq\("user_id", state\.currentUserId\)[\s\S]{0,500}groupActivityFallbackMembershipIsActive/,
+  "the RPC compatibility path must independently prove the viewer's active membership before reading activity tables",
+);
+assert.match(
+  cloud,
+  /CLOUD_ACTIVITY_ENTRY_SELECT[\s\S]{0,500}client_generated_id[\s\S]{0,500}account_revision/,
+  "historical item hydration must request only the detail columns used by the client",
+);
 assert.match(cloud, /select\("metric_id", \{ count: "exact", head: true \}\)/);
 assert.match(cloud, /expectedCoverageDates[\s\S]*fastRecentDates/);
-assert.match(provider, /refreshActivity: \(sinceDate\?: string\)/);
+assert.match(provider, /refreshActivity:\s*\([\s\S]{0,120}options\?: RefreshActivityOptions/);
+assert.match(
+  provider,
+  /queuedActivityForceRef[\s\S]{0,900}queuedForce[\s\S]{0,1800}shouldCommitGroupActivityResponse\([\s\S]{0,180}force: queuedForce/,
+  "a forced detail request must survive serialized coalescing and bypass the same-version short circuit",
+);
+assert.match(
+  provider,
+  /sameGroupBeforeRead[\s\S]{0,350}forcedGroupActivityRequestCrossedGroupBoundary[\s\S]{0,250}Group activity detail refresh was cancelled[\s\S]{0,400}loadCloudGroupActivity/,
+  "a forced detail read must reject a group switch before issuing its network request",
+);
+assert.match(
+  provider,
+  /queuedActivitySinceRef\.current = undefined;[\s\S]{0,100}queuedActivityForceRef\.current = false;/,
+  "group or account cleanup must not leak a queued force bit across the authorization boundary",
+);
+assert.match(
+  provider,
+  /queuedActivityGroupIdRef\.current !== requestGroupId/,
+  "a detail request queued during a group switch must remain scoped to the new group",
+);
+assert.match(
+  provider,
+  /activeOperation\.then\(drainThisGroup/,
+  "a detail request queued during a group switch must drain after the old request settles",
+);
+assert.match(
+  provider,
+  /activityRefreshOperationGroupRef\.current === requestGroupId[\s\S]{0,120}return activityRefreshPromiseRef\.current/,
+  "concurrent detail callers must join the new group's in-flight authorized read",
+);
 assert.match(provider, /refreshGroupActivity\([\s\S]*sinceDate/);
 assert.match(group, /cloud\.refreshActivity\(targetedActivitySince\)/);
+assert.match(
+  leaderboardDetail,
+  /refreshActivity\(targetedActivitySince, \{ force: true \}\)/,
+  "Leaderboard detail must rehydrate cloud-only item rows after a restart",
+);
+assert.match(
+  leaderboardDetail,
+  /const targetedActivitySince = dates\[0\]/,
+  "Overall item hydration must start at the earliest real compact-status date",
+);
+assert.doesNotMatch(
+  leaderboardDetail,
+  /SHARED_LEADERBOARD_SUMMARY_START|2000-01-01/,
+  "Leaderboard detail must not page raw items from an artificial all-time sentinel",
+);
+assert.doesNotMatch(
+  provider,
+  /forcedActivityRangeKeysByGroupRef/,
+  "a previous detail read must never authorize a later route visit without a fresh RLS-backed read",
+);
+assert.match(
+  leaderboardDetail,
+  /\.catch\(\(\) => \{[\s\S]{0,160}setDetailsRefreshFailed\(true\)/,
+  "a failed authorized detail refresh must remain fail-closed",
+);
+assert.match(
+  leaderboardDetail,
+  /detailsRefreshFailed[\s\S]*Could not refresh individual logs[\s\S]{0,500}Retry individual logs[\s\S]{0,300}setDetailsRefreshAttempt/,
+  "a failed authorized detail refresh must offer a visible retry",
+);
+assert.match(
+  leaderboardDetail,
+  /sharedWorkoutBreakdownEntries\([\s\S]{0,100}entry,[\s\S]{0,100}authorizedEntries/,
+  "a selected Workout log must associate its independently authorized child rows",
+);
+assert.match(
+  leaderboardDetail,
+  /const workoutDetails = workoutBreakdown\.flatMap/,
+  "shared workout rows must format their independently authorized child rows",
+);
+assert.match(
+  leaderboardDetail,
+  /workoutDetails\.join\(" · "\)/,
+  "shared workout rows must render the authorized calorie, duration, and distance breakdown",
+);
+assert.doesNotMatch(
+  leaderboardDetail,
+  /entry\.submetricValues\?\.\[(?:metricId|"exercise"|"workout_duration"|"workout_distance")\]/,
+  "the detail screen must not trust linked tracker values embedded in a shared Workout parent",
+);
+assert.match(
+  cloud,
+  /rawOwnedEntries[\s\S]{0,220}\.map\(withoutSharedWorkoutParentDetails\)/,
+  "native relational publishing must strip independently private tracker values from Workout parents",
+);
+assert.match(
+  cloud,
+  /remoteEntries[\s\S]{0,160}applySharedMetricPrivacyFences\([\s\S]{0,220}withoutSharedWorkoutParentDetails/,
+  "legacy cloud Workout parents must be sanitized again while hydrating group activity",
+);
+assert.match(
+  googleWorkoutDetailMigration,
+  /create or replace function public\.sanitize_group_workout_entry_details\(\)[\s\S]*?new\.submetric_values - 'exercise' - 'workout_duration' - 'workout_distance'/,
+  "the database must enforce linked Workout privacy below every client",
+);
+assert.match(
+  googleWorkoutDetailMigration,
+  /before insert or update on public\.metric_entries[\s\S]{0,120}sanitize_group_workout_entry_details\(\)/,
+  "the Workout sanitizer must protect all relational inserts and updates",
+);
+assert.match(
+  googleWorkoutDetailMigration,
+  /join public\.group_members membership[\s\S]{0,260}membership\.status = 'active'[\s\S]{0,260}detail_definition\.group_id = membership\.group_id[\s\S]{0,120}detail_definition\.slug = 'exercise'/,
+  "Google workout calories must be projected only into an active destination group's configured Active energy tracker",
+);
+assert.match(
+  googleWorkoutDetailMigration,
+  /left join public\.google_health_entry_preferences preference[\s\S]*?case when preference\.dismissed then 'private' else preference\.visibility end[\s\S]{0,180}= 'group'/,
+  "dismissed or explicitly private Active energy details must not resurrect from a Workout carrier",
+);
+assert.match(
+  googleWorkoutDetailMigration,
+  /create or replace function public\.mutate_google_health_food_family_and_project[\s\S]*?public\.mutate_google_health_food_family\([\s\S]*?public\.project_google_health_group_data\(/,
+  "entry visibility and dismissal changes must project atomically",
+);
+assert.match(
+  googleWorkoutDetailMigration,
+  /create or replace function public\.update_google_health_metric_visibility_and_project[\s\S]*?public\.update_google_health_metric_visibility\([\s\S]*?public\.project_google_health_group_data\(/,
+  "metric privacy changes must project atomically",
+);
+assert.match(
+  googleWorkoutDetailMigration,
+  /source\.entry ->> 'metricId' in \([\s\S]{0,180}'workout_duration',[\s\S]{0,80}'workout_distance'/,
+  "duration and distance details must retain their own independently authorized relational rows",
+);
+assert.match(
+  googleWorkoutDetailMigration,
+  /update public\.google_health_connections[\s\S]*next_catchup_at = least[\s\S]*status = 'connected'[\s\S]*refresh_token_ciphertext is not null[\s\S]*health_user_id is not null/,
+  "the projector upgrade must use the existing rate-limited catch-up path for connected accounts",
+);
 assert.match(
   group,
   /period === "overall"[\s\S]*SHARED_LEADERBOARD_SUMMARY_START/,
@@ -396,6 +658,119 @@ assert.equal(
   "Shared daily total",
   "a compact-only sensor total should retain the explicit summary fallback",
 );
+const sharedWorkout = {
+  ...sharedMeal,
+  id: "google-health:morning-walk:workout",
+  metricId: "workout",
+  value: true,
+  label: "Morning walk",
+  nutrition: undefined,
+  imageStoragePath: undefined,
+  imageUri: undefined,
+  sourceRecordId: "google-health:exercise:morning-walk",
+  submetricValues: {
+    exercise: 100,
+    workout_duration: 42,
+    workout_distance: 3.4,
+    rounds: 4,
+  },
+};
+assert.deepEqual(
+  withoutSharedWorkoutParentDetails(sharedWorkout).submetricValues,
+  { rounds: 4 },
+  "a relational Workout parent must retain unrelated fields while stripping independently private tracker details",
+);
+const sharedWorkoutChildren = [
+  ["exercise", 100],
+  ["workout_duration", 42],
+  ["workout_distance", 3.4],
+].map(([metricId, value]) => ({
+  ...sharedWorkout,
+  id: `google-health:morning-walk:${metricId}`,
+  metricId,
+  value,
+  submetricValues: undefined,
+}));
+const authorizedWorkoutRows = sharedLeaderboardLogEntries({
+  currentUserId: "viewer",
+  dates: [sharedLogDay],
+  entries: [sharedWorkout, ...sharedWorkoutChildren],
+  groupId: "group",
+  statuses: [
+    ...["exercise", "workout_duration"].map((metricId) => ({
+      groupId: "group",
+      metricId,
+      userId: "peer",
+      localDate: sharedLogDay,
+      goalReached: false,
+      scoreContribution: 0,
+      visibility: "group",
+      privacyProjectionVersion: 2,
+      exactValue: 200,
+      sourceRevision: 12,
+    })),
+    {
+      groupId: "group",
+      metricId: "workout_distance",
+      userId: "peer",
+      localDate: sharedLogDay,
+      goalReached: false,
+      scoreContribution: 0,
+      visibility: "private",
+      privacyProjectionVersion: 2,
+      sourceRevision: 12,
+    },
+  ],
+});
+assert.deepEqual(
+  authorizedWorkoutRows.map((entry) => [entry.metricId, entry.value]),
+  [
+    ["workout", true],
+    ["exercise", 100],
+    ["workout_duration", 42],
+  ],
+  "shared logs must preserve authorized child rows while fencing a private sibling",
+);
+assert.deepEqual(
+  sharedWorkoutBreakdownEntries(sharedWorkout, authorizedWorkoutRows).map(
+    (entry) => [entry.metricId, entry.value],
+  ),
+  [
+    ["exercise", 100],
+    ["workout_duration", 42],
+  ],
+  "a Workout breakdown must use only same-source rows that survived independent privacy checks",
+);
+const legacyWorkout = {
+  ...sharedWorkout,
+  id: "gym-sync:session-1:workout",
+  source: "manual",
+  sourceProvider: undefined,
+  sourceRecordId: undefined,
+  recordedAt: `${sharedLogDay}T18:00:00.000Z`,
+  label: "Evening gym",
+  note: "Workout session · 9 sets",
+};
+const legacyExercise = {
+  ...legacyWorkout,
+  id: "gym-sync:session-1:exercise",
+  metricId: "exercise",
+  value: 260,
+  submetricValues: undefined,
+};
+const legacyExerciseDuplicate = {
+  ...legacyExercise,
+  id: "legacy-copy-without-source-record-id",
+};
+assert.deepEqual(
+  sharedWorkoutBreakdownEntries(legacyWorkout, [
+    legacyWorkout,
+    legacyExercise,
+    legacyExerciseDuplicate,
+  ]).map((entry) => entry.metricId),
+  ["exercise"],
+  "sourceRecordId-less legacy rows must associate by stable event identity without duplicate breakdown values",
+);
 assert.deepEqual(
   sharedLeaderboardLogEntries({
     currentUserId: "viewer",
@@ -627,7 +1002,7 @@ assert.match(
 assert.match(leaderboardDetail, /sharedLeaderboardLogEntries\(\{/);
 assert.match(
   leaderboardDetail,
-  /cloud\s*\.refreshActivity\(targetedActivitySince\)/,
+  /\.refreshActivity\(targetedActivitySince, \{ force: true \}\)/,
   "direct leaderboard-detail navigation must hydrate its requested activity range",
 );
 assert.equal(

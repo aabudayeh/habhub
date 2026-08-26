@@ -546,6 +546,8 @@ function GymScreen() {
     state.settings.gymTimerMode === "whole_workout"
       ? "whole_workout"
       : "guided";
+  const loggedTodayCollapsed =
+    state.settings.gymLoggedTodayCollapsed !== false;
   const [timerNow, setTimerNow] = useState(Date.now());
   const activeTutorialTarget = tutorial.activeStep?.target;
   useEffect(() => {
@@ -1120,16 +1122,26 @@ function GymScreen() {
   const selectedSession = sessionsForDate.find(
     (session) => session.id === sessionId,
   );
+  const loggedSessionsForDate = useMemo(
+    () =>
+      sessionsForDate.filter(
+        (session) => completedGymSets(session.exercises) > 0,
+      ),
+    [sessionsForDate],
+  );
+  const selectedSessionLogged = Boolean(
+    selectedSession && completedGymSets(selectedSession.exercises) > 0,
+  );
   const savedDayTotals = useMemo(
     () =>
-      sessionsForDate.reduce(
+      loggedSessionsForDate.reduce(
         (totals, session) => ({
           durationMinutes: totals.durationMinutes + session.durationMinutes,
           calories: totals.calories + Math.max(0, session.calories ?? 0),
         }),
         { durationMinutes: 0, calories: 0 },
       ),
-    [sessionsForDate],
+    [loggedSessionsForDate],
   );
   const gymDays = useMemo(
     () => new Set(sessions.map((session) => session.localDate)),
@@ -1154,7 +1166,7 @@ function GymScreen() {
     exercises.every((exercise) =>
       exercise.sets.every((set) => set.completed),
     );
-  const workoutEditorTitle = selectedSession
+  const workoutEditorTitle = selectedSessionLogged
     ? "Logged exercises"
     : completedSets > 0
       ? "Workout in progress"
@@ -2948,10 +2960,12 @@ function GymScreen() {
                     />
                   </View>
                   <Text style={[styles.meta, { color: colors.muted }]}>
-                    {selectedSession
-                      ? `${sessionsForDate.length} saved workout${sessionsForDate.length === 1 ? "" : "s"} · reviewing a logged session`
-                      : sessionsForDate.length
-                        ? `Plan the next workout · ${sessionsForDate.length} already logged today`
+                    {selectedSessionLogged
+                      ? `${loggedSessionsForDate.length} logged workout${loggedSessionsForDate.length === 1 ? "" : "s"} · reviewing a logged session`
+                      : selectedSession
+                        ? "Continue your saved workout plan"
+                        : loggedSessionsForDate.length
+                          ? `Plan the next workout · ${loggedSessionsForDate.length} already logged today`
                         : "Plan today's workout · seeded from your active template"}
                   </Text>
                 </Pressable>
@@ -3001,7 +3015,7 @@ function GymScreen() {
                   </View>
                 </View>
               ) : null}
-              {sessionsForDate.length ? (
+              {loggedSessionsForDate.length ? (
                 <View
                   style={[
                     styles.sessionPicker,
@@ -3009,7 +3023,21 @@ function GymScreen() {
                   ]}
                 >
                   <View style={styles.sessionPickerHeader}>
-                    <View style={styles.loggedTodayHeading}>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={t(
+                        loggedTodayCollapsed
+                          ? "Show logged workouts"
+                          : "Hide logged workouts",
+                      )}
+                      accessibilityState={{ expanded: !loggedTodayCollapsed }}
+                      onPress={() =>
+                        updateSettings({
+                          gymLoggedTodayCollapsed: !loggedTodayCollapsed,
+                        })
+                      }
+                      style={styles.loggedTodayHeading}
+                    >
                       <View
                         style={[
                           styles.loggedTodayIcon,
@@ -3032,7 +3060,7 @@ function GymScreen() {
                           ]}
                         >
                           <Text style={[styles.loggedCountText, { color: palette.lime }]}>
-                            {sessionsForDate.length}
+                            {loggedSessionsForDate.length}
                           </Text>
                         </View>
                       </View>
@@ -3040,7 +3068,16 @@ function GymScreen() {
                         {`${Math.round(savedDayTotals.durationMinutes * 10) / 10} min · ~${Math.round(savedDayTotals.calories)} active kcal total`}
                       </Text>
                       </View>
-                    </View>
+                      <Ionicons
+                        name={
+                          loggedTodayCollapsed
+                            ? "chevron-down"
+                            : "chevron-up"
+                        }
+                        size={15}
+                        color={colors.muted}
+                      />
+                    </Pressable>
                     <Pressable
                       accessibilityLabel="Start another workout"
                       onPress={startNewWorkout}
@@ -3058,14 +3095,16 @@ function GymScreen() {
                       <Text style={[styles.newSessionText, { color: accent }]}>New workout</Text>
                     </Pressable>
                   </View>
-                  <ScrollView
-                    horizontal
-                    nestedScrollEnabled
-                    showsHorizontalScrollIndicator={false}
-                    contentContainerStyle={styles.sessionChoices}
-                  >
-                    {sessionsForDate.map((session, index) => {
+                  {!loggedTodayCollapsed ? (
+                    <ScrollView
+                      horizontal
+                      nestedScrollEnabled
+                      showsHorizontalScrollIndicator={false}
+                      contentContainerStyle={styles.sessionChoices}
+                    >
+                      {loggedSessionsForDate.map((session, index) => {
                       const selected = session.id === selectedSession?.id;
+                      const logged = completedGymSets(session.exercises) > 0;
                       const clock = gymSessionClockBounds(session);
                       const time = clock.completedAt
                         ? formatClockTime(
@@ -3073,7 +3112,7 @@ function GymScreen() {
                             state.settings.timeFormat,
                             locale,
                           )
-                        : `#${sessionsForDate.length - index}`;
+                        : `#${loggedSessionsForDate.length - index}`;
                       return (
                         <Pressable
                           key={session.id}
@@ -3093,9 +3132,9 @@ function GymScreen() {
                         >
                           <View style={styles.sessionChoiceTop}>
                             <Ionicons
-                              name="checkmark-circle"
+                              name={logged ? "checkmark-circle" : "document-outline"}
                               size={13}
-                              color={palette.lime}
+                              color={logged ? palette.lime : colors.muted}
                             />
                             <Text
                               translate={false}
@@ -3107,7 +3146,14 @@ function GymScreen() {
                             >
                               {session.name}
                             </Text>
-                            <Text style={[styles.sessionChoiceStatus, { color: palette.lime }]}>Logged</Text>
+                            <Text
+                              style={[
+                                styles.sessionChoiceStatus,
+                                { color: logged ? palette.lime : colors.muted },
+                              ]}
+                            >
+                              {logged ? "Logged" : "Draft"}
+                            </Text>
                           </View>
                           <Text
                             style={[
@@ -3119,87 +3165,46 @@ function GymScreen() {
                           </Text>
                         </Pressable>
                       );
-                    })}
-                  </ScrollView>
+                      })}
+                    </ScrollView>
+                  ) : null}
                 </View>
               ) : null}
-              <View
-                style={[
-                  styles.workoutEditorHeading,
-                  {
-                    borderColor: selectedSession ? `${palette.lime}66` : colors.border,
-                    backgroundColor: selectedSession
-                      ? `${palette.lime}0D`
-                      : colors.card,
-                  },
-                ]}
-              >
-                <View
-                  style={[
-                    styles.workoutEditorIcon,
-                    {
-                      backgroundColor: selectedSession
-                        ? `${palette.lime}1F`
-                        : colors.primarySoft,
-                    },
-                  ]}
-                >
-                  <Ionicons
-                    name={selectedSession ? "checkmark-done" : "barbell-outline"}
-                    size={17}
-                    color={selectedSession ? palette.lime : accent}
-                  />
-                </View>
-                <View style={styles.grow}>
-                  <Text style={[styles.workoutEditorTitle, { color: colors.ink }]}>
-                    {selectedSession ? "Logged workout" : "Plan & log workout"}
-                  </Text>
-                  <Text style={[styles.meta, { color: colors.muted }]}>
-                    {selectedSession
-                      ? "Review or update this saved session. Start a new workout to log another."
-                      : exercises.length
-                        ? "Complete the sets below, then save the workout."
-                        : "Choose a template or add exercises to begin."}
-                  </Text>
-                </View>
-                <View
-                  style={[
-                    styles.workoutEditorStatus,
-                    {
-                      borderColor: selectedSession ? `${palette.lime}66` : colors.border,
-                      backgroundColor: selectedSession
-                        ? `${palette.lime}14`
-                        : "transparent",
-                    },
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.workoutEditorStatusText,
-                      { color: selectedSession ? palette.lime : colors.muted },
-                    ]}
-                  >
-                    {selectedSession ? "Saved" : "Draft"}
-                  </Text>
-                </View>
-              </View>
               <TutorialTarget id="workout-session-details">
               <Pressable
                 onPress={() => setSessionDetailsOpen((value) => !value)}
                 style={[
                   styles.detailsToggle,
                   {
-                    borderColor: selectedSession ? `${palette.lime}55` : colors.border,
-                    backgroundColor: selectedSession ? `${palette.lime}08` : "transparent",
+                    borderColor: selectedSessionLogged ? `${palette.lime}55` : colors.border,
+                    backgroundColor: selectedSessionLogged ? `${palette.lime}08` : "transparent",
                   },
                 ]}
               >
+                <View
+                  style={[
+                    styles.workoutStatusIcon,
+                    {
+                      backgroundColor: selectedSessionLogged
+                        ? `${palette.lime}1F`
+                        : colors.primarySoft,
+                    },
+                  ]}
+                >
+                  <Ionicons
+                    name={
+                      selectedSessionLogged ? "checkmark-done" : "barbell-outline"
+                    }
+                    size={15}
+                    color={selectedSessionLogged ? palette.lime : accent}
+                  />
+                </View>
                 <View style={styles.grow}>
-                  <Text style={[styles.exerciseName, { color: colors.ink }]}>
-                    {sessionName || "Workout"}
+                  <Text style={[styles.workoutStatusTitle, { color: colors.ink }]}>
+                    {selectedSessionLogged ? "Workout logged" : "Plan & log workout"}
                   </Text>
                   <Text style={[styles.meta, { color: colors.muted }]}>
-                    {completedSets} sets · {inferredDuration} min · ~{estimatedCalories} active kcal
+                    {sessionName || "Workout"} · {completedSets} sets · {inferredDuration} min · ~{estimatedCalories} active kcal
                   </Text>
                 </View>
                 <Ionicons
@@ -4926,33 +4931,14 @@ const styles = StyleSheet.create({
   sessionChoiceName: { flex: 1, minWidth: 0, fontSize: 9, fontWeight: "900" },
   sessionChoiceStatus: { marginLeft: "auto", fontSize: 6, fontWeight: "900" },
   sessionChoiceMeta: { fontSize: 7, lineHeight: 10, marginTop: 2 },
-  workoutEditorHeading: {
-    minHeight: 55,
-    borderWidth: 1,
-    borderRadius: 12,
-    paddingHorizontal: 9,
-    paddingVertical: 7,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-  workoutEditorIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: 11,
+  workoutStatusIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 9,
     alignItems: "center",
     justifyContent: "center",
   },
-  workoutEditorTitle: { fontSize: 11, fontWeight: "900" },
-  workoutEditorStatus: {
-    minHeight: 23,
-    borderWidth: 1,
-    borderRadius: 8,
-    paddingHorizontal: 7,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  workoutEditorStatusText: { fontSize: 7, fontWeight: "900" },
+  workoutStatusTitle: { fontSize: 10, fontWeight: "900" },
   templateMenu: { borderWidth: 1, borderRadius: 11, overflow: "hidden" },
   templateToggle: {
     minHeight: 44,

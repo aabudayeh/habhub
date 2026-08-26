@@ -63,7 +63,10 @@ import {
   formatMetricValue,
   metricVisualProgress,
 } from "@/src/domain/metrics";
-import { sharedLeaderboardLogEntries } from "@/src/domain/sharedLeaderboardLogs";
+import {
+  sharedLeaderboardLogEntries,
+  sharedWorkoutBreakdownEntries,
+} from "@/src/domain/sharedLeaderboardLogs";
 import { useCloudSyncActions } from "@/src/cloud/CloudSyncProvider";
 import { isCloudGroupId } from "@/src/cloud/groupCloud";
 import { useApp } from "@/src/state/AppProvider";
@@ -72,7 +75,6 @@ import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { AppState, MetricEntry, PhotoUpdate } from "@/src/types";
 
 const SCORE_ID = "__score";
-const SHARED_LEADERBOARD_SUMMARY_START = "2000-01-01";
 
 export default function LeaderboardDetail() {
   const params = useLocalSearchParams<{
@@ -97,6 +99,8 @@ export default function LeaderboardDetail() {
   const [openLogs, setOpenLogs] = useState<Record<string, boolean>>({});
   const [detailsReady, setDetailsReady] = useState(false);
   const [peerDetailsAuthorized, setPeerDetailsAuthorized] = useState(false);
+  const [detailsRefreshFailed, setDetailsRefreshFailed] = useState(false);
+  const [detailsRefreshAttempt, setDetailsRefreshAttempt] = useState(0);
   useEffect(() => {
     let active = true;
     // Paint the route shell first, then calculate details on the next task.
@@ -117,10 +121,10 @@ export default function LeaderboardDetail() {
         : periodDates(period, anchor, state.settings.weekStartsOn ?? 1),
     [anchor, period, state],
   );
-  const targetedActivitySince =
-    period === "overall"
-      ? SHARED_LEADERBOARD_SUMMARY_START
-      : dates[0];
+  // The main Leaderboard hydrates compact all-time statuses. Detail requests
+  // then use the earliest real date represented by those statuses so raw item
+  // pagination never starts at an artificial 2000 sentinel.
+  const targetedActivitySince = dates[0];
   useEffect(() => {
     if (
       !detailsReady ||
@@ -133,13 +137,19 @@ export default function LeaderboardDetail() {
     }
     let active = true;
     setPeerDetailsAuthorized(false);
+    setDetailsRefreshFailed(false);
     const timer = setTimeout(() => {
       cloud
-        .refreshActivity(targetedActivitySince)
+        // Google Health item rows deliberately stay out of plaintext device
+        // caches. Rehydrate this explicit detail range even when its compact
+        // activity version and coverage were restored after an app restart.
+        .refreshActivity(targetedActivitySince, { force: true })
         .then(() => {
           if (active) setPeerDetailsAuthorized(true);
         })
-        .catch(() => undefined);
+        .catch(() => {
+          if (active) setDetailsRefreshFailed(true);
+        });
     }, 0);
     return () => {
       active = false;
@@ -148,6 +158,7 @@ export default function LeaderboardDetail() {
   }, [
     cloud,
     detailsReady,
+    detailsRefreshAttempt,
     state.group.id,
     targetedActivitySince,
     tutorialSandbox,
@@ -293,6 +304,15 @@ export default function LeaderboardDetail() {
     });
     return grouped;
   }, [metrics, visibleEntries]);
+  const authorizedEntriesByMember = useMemo(() => {
+    const grouped = new Map<string, MetricEntry[]>();
+    visibleEntries.forEach((entry) => {
+      const entries = grouped.get(entry.userId) ?? [];
+      entries.push(entry);
+      grouped.set(entry.userId, entries);
+    });
+    return grouped;
+  }, [visibleEntries]);
 
   function setRange(next: LeaderboardPeriod) {
     setPeriod(next);
@@ -461,6 +481,20 @@ export default function LeaderboardDetail() {
             </Text>
           </Card>
         ) : null}
+        {detailsRefreshFailed ? (
+          <Card style={styles.detailRefreshCard}>
+            <Text style={[styles.metricSub, { color: colors.muted }]}>
+              Could not refresh individual logs. Daily totals are still shown.
+            </Text>
+            <Button
+              label="Retry individual logs"
+              icon="refresh-outline"
+              size="small"
+              variant="ghost"
+              onPress={() => setDetailsRefreshAttempt((attempt) => attempt + 1)}
+            />
+          </Card>
+        ) : null}
         {rows.map((row, index) => {
           const memberSyncedAt = latestMemberActivityPublishedAt(
             state.dailyMetricStatuses,
@@ -469,6 +503,8 @@ export default function LeaderboardDetail() {
             row.member.lastDataSyncedAt,
           );
           const entries = entriesByMember.get(row.member.id) ?? [];
+          const authorizedEntries =
+            authorizedEntriesByMember.get(row.member.id) ?? [];
           const expanded = Boolean(openLogs[row.member.id]);
           const weightDay =
             dates.length === 1 &&
@@ -740,6 +776,10 @@ export default function LeaderboardDetail() {
                             key={`${entry.userId}:${entry.id}`}
                             entry={entry}
                             state={state}
+                            workoutBreakdown={sharedWorkoutBreakdownEntries(
+                              entry,
+                              authorizedEntries,
+                            )}
                           />
                         ))
                     : null}
@@ -786,7 +826,15 @@ function personalGoalProgressCopy(
   return `${percent - 100}% beyond personal goal`;
 }
 
-function LogRow({ entry, state }: { entry: MetricEntry; state: AppState }) {
+function LogRow({
+  entry,
+  state,
+  workoutBreakdown,
+}: {
+  entry: MetricEntry;
+  state: AppState;
+  workoutBreakdown: MetricEntry[];
+}) {
   const colors = useAppColors();
   const { language } = useLocalization();
   const metric =
@@ -805,6 +853,17 @@ function LogRow({ entry, state }: { entry: MetricEntry; state: AppState }) {
               ? 0
               : Number(entry.value),
         );
+  const workoutDetails = workoutBreakdown.flatMap((detail) => {
+    const detailMetric =
+      (state.group.metricConfiguration ?? []).find(
+        (item) => item.id === detail.metricId,
+      ) ?? state.metrics.find((item) => item.id === detail.metricId);
+    const amount = Number(detail.value);
+    if (!Number.isFinite(amount) || !detailMetric) return [];
+    return [
+      `${localizeMetricName(language, detailMetric)} ${formatMetricValue(detailMetric, amount)}`,
+    ];
+  });
   return (
     <View
       style={[
@@ -849,6 +908,11 @@ function LogRow({ entry, state }: { entry: MetricEntry; state: AppState }) {
                   : [];
               })
               .join(" · ")}
+          </Text>
+        ) : null}
+        {workoutDetails.length ? (
+          <Text translate={false} style={[styles.nutrition, { color: colors.primary }]}>
+            {workoutDetails.join(" · ")}
           </Text>
         ) : null}
       </View>
@@ -1118,6 +1182,11 @@ const styles = StyleSheet.create({
     minHeight: 72,
     alignItems: "center",
     justifyContent: "center",
+  },
+  detailRefreshCard: {
+    alignItems: "center",
+    gap: 9,
+    paddingVertical: 13,
   },
   whatToShow: { marginTop: 15, paddingTop: 2 },
   memberCard: { padding: 13 },

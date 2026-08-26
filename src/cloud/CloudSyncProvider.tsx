@@ -59,6 +59,12 @@ import {
   mergeLocalCurrentDayDeviceHealthEntries,
 } from "@/src/domain/healthDedup";
 import { scopeCachedGroupActivity } from "@/src/domain/groupActivityCacheScope";
+import {
+  forcedGroupActivityRequestCrossedGroupBoundary,
+  groupActivityRangeAlreadyLoaded,
+  shouldRequeueSupersededGroupActivity,
+  shouldCommitGroupActivityResponse,
+} from "@/src/domain/groupActivityRefresh";
 import { applySharedMetricPrivacyFences } from "@/src/domain/sharedMetricPrivacy";
 import {
   applyGoogleHealthEntryOverrides,
@@ -206,6 +212,11 @@ export type AccountDevice = {
   isThisDevice: boolean;
 };
 
+type RefreshActivityOptions = {
+  /** Re-read an already covered range when its cloud-only item rows are absent. */
+  force?: boolean;
+};
+
 type CloudSyncContextValue = {
   status: CloudSyncStatus;
   lastSyncedAt: string | null;
@@ -226,7 +237,10 @@ type CloudSyncContextValue = {
   switchGroup: (groupId: string) => Promise<void>;
   leaveGroup: (groupId: string) => Promise<void>;
   refreshGroup: () => Promise<void>;
-  refreshActivity: (sinceDate?: string) => Promise<void>;
+  refreshActivity: (
+    sinceDate?: string,
+    options?: RefreshActivityOptions,
+  ) => Promise<void>;
   refreshMessages: () => Promise<void>;
   syncMessagesNow: (messageId?: string) => Promise<void>;
   approveMember: (userId: string) => Promise<void>;
@@ -1220,6 +1234,10 @@ async function createCloudMergeBaseResponsively(
 const stableHashCache = new WeakMap<AppState, string>();
 const workspaceHashCache = new WeakMap<AppState, string>();
 const accountMetadataHashCache = new WeakMap<AppState, string>();
+// Bump when the relational group projection needs a one-time rebuild even if
+// the underlying account data did not change. Version 2 backfills item-level
+// meal/workout rows for accounts whose older client published only daily totals.
+const SHARED_ENTRY_DETAIL_PROJECTION_VERSION = 2;
 
 function stableHash(state: AppState) {
   const cached = stableHashCache.get(state);
@@ -1328,6 +1346,8 @@ function workspaceHash(state: AppState) {
   if (cached) return cached;
   const payload = snapshotPayload(state);
   const hash = stableValueHash({
+    sharedEntryDetailProjectionVersion:
+      SHARED_ENTRY_DETAIL_PROJECTION_VERSION,
     currentUserId: payload.currentUserId,
     groupId: payload.group.id,
     // Profile and energy data use their own small global projection. Keeping
@@ -2717,6 +2737,10 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   const groupRefreshPromiseRef = useRef<Promise<void> | null>(null);
   const messageRefreshPromiseRef = useRef<Promise<void> | null>(null);
   const activityRefreshPromiseRef = useRef<Promise<void> | null>(null);
+  const activityRefreshOperationGroupRef = useRef<string | null>(null);
+  const activityRefreshRunnerRef = useRef<
+    ((sinceDate?: string, forceReload?: boolean) => Promise<void>) | null
+  >(null);
   const activityVersionByGroupRef = useRef(new Map<string, number>());
   const activityCoverageSinceByGroupRef = useRef(new Map<string, string>());
   const activityVersionCheckByGroupRef = useRef(
@@ -2727,6 +2751,8 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   // undefined = no queued request, null = full activity refresh, string =
   // earliest local date requested by coalesced realtime events.
   const queuedActivitySinceRef = useRef<string | null | undefined>(undefined);
+  const queuedActivityForceRef = useRef(false);
+  const queuedActivityGroupIdRef = useRef<string | undefined>(undefined);
   const chatOutboxBoundaryRef = useRef<string | null>(null);
   const chatOutboxSeenRef = useRef(new Set<string>());
   const chatOutboxInitializedGroupRef = useRef<string | null>(null);
@@ -5878,33 +5904,86 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   };
 
   const refreshGroupActivity = useCallback(
-    (sinceDate?: string): Promise<void> => {
-      if (!isCloudGroupId(stateRef.current.group.id))
+    (sinceDate?: string, forceReload = false): Promise<void> => {
+      const requestGroupId = stateRef.current.group.id;
+      if (!isCloudGroupId(requestGroupId))
         return Promise.resolve();
       const requestedSince = sinceDate ?? null;
-      const alreadyQueued = queuedActivitySinceRef.current;
-      if (
-        alreadyQueued === undefined ||
-        requestedSince === null ||
-        (alreadyQueued !== null && requestedSince < alreadyQueued)
-      )
+      if (queuedActivityGroupIdRef.current !== requestGroupId) {
+        // A request queued behind another group's in-flight read belongs only
+        // to the newly active group. Never merge its authorization range or
+        // force bit with the group that is being left.
+        queuedActivityGroupIdRef.current = requestGroupId;
         queuedActivitySinceRef.current = requestedSince;
+        queuedActivityForceRef.current = forceReload;
+      } else {
+        queuedActivitySinceRef.current = mergeQueuedActivitySince(
+          queuedActivitySinceRef.current,
+          requestedSince,
+        );
+        if (forceReload) queuedActivityForceRef.current = true;
+      }
 
       // Realtime can emit one event for the entry and another for its daily
       // summary. Coalesce them into one serialized refresh rather than allowing
       // overlapping range requests to commit out of order.
-      if (activityRefreshPromiseRef.current)
-        return activityRefreshPromiseRef.current;
+      if (activityRefreshPromiseRef.current) {
+        const activeOperation = activityRefreshPromiseRef.current;
+        const activeGroupId = activityRefreshOperationGroupRef.current;
+        const drainThisGroup = () => {
+          if (stateRef.current.group.id !== requestGroupId)
+            throw new Error("Group activity detail refresh was cancelled.");
+          if (
+            queuedActivityGroupIdRef.current !== requestGroupId ||
+            queuedActivitySinceRef.current === undefined
+          ) {
+            // Another waiter may have started and consumed this exact queued
+            // request first. Join that new-group operation rather than letting
+            // a concurrent detail surface authorize from stale local rows.
+            if (
+              activityRefreshOperationGroupRef.current === requestGroupId &&
+              activityRefreshPromiseRef.current
+            )
+              return activityRefreshPromiseRef.current;
+            return;
+          }
+          return activityRefreshRunnerRef.current?.(
+            queuedActivitySinceRef.current ?? undefined,
+            queuedActivityForceRef.current,
+          );
+        };
+        // If the in-flight operation belongs to this group, preserve its real
+        // failure for the caller. If it belongs to the group being left, wait
+        // for cancellation and then drain this group's queued request instead.
+        return activeOperation.then(drainThisGroup, (error) => {
+          if (activeGroupId === requestGroupId) throw error;
+          return drainThisGroup();
+        });
+      }
 
       const operation = (async () => {
         while (queuedActivitySinceRef.current !== undefined) {
+          const queuedGroupId = queuedActivityGroupIdRef.current;
           const queuedSince = queuedActivitySinceRef.current;
+          const queuedForce = queuedActivityForceRef.current;
+          queuedActivityGroupIdRef.current = undefined;
           queuedActivitySinceRef.current = undefined;
-          const groupId = stateRef.current.group.id;
-          if (!isCloudGroupId(groupId)) continue;
+          queuedActivityForceRef.current = false;
+          if (!queuedGroupId || !isCloudGroupId(queuedGroupId)) continue;
+          const groupId = queuedGroupId;
           const sequence = ++activityLoadSequenceRef.current;
           await yieldCloudMaintenanceToUi();
-          if (stateRef.current.group.id !== groupId) continue;
+          const sameGroupBeforeRead = stateRef.current.group.id === groupId;
+          if (!sameGroupBeforeRead) {
+            if (
+              forcedGroupActivityRequestCrossedGroupBoundary({
+                force: queuedForce,
+                sameGroup: sameGroupBeforeRead,
+              })
+            )
+              throw new Error("Group activity detail refresh was cancelled.");
+            continue;
+          }
           let activity: Awaited<ReturnType<typeof loadCloudGroupActivity>>;
           try {
             activity = await readCloudResponsively((signal) =>
@@ -5916,22 +5995,46 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
               ),
             );
           } catch (error) {
+            if (isDefinitiveGroupMembershipLoss(error)) {
+              await evictUnavailableGroup(groupId);
+              throw error;
+            }
             // The request was removed from the queue before its network read.
             // Restore that exact coverage (merging any newer invalidation that
             // arrived in flight) so a transient failure cannot lose history.
-            queuedActivitySinceRef.current = mergeQueuedActivitySince(
-              queuedActivitySinceRef.current,
-              queuedSince,
-            );
-            scheduleActivityReadRetry(groupId);
+            if (stateRef.current.group.id === groupId) {
+              queuedActivityGroupIdRef.current = groupId;
+              queuedActivitySinceRef.current = mergeQueuedActivitySince(
+                queuedActivitySinceRef.current,
+                queuedSince,
+              );
+              queuedActivityForceRef.current =
+                queuedActivityForceRef.current || queuedForce;
+              scheduleActivityReadRetry(groupId);
+            }
             throw error;
           }
           await yieldCloudMaintenanceToUi();
-          if (
-            sequence !== activityLoadSequenceRef.current ||
-            stateRef.current.group.id !== groupId
-          )
+          const sameGroup = stateRef.current.group.id === groupId;
+          if (sequence !== activityLoadSequenceRef.current || !sameGroup) {
+            if (
+              shouldRequeueSupersededGroupActivity({
+                force: queuedForce,
+                sameGroup,
+              })
+            ) {
+              queuedActivityGroupIdRef.current = groupId;
+              queuedActivitySinceRef.current = mergeQueuedActivitySince(
+                queuedActivitySinceRef.current,
+                queuedSince,
+              );
+              queuedActivityForceRef.current = true;
+              continue;
+            }
+            if (queuedForce)
+              throw new Error("Group activity detail refresh was cancelled.");
             continue;
+          }
           const lastVersion = activityVersionByGroupRef.current.get(groupId);
           const lastCoverage =
             activityCoverageSinceByGroupRef.current.get(groupId);
@@ -5941,12 +6044,12 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             responseCoverage &&
               (!lastCoverage || responseCoverage < lastCoverage),
           );
-          if (
-            activity.version !== undefined &&
-            lastVersion !== undefined &&
-            activity.version <= lastVersion &&
-            !extendsCoverage
-          )
+          if (!shouldCommitGroupActivityResponse({
+            responseVersion: activity.version,
+            lastVersion,
+            extendsCoverage,
+            force: queuedForce,
+          }))
             continue;
           if (activity.version !== undefined)
             activityVersionByGroupRef.current.set(
@@ -6046,16 +6149,25 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         clearActivityReadRetry(stateRef.current.group.id);
       })();
       activityRefreshPromiseRef.current = operation;
+      activityRefreshOperationGroupRef.current = requestGroupId;
       void operation
         .finally(() => {
-          if (activityRefreshPromiseRef.current === operation)
+          if (activityRefreshPromiseRef.current === operation) {
             activityRefreshPromiseRef.current = null;
+            activityRefreshOperationGroupRef.current = null;
+          }
         })
         .catch(() => undefined);
       return operation;
     },
-    [clearActivityReadRetry, replaceState, scheduleActivityReadRetry],
+    [
+      clearActivityReadRetry,
+      evictUnavailableGroup,
+      replaceState,
+      scheduleActivityReadRetry,
+    ],
   );
+  activityRefreshRunnerRef.current = refreshGroupActivity;
   activityReadRetryRunnerRef.current = (groupId) => {
     if (stateRef.current.group.id !== groupId) return;
     const queuedSince = queuedActivitySinceRef.current;
@@ -6322,6 +6434,8 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       clearMessageReadRetry();
       clearActivityReadRetry();
       queuedActivitySinceRef.current = undefined;
+      queuedActivityForceRef.current = false;
+      queuedActivityGroupIdRef.current = undefined;
     },
     [
       auth.user?.id,
@@ -6945,7 +7059,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         }
       },
       refreshGroup,
-      refreshActivity: (sinceDate) => {
+      refreshActivity: (sinceDate, options) => {
         const groupId = stateRef.current.group.id;
         const requestedSince = /^\d{4}-\d{2}-\d{2}$/.test(sinceDate ?? "")
           ? sinceDate
@@ -6955,7 +7069,11 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         // revisiting the Leaderboard should not download and re-render it.
         // Realtime keeps that cache current; parameterless manual refreshes
         // remain a deliberate force-refresh escape hatch.
-        if (requestedSince && loadedSince && loadedSince <= requestedSince)
+        if (groupActivityRangeAlreadyLoaded({
+          requestedSince,
+          loadedSince,
+          force: options?.force === true,
+        }))
           return Promise.resolve();
         // A deliberate user refresh is also the mixed-version escape hatch:
         // older installed clients do not publish activity commit versions.
@@ -6970,6 +7088,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
                 dateKey(),
                 -(GROUP_ACTIVITY_LOCAL_CACHE_DAYS - 1),
               ),
+          options?.force === true,
         );
       },
       refreshMessages,
@@ -7062,8 +7181,8 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       switchGroup: (groupId) => latestValueRef.current.switchGroup(groupId),
       leaveGroup: (groupId) => latestValueRef.current.leaveGroup(groupId),
       refreshGroup: () => latestValueRef.current.refreshGroup(),
-      refreshActivity: (sinceDate) =>
-        latestValueRef.current.refreshActivity(sinceDate),
+      refreshActivity: (sinceDate, options) =>
+        latestValueRef.current.refreshActivity(sinceDate, options),
       refreshMessages: () => latestValueRef.current.refreshMessages(),
       syncMessagesNow: (messageId) =>
         latestValueRef.current.syncMessagesNow(messageId),

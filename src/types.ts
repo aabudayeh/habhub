@@ -1053,6 +1053,8 @@ export type UserSettings = {
   showGym?: boolean;
   /** Workout timer progression; omitted preserves the original set/rest flow. */
   gymTimerMode?: GymTimerMode;
+  /** Personal disclosure state for the saved-workout list on Workout. */
+  gymLoggedTodayCollapsed?: boolean;
   /** One-time repair marker for builds that temporarily retired Workout calories. */
   workoutCaloriesRestored?: boolean;
   showCalendar?: boolean;

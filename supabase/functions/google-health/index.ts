@@ -408,6 +408,20 @@ async function queueForegroundRefresh(admin: AdminClient, userId: string) {
   return connectionStatus(admin, userId);
 }
 
+async function queueWorkoutDetailCatchup(admin: AdminClient, userId: string) {
+  const queued = await admin
+    .from("google_health_connections")
+    .update({ next_catchup_at: new Date().toISOString() })
+    .eq("user_id", userId)
+    .eq("status", "connected")
+    .not("refresh_token_ciphertext", "is", null)
+    .not("health_user_id", "is", null)
+    .select("user_id")
+    .maybeSingle();
+  if (queued.error) throw queued.error;
+  if (queued.data) startGoogleHealthWorker();
+}
+
 async function handleAction(request: Request) {
   const user = await authenticatedUser(request);
   if (!user) return jsonResponse(request, { error: "unauthorized" }, 401);
@@ -473,7 +487,7 @@ async function handleAction(request: Request) {
         action === "updateEntry" &&
         (!body.patch || typeof body.patch !== "object" || Array.isArray(body.patch))
       ) return jsonResponse(request, { error: "invalid_entry_mutation" }, 400);
-      const mutation = await admin.rpc("mutate_google_health_food_family", {
+      const mutation = await admin.rpc("mutate_google_health_food_family_and_project", {
         p_user_id: user.id,
         p_entry_id: body.entryId,
         p_action: action === "updateEntry" ? "update" : "dismiss",
@@ -492,13 +506,15 @@ async function handleAction(request: Request) {
         typeof body.metricId !== "string" || !body.metricId || body.metricId.length > 160 ||
         !["private", "status", "group"].includes(String(body.visibility))
       ) return jsonResponse(request, { error: "invalid_metric_visibility" }, 400);
-      const mutation = await admin.rpc("update_google_health_metric_visibility", {
+      const mutation = await admin.rpc("update_google_health_metric_visibility_and_project", {
         p_user_id: user.id,
         p_metric_id: body.metricId,
         p_visibility: body.visibility,
       });
       if (mutation.error) throw mutation.error;
       const payload = mutation.data && typeof mutation.data === "object" ? mutation.data : {};
+      if (body.metricId === "exercise" && body.visibility === "group")
+        await queueWorkoutDetailCatchup(admin, user.id);
       return jsonResponse(request, {
         ...payload,
         connection: await connectionStatus(admin, user.id),

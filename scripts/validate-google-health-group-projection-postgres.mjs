@@ -132,6 +132,49 @@ try {
       since_date date not null,
       updated_at timestamptz not null
     );
+    create table public.google_health_connections (
+      user_id uuid primary key,
+      status text not null,
+      refresh_token_ciphertext text,
+      health_user_id text,
+      next_catchup_at timestamptz not null
+    );
+    create table public.google_health_entry_preferences (
+      user_id uuid not null,
+      entry_id text not null,
+      metric_id text not null,
+      data_type text not null,
+      source_local_date date not null,
+      visibility text,
+      dismissed boolean not null default false,
+      primary key (user_id, entry_id)
+    );
+    create function public.mutate_google_health_food_family(
+      p_user_id uuid,
+      p_entry_id text,
+      p_action text,
+      p_patch jsonb default '{}'::jsonb
+    ) returns jsonb language sql as
+      'select jsonb_build_object(''revision'', 1)';
+    create function public.update_google_health_metric_visibility(
+      p_user_id uuid,
+      p_metric_id text,
+      p_visibility text
+    ) returns jsonb language sql as
+      'select jsonb_build_object(''revision'', 1)';
+    insert into public.google_health_connections (
+      user_id,
+      status,
+      refresh_token_ciphertext,
+      health_user_id,
+      next_catchup_at
+    ) values (
+      '00000000-0000-4000-8000-000000000001',
+      'connected',
+      'encrypted-test-token',
+      'health-user-1',
+      now() + interval '7 days'
+    );
   `);
 
   await db.exec(await Deno.readTextFile(
@@ -140,6 +183,19 @@ try {
   await db.exec(await Deno.readTextFile(
     "supabase/migrations/202608240008_conditional_daily_status_upserts.sql",
   ));
+  await db.exec(await Deno.readTextFile(
+    "supabase/migrations/202608260002_google_health_workout_detail_projection.sql",
+  ));
+
+  assert.equal(
+    await scalar(`
+      select next_catchup_at <= now()
+        from public.google_health_connections
+       where user_id = '00000000-0000-4000-8000-000000000001'
+    `),
+    true,
+    "the projection upgrade must queue connected accounts through the bounded catch-up worker",
+  );
 
   const userId = "00000000-0000-4000-8000-000000000001";
   const activeGroup = "00000000-0000-4000-8000-000000000101";
@@ -152,6 +208,8 @@ try {
     exercise: "00000000-0000-4000-8000-000000001004",
     water: "00000000-0000-4000-8000-000000001005",
     unrelated: "00000000-0000-4000-8000-000000001006",
+    workoutDuration: "00000000-0000-4000-8000-000000001007",
+    workoutDistance: "00000000-0000-4000-8000-000000001008",
     secondSteps: "00000000-0000-4000-8000-000000002001",
     secondFood: "00000000-0000-4000-8000-000000002002",
     secondWorkout: "00000000-0000-4000-8000-000000002003",
@@ -206,6 +264,7 @@ try {
       value: true,
       visibility: "private",
       label: "Private walk",
+      submetricValues: { exercise: 77 },
       sourceProvider: "google_health",
       sourceRecordId: "google-health:exercise:private-walk",
       sourceOrigin: "Google Health API",
@@ -217,17 +276,81 @@ try {
       visibility: "group",
       label: "Morning walk",
       note: "Synced from Google Health",
+      submetricValues: { exercise: 100 },
       sourceProvider: "google_health",
       sourceRecordId: "google-health:exercise:morning-walk",
       sourceOrigin: "Samsung Health via Google Health",
+    }),
+    entry({
+      id: "google-health:workout:dismissed-carrier",
+      metricId: "workout",
+      value: true,
+      visibility: "group",
+      label: "Dismissed calorie carrier",
+      submetricValues: { exercise: 66 },
+      sourceProvider: "google_health",
+      sourceRecordId: "google-health:exercise:dismissed-carrier",
+      sourceOrigin: "Google Health API",
     }),
     entry({
       id: "google-health:energy:exercise",
       metricId: "exercise",
       value: 100,
       visibility: "group",
+      label: "Morning walk",
       sourceProvider: "google_health",
-      sourceRecordId: `google-health:active-energy:${day}`,
+      sourceRecordId: "google-health:exercise:morning-walk",
+      sourceOrigin: "Google Health API",
+    }),
+    entry({
+      id: "google-health:energy:passive-step-estimate",
+      metricId: "exercise",
+      value: 25,
+      visibility: "group",
+      source: "calculated",
+      label: "Estimated unrecorded walking from steps",
+      sourceProvider: "google_health",
+      sourceRecordId: `google-health:passive-step-estimate:${day}`,
+      sourceOrigin: "HabHub",
+    }),
+    entry({
+      id: "google-health:workout-duration:morning-walk",
+      metricId: "workout_duration",
+      value: 42,
+      visibility: "group",
+      label: "Morning walk",
+      sourceProvider: "google_health",
+      sourceRecordId: "google-health:exercise:morning-walk",
+      sourceOrigin: "Samsung Health via Google Health",
+    }),
+    entry({
+      id: "google-health:workout-distance:morning-walk",
+      metricId: "workout_distance",
+      value: 3.4,
+      visibility: "group",
+      label: "Morning walk",
+      sourceProvider: "google_health",
+      sourceRecordId: "google-health:exercise:morning-walk",
+      sourceOrigin: "Samsung Health via Google Health",
+    }),
+    entry({
+      id: "google-health:workout-duration:private-copy",
+      metricId: "workout_duration",
+      value: 999,
+      visibility: "private",
+      label: "Morning walk",
+      sourceProvider: "google_health",
+      sourceRecordId: "google-health:exercise:morning-walk",
+      sourceOrigin: "Google Health API",
+    }),
+    entry({
+      id: "google-health:workout-distance:different-workout",
+      metricId: "workout_distance",
+      value: 88,
+      visibility: "group",
+      label: "Different workout",
+      sourceProvider: "google_health",
+      sourceRecordId: "google-health:exercise:different-workout",
       sourceOrigin: "Google Health API",
     }),
     {
@@ -276,9 +399,11 @@ try {
     { id: "steps", unit: "steps", goal: { kind: "at_least", target: 1000 }, sections: { today: true }, activeFrom: day },
     { id: "food", unit: "kcal", goal: { kind: "at_most", target: 2000 }, sections: { today: true }, activeFrom: day },
     { id: "workout", unit: "", goal: { kind: "complete", target: 1 }, sections: { today: true }, activeFrom: day },
-    { id: "exercise", unit: "kcal", goal: { kind: "at_least", target: 300 }, sections: { today: true }, activeFrom: day },
+    { id: "exercise", unit: "kcal", defaultVisibility: "group", goal: { kind: "at_least", target: 300 }, sections: { today: true }, activeFrom: day },
     { id: "water", unit: "cups", goal: { kind: "at_least", target: 8 }, sections: { today: true }, activeFrom: day },
     { id: "unrelated", unit: "hr", goal: { kind: "at_least", target: 8 }, sections: { today: true }, activeFrom: day },
+    { id: "workout_duration", unit: "min", goal: { kind: "at_least", target: 30 }, sections: { today: true }, activeFrom: day },
+    { id: "workout_distance", unit: "km", goal: { kind: "at_least", target: 3 }, sections: { today: true }, activeFrom: day },
   ];
   await db.query(
     "insert into public.user_snapshots (user_id, payload, revision) values ($1, $2, 1)",
@@ -296,6 +421,8 @@ try {
     [ids.exercise, activeGroup, "exercise", "sum", "number"],
     [ids.water, activeGroup, "water", "sum", "number"],
     [ids.unrelated, activeGroup, "unrelated", "latest", "number"],
+    [ids.workoutDuration, activeGroup, "workout_duration", "sum", "number"],
+    [ids.workoutDistance, activeGroup, "workout_distance", "sum", "number"],
     [ids.secondSteps, secondActiveGroup, "steps", "sum", "number"],
     [ids.secondFood, secondActiveGroup, "food", "sum", "number"],
     [ids.secondWorkout, secondActiveGroup, "workout", "sum", "boolean"],
@@ -329,6 +456,13 @@ try {
       ],
     );
   }
+  await db.query(
+    `insert into public.google_health_entry_preferences
+      (user_id, entry_id, metric_id, data_type, source_local_date, dismissed)
+     values ($1, 'google-health:exercise:dismissed-carrier:exercise',
+       'exercise', 'workouts', $2, true)`,
+    [userId, day],
+  );
 
   await db.query(
     `insert into public.metric_entries
@@ -342,6 +476,16 @@ try {
       ('stale-client-private-google', $5, $3, 'true', $4, $4::date,
        'group', 'imported', 'google_health', 'google-health:exercise:private-walk', 1)`,
     [ids.steps, ids.unrelated, userId, day, ids.workout],
+  );
+  await db.query(
+    `insert into public.metric_entries
+      (client_generated_id, metric_id, user_id, value, local_date, recorded_at,
+       visibility, source, submetric_values, source_provider, source_record_id,
+       account_revision)
+     values ('native-workout-linked-leak', $1, $2, 'true', $3, $3::date,
+       'group', 'imported', '{"exercise":900,"workout_duration":99}',
+       'health_connect', 'native-workout-linked-leak', 1)`,
+    [ids.workout, userId, day],
   );
   await db.query(
     `insert into public.daily_metric_status
@@ -406,7 +550,7 @@ try {
         where group_id = $1 and metric_id = $2 and local_date = $3`,
       [activeGroup, ids.exercise, day],
     )),
-    150,
+    175,
     "manual and Google group-visible values must remain combined",
   );
   assert.equal(
@@ -484,7 +628,7 @@ try {
     "private workout detail must not create a relational group row",
   );
   const rawWorkout = (await db.query(
-    `select visibility, label, source_record_id, source_origin
+    `select visibility, label, source_record_id, source_origin, submetric_values
        from public.metric_entries
       where user_id = $1 and metric_id = $2
         and source_record_id = 'google-health:exercise:morning-walk'`,
@@ -494,6 +638,66 @@ try {
   assert.equal(rawWorkout.label, "Morning walk");
   assert.equal(rawWorkout.source_record_id, "google-health:exercise:morning-walk");
   assert.equal(rawWorkout.source_origin, "Samsung Health via Google Health");
+  assert.deepEqual(
+    rawWorkout.submetric_values,
+    null,
+    "a shared Workout parent must never inherit linked tracker values under its own RLS visibility",
+  );
+  const workoutSidecars = (await db.query(
+    `select definition.slug, entry.label, entry.value
+       from public.metric_entries entry
+       join public.metric_definitions definition on definition.id = entry.metric_id
+      where entry.user_id = $1
+        and definition.group_id = $2
+        and definition.slug in ('exercise', 'workout_duration', 'workout_distance')
+        and entry.source_provider = 'google_health'
+      order by definition.slug, entry.label`,
+    [userId, activeGroup],
+  )).rows;
+  assert.deepEqual(
+    workoutSidecars.map((row) => [row.slug, row.label, Number(row.value)]),
+    [
+      ["exercise", "Morning walk", 100],
+      ["exercise", "Workout energy", 77],
+      ["workout_distance", "Different workout", 88],
+      ["workout_distance", "Morning walk", 3.4],
+      ["workout_duration", "Morning walk", 42],
+    ],
+    "each authorized named workout detail must use its own destination tracker while passive step estimates stay compact",
+  );
+  assert.equal(
+    Number(await scalar(
+      `select count(*) from public.metric_entries
+        where user_id = $1
+          and source_record_id = 'google-health:exercise:dismissed-carrier'
+          and metric_id = $2`,
+      [userId, ids.exercise],
+    )),
+    0,
+    "a dismissed same-source Active energy detail must not resurrect from the private Workout carrier",
+  );
+  assert.equal(
+    await scalar(
+      `select submetric_values from public.metric_entries
+        where user_id = $1 and client_generated_id = 'native-workout-linked-leak'`,
+      [userId],
+    ),
+    null,
+    "the database trigger must strip linked tracker values from native shared Workout parents",
+  );
+  assert.equal(
+    Number(await scalar(
+      `select count(*)
+         from public.metric_entries entry
+         join public.metric_definitions definition on definition.id = entry.metric_id
+        where entry.user_id = $1
+          and definition.group_id = $2
+          and definition.slug in ('workout_duration', 'workout_distance')`,
+      [userId, secondActiveGroup],
+    )),
+    0,
+    "a group without a linked tracker definition must not receive that workout detail",
+  );
   assert.equal(
     Number(await scalar(
       `select count(*) from public.metric_entry_tombstones
@@ -526,7 +730,10 @@ try {
           (
             select jsonb_agg(item)
               from jsonb_array_elements(payload -> 'entries') item
-             where item ->> 'id' <> 'google-health:energy:exercise'
+             where item ->> 'id' not in (
+               'google-health:energy:exercise',
+               'google-health:energy:passive-step-estimate'
+             )
           )
         ),
             revision = 3
@@ -535,7 +742,10 @@ try {
   );
   await db.query(
     `delete from public.google_health_import_records
-      where user_id = $1 and entry_id = 'google-health:energy:exercise'`,
+      where user_id = $1 and entry_id in (
+        'google-health:energy:exercise',
+        'google-health:energy:passive-step-estimate'
+      )`,
     [userId],
   );
   await db.query(

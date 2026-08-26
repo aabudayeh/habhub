@@ -823,6 +823,10 @@ const googleHttp = fs.readFileSync(
   "supabase/functions/_shared/google-health-http.ts",
   "utf8",
 );
+const googleHealthSync = fs.readFileSync(
+  "supabase/functions/_shared/google-health-sync.ts",
+  "utf8",
+);
 const serviceWorker = fs.readFileSync("public/habhub-sw.js", "utf8");
 const supabaseClient = fs.readFileSync("src/lib/supabase.ts", "utf8");
 const snapshotPrivacy = fs.readFileSync("src/cloud/snapshotPrivacy.ts", "utf8");
@@ -1102,6 +1106,11 @@ assert.ok(metricEditor.includes('invokeGoogleHealth("updateMetricVisibility"'));
 assert.ok(metricEditor.includes("cold-offline change is applied when cloud sync reconnects"));
 assert.ok(groupCloud.includes("const googleHealthProjectionAffected"));
 assert.ok(groupCloud.includes("source_provider: googleHealthProjectionAffected"));
+assert.match(
+  googleHealthSync,
+  /record\.dataType === "workouts"[\s\S]{0,100}String\(metric\.id\) === "workout"[\s\S]{0,180}record\.measurements\?\.activeCalories[\s\S]*?exercise: activeCalories/,
+  "Google workout rows must retain provider calories as a private, non-additive detail carrier for destination-group projection",
+);
 assert.ok(googleHttp.includes('"cache-control": "no-store, private"'));
 assert.ok(supabaseClient.includes("cache: 'no-store'"));
 assert.ok(supabaseClient.includes("createPostgrestPrivacySchemaFetch"));

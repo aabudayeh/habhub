@@ -32,6 +32,10 @@ import {
   shouldAuditHistoricalSummary,
 } from "@/src/domain/cloudMaintenance";
 import { createKeyedLatestAsyncDrain } from "@/src/domain/latestAsyncDrain";
+import {
+  groupActivityFallbackMembershipIsActive,
+  groupActivitySnapshotProvesMembershipLoss,
+} from "@/src/domain/groupActivityRefresh";
 import { cloudAccountEnergyProjection } from "@/src/domain/energy";
 import {
   isBloodPressureDiastolic,
@@ -52,6 +56,7 @@ import {
   projectionSurvivesSharedMetricPrivacyFences,
   type SharedMetricPrivacyFence,
 } from "@/src/domain/sharedMetricPrivacy";
+import { withoutSharedWorkoutParentDetails } from "@/src/domain/sharedLeaderboardLogs";
 import { supabase } from "@/src/lib/supabase";
 import { getPrivacyAwareUserSnapshotMetadata } from "@/src/cloud/snapshotPrivacy";
 import { translateUiText } from "@/src/i18n";
@@ -76,6 +81,8 @@ const MEDIA_BUCKET = "paceboard-media";
 // on this device are preserved below.
 const SHARED_ACTIVITY_CACHE_DAYS = 120;
 const SHARED_SUMMARY_HISTORY_START = "2000-01-01";
+const CLOUD_ACTIVITY_ENTRY_SELECT =
+  "client_generated_id,metric_id,user_id,value,local_date,recorded_at,visibility,source,label,note,nutrition,submetric_values,source_provider,source_record_id,source_origin,source_updated_at,image_path,account_revision";
 const SHARED_MESSAGE_CACHE_LIMIT = 200;
 const SHARED_PHOTO_CACHE_LIMIT = 120;
 // Push is an arrival alert, not a history-import side effect. Keeping this
@@ -1160,6 +1167,13 @@ export async function loadCloudGroupActivity(
     throw snapshotResult.error;
 
   const snapshot = snapshotResult.data as GroupActivitySnapshot | null;
+  if (
+    groupActivitySnapshotProvesMembershipLoss({
+      snapshotRpcMissing: missingSnapshotRpc,
+      snapshotPresent: snapshot !== null,
+    })
+  )
+    throw new Error("This group is unavailable or you no longer have access.");
   const authoritativeSnapshot = !missingSnapshotRpc && snapshot !== null;
   const deletedEntryKeys = new Set(
     (snapshot?.tombstones ?? []).map(
@@ -1178,6 +1192,21 @@ export async function loadCloudGroupActivity(
   // RPC exists, entries and statuses are read from one MVCC-consistent server
   // snapshot instead of two requests that can observe different write stages.
   if (missingSnapshotRpc) {
+    let membershipQuery = client
+      .from("group_members")
+      .select("status")
+      .eq("group_id", groupId)
+      .eq("user_id", state.currentUserId);
+    if (signal) membershipQuery = membershipQuery.abortSignal(signal);
+    const membershipResult = await membershipQuery.maybeSingle();
+    throwIfCloudReadAborted(signal);
+    if (membershipResult.error) throw membershipResult.error;
+    if (
+      !groupActivityFallbackMembershipIsActive(
+        membershipResult.data?.status,
+      )
+    )
+      throw new Error("This group is unavailable or you no longer have access.");
     let metricQuery = client
       .from("metric_definitions")
       .select("id, slug")
@@ -1194,9 +1223,10 @@ export async function loadCloudGroupActivity(
         ? loadAllPages((from, to) => {
             let query = client
               .from("metric_entries")
-              .select("*")
+              .select(CLOUD_ACTIVITY_ENTRY_SELECT)
               .in("metric_id", metricIds)
-              .order("recorded_at");
+              .order("recorded_at")
+              .order("id");
              query = query.gte("local_date", requestedEntrySince);
             let pageQuery = query.range(from, to);
             if (signal) pageQuery = pageQuery.abortSignal(signal);
@@ -1218,6 +1248,40 @@ export async function loadCloudGroupActivity(
     ]);
     throwIfCloudReadAborted(signal);
   }
+  let authoritativeEntrySinceDate = authoritativeSnapshot
+    ? (snapshot?.entries_since_date ?? requestedEntrySince)
+    : undefined;
+  // The compact snapshot intentionally keeps routine group hydration to 120
+  // days. Leaderboard detail is an explicit, user-initiated history request,
+  // so fill only the older requested slice through paginated RLS reads. Raw
+  // shared rows are already limited to useful item detail rather than every
+  // sensor sample, keeping this path accurate without restoring the old CPU
+  // pressure on normal startup/sync.
+  if (
+    authoritativeSnapshot &&
+    authoritativeEntrySinceDate &&
+    requestedSince !== SHARED_SUMMARY_HISTORY_START &&
+    requestedSince < authoritativeEntrySinceDate &&
+    metricRows.length
+  ) {
+    const metricIds = metricRows.map((row) => row.id);
+    const historicalEntryRows = await loadAllPages((from, to) => {
+      let query = client
+        .from("metric_entries")
+        .select(CLOUD_ACTIVITY_ENTRY_SELECT)
+        .in("metric_id", metricIds)
+        .gte("local_date", requestedSince)
+        .lt("local_date", authoritativeEntrySinceDate!)
+        .order("recorded_at")
+        .order("id");
+      let pageQuery = query.range(from, to);
+      if (signal) pageQuery = pageQuery.abortSignal(signal);
+      return pageQuery;
+    });
+    throwIfCloudReadAborted(signal);
+    entryRows = [...historicalEntryRows, ...entryRows];
+    authoritativeEntrySinceDate = requestedSince;
+  }
   const slugById = new Map((metricRows ?? []).map((row) => [row.id, row.slug]));
   const privacyFences: SharedMetricPrivacyFence[] = (
     snapshot?.privacy_fences ?? []
@@ -1238,31 +1302,33 @@ export async function loadCloudGroupActivity(
   // RLS still authorizes that narrow race response, exact rows at or below the
   // fence revision are stale and must fail closed.
   const remoteEntries: MetricEntry[] = applySharedMetricPrivacyFences(
-    entryRows.map((entry) => ({
-      id: entry.client_generated_id,
-      metricId: slugById.get(entry.metric_id) ?? entry.metric_id,
-      userId: entry.user_id,
-      value: entry.value as number | boolean | string,
-      localDate: entry.local_date,
-      recordedAt: entry.recorded_at,
-      visibility: entry.visibility,
-      source: entry.source,
-      label: entry.label ?? undefined,
-      note: entry.note ?? undefined,
-      nutrition: entry.nutrition ?? undefined,
-      submetricValues: entry.submetric_values ?? undefined,
-      sourceProvider: entry.source_provider ?? undefined,
-      sourceRecordId: entry.source_record_id ?? undefined,
-      sourceOrigin: entry.source_origin ?? undefined,
-      sourceUpdatedAt: entry.source_updated_at ?? undefined,
-      sourceRevision: Number.isFinite(Number(entry.account_revision))
-        ? Number(entry.account_revision)
-        : undefined,
-      imageStoragePath: entry.image_path ?? undefined,
-      imageUri: entry.image_path
-        ? (urls.get(entry.image_path) ?? undefined)
-        : undefined,
-    })),
+    entryRows.map((entry) =>
+      withoutSharedWorkoutParentDetails({
+        id: entry.client_generated_id,
+        metricId: slugById.get(entry.metric_id) ?? entry.metric_id,
+        userId: entry.user_id,
+        value: entry.value as number | boolean | string,
+        localDate: entry.local_date,
+        recordedAt: entry.recorded_at,
+        visibility: entry.visibility,
+        source: entry.source,
+        label: entry.label ?? undefined,
+        note: entry.note ?? undefined,
+        nutrition: entry.nutrition ?? undefined,
+        submetricValues: entry.submetric_values ?? undefined,
+        sourceProvider: entry.source_provider ?? undefined,
+        sourceRecordId: entry.source_record_id ?? undefined,
+        sourceOrigin: entry.source_origin ?? undefined,
+        sourceUpdatedAt: entry.source_updated_at ?? undefined,
+        sourceRevision: Number.isFinite(Number(entry.account_revision))
+          ? Number(entry.account_revision)
+          : undefined,
+        imageStoragePath: entry.image_path ?? undefined,
+        imageUri: entry.image_path
+          ? (urls.get(entry.image_path) ?? undefined)
+          : undefined,
+      }),
+    ),
     privacyFences,
     state.currentUserId,
   );
@@ -1422,9 +1488,7 @@ export async function loadCloudGroupActivity(
       typeof snapshot?.version === "number" ? snapshot.version : undefined,
     updatedAt: snapshot?.updated_at ?? undefined,
     deletedEntryKeys: [...deletedEntryKeys],
-    authoritativeEntrySinceDate: authoritativeSnapshot
-      ? (snapshot?.entries_since_date ?? requestedEntrySince)
-      : undefined,
+    authoritativeEntrySinceDate,
     authoritativeStatusSinceDate: authoritativeSnapshot
       ? (snapshot?.statuses_since_date ?? requestedSince)
       : undefined,
@@ -2784,9 +2848,9 @@ export async function pushCloudWorkspace(
     // and uploads every raw sensor row.
     return cloudEntryNeedsItemDetail(entry, metric?.category);
   });
-  const rawOwnedEntries = detailedOwnedEntries.filter(
-    (entry) => entry.visibility === "group",
-  );
+  const rawOwnedEntries = detailedOwnedEntries
+    .filter((entry) => entry.visibility === "group")
+    .map(withoutSharedWorkoutParentDetails);
   // A row that previously carried a meal/workout note, nutrition, or photo can
   // stop qualifying for raw sharing while the underlying imported measurement
   // remains valid. Fence that old relational projection as private and clear
@@ -2853,7 +2917,10 @@ export async function pushCloudWorkspace(
   ownedEntries.forEach((entry) => {
     const remote = oldEntriesById.get(entry.id);
     if (remote && remote.visibility !== entry.visibility)
-      rawCandidateById.set(entry.id, entry);
+      rawCandidateById.set(
+        entry.id,
+        withoutSharedWorkoutParentDetails(entry),
+      );
   });
   const entriesToUpsert = [...rawCandidateById.values()].filter((entry) => {
     const remote = oldEntriesById.get(entry.id);

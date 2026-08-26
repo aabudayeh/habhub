@@ -973,16 +973,68 @@ assert.match(
   /case "deleteGymSession"[\s\S]{0,1400}gymSessions:[\s\S]{0,260}item\.id !== action\.sessionId[\s\S]{0,500}entries:[\s\S]{0,300}!entry\.id\.startsWith\(`gym-sync:\$\{action\.sessionId\}:`\)/,
   "Deleting a gym session must remove both the Workout-page source and all linked tracker rows",
 );
+assert.match(types, /gymLoggedTodayCollapsed\?: boolean/);
+assert.match(seed, /gymLoggedTodayCollapsed: true/);
 assert.match(gymScreen, />Logged today</);
 assert.match(
   gymScreen,
-  /selectedSession \? "Logged workout" : "Plan & log workout"/,
-  "Workout must clearly distinguish a saved session from the current plan",
+  /state\.settings\.gymLoggedTodayCollapsed !== false/,
+  "Logged today must remain collapsed by default for older and new accounts",
 );
 assert.match(
   gymScreen,
-  /const workoutEditorTitle = selectedSession[\s\S]{0,180}"Logged exercises"[\s\S]{0,180}"Exercises to complete"/,
+  /updateSettings\(\{[\s\S]{0,100}gymLoggedTodayCollapsed: !loggedTodayCollapsed/,
+  "Workout must persist the user's Logged today disclosure choice",
+);
+assert.match(
+  gymScreen,
+  /!loggedTodayCollapsed \? \([\s\S]{0,100}<ScrollView/,
+  "Saved workout cards must render only while Logged today is expanded",
+);
+assert.match(
+  gymScreen,
+  /const selectedSessionLogged = Boolean\([\s\S]{0,180}completedGymSets\(selectedSession\.exercises\) > 0/,
+  "A saved zero-set plan must not be treated as a logged workout",
+);
+assert.match(
+  gymScreen,
+  /selectedSessionLogged \? "Workout logged" : "Plan & log workout"/,
+  "Workout must distinguish a completed saved session from a draft plan",
+);
+assert.doesNotMatch(
+  gymScreen,
+  /styles\.workoutEditorHeading|selectedSession \? "Saved" : "Draft"/,
+  "Workout must not repeat saved state in a second oversized summary card",
+);
+assert.match(
+  gymScreen,
+  /const workoutEditorTitle = selectedSessionLogged[\s\S]{0,180}"Logged exercises"[\s\S]{0,180}"Exercises to complete"/,
   "Exercise hierarchy must state whether the user is reviewing logged work or preparing a workout",
+);
+assert.match(
+  gymScreen,
+  /loggedSessionsForDate\.reduce\(/,
+  "Logged Today totals must exclude incomplete saved plans",
+);
+assert.match(
+  gymScreen,
+  /const logged = completedGymSets\(session\.exercises\) > 0/,
+  "Each saved workout row must derive its completion state from its sets",
+);
+assert.match(
+  gymScreen,
+  /\{loggedSessionsForDate\.length \? \(/,
+  "Logged today must stay hidden when there are only saved drafts",
+);
+assert.match(
+  gymScreen,
+  /loggedSessionsForDate\.map\(\(session, index\) =>/,
+  "Logged today must exclude saved drafts from its rows",
+);
+assert.match(
+  gymScreen,
+  /logged \? "Logged" : "Draft"/,
+  "Incomplete saved plans must remain visibly marked as drafts",
 );
 assert.match(
   gymScreen,

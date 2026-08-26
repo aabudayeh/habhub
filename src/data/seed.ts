@@ -1934,6 +1934,7 @@ export function createInitialState(): AppState {
       showLeaderboard: true,
       showChat: true,
       showGym: true,
+      gymLoggedTodayCollapsed: true,
       workoutCaloriesRestored: true,
       // Keep the first-run navigation focused. Restored snapshots spread their
       // explicit visibility settings over these defaults in AppProvider.

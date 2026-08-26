@@ -293,6 +293,87 @@ assert.equal(
 );
 const foodId = String(mappedFoodRow.entry.id);
 
+const workoutRecord = {
+  externalId: "exercise:morning-walk",
+  dataType: "workouts",
+  startTime: "2026-08-21T08:00:00.000Z",
+  endTime: "2026-08-21T08:42:00.000Z",
+  localDate: "2026-08-21",
+  value: 42,
+  unit: "min",
+  label: "Morning walk",
+  sourceOrigin: "Samsung Health via Google Health",
+  measurements: { durationMinutes: 42, activeCalories: 100, distanceKm: 3.4 },
+};
+const workoutMetrics = [
+  {
+    id: "workout",
+    unit: "",
+    dataType: "boolean",
+    defaultVisibility: "group",
+    healthMapping: { dataType: "workouts", field: "value" },
+  },
+  {
+    id: "exercise",
+    unit: "kcal",
+    dataType: "number",
+    defaultVisibility: "group",
+    healthMapping: { dataType: "active_energy", field: "value" },
+  },
+  {
+    id: "workout_duration",
+    unit: "min",
+    dataType: "number",
+    defaultVisibility: "group",
+    healthMapping: { dataType: "workouts", field: "duration_minutes" },
+  },
+  {
+    id: "workout_distance",
+    unit: "km",
+    dataType: "number",
+    defaultVisibility: "group",
+    healthMapping: { dataType: "workouts", field: "distance_km" },
+  },
+];
+const mappedWorkout = googleHealthSyncTestHooks.mapRecordsToEntries(
+  [workoutRecord],
+  { metrics: workoutMetrics, entries: [], settings: {} },
+  "owner",
+  "2026-08-21T12:00:00.000Z",
+);
+const mappedWorkoutParent = mappedWorkout.find(
+  (row) => row.entry.metricId === "workout",
+)!;
+assert.deepEqual(
+  mappedWorkoutParent.entry.submetricValues,
+  { exercise: 100 },
+  "a group-visible Active energy workout summary must travel with the shared Workout detail",
+);
+assert.equal(
+  mappedWorkout.some((row) => row.entry.metricId === "exercise"),
+  false,
+  "per-workout calories must not become a second Active energy value alongside Google's canonical daily rollup",
+);
+const privateEnergyWorkout = googleHealthSyncTestHooks.mapRecordsToEntries(
+  [workoutRecord],
+  {
+    metrics: workoutMetrics.map((metric) =>
+      metric.id === "exercise"
+        ? { ...metric, defaultVisibility: "private" }
+        : metric
+    ),
+    entries: [],
+    settings: {},
+  },
+  "owner",
+  "2026-08-21T12:00:00.000Z",
+).find((row) => row.entry.metricId === "workout")!;
+assert.equal(
+  privateEnergyWorkout.entry.submetricValues?.exercise,
+  100,
+  "per-workout calories must remain in the private snapshot for privacy-safe destination-group projection",
+);
+
 const absentDefinitionSidecars = mappedFood.filter(
   (row) => row.entry.metricId !== "food",
 );
@@ -1431,10 +1512,15 @@ assert.match(
 );
 assert.match(endpoint, /stage_google_health_pending_grant/);
 assert.match(endpoint, /delete_google_health_connection_data/);
-assert.match(endpoint, /mutate_google_health_food_family/);
+assert.match(endpoint, /mutate_google_health_food_family_and_project/);
 assert.ok(!endpoint.includes('admin.rpc("mutate_google_health_entry"'),
   "entry mutations must pass through the Food-family authority boundary");
-assert.match(endpoint, /update_google_health_metric_visibility/);
+assert.match(endpoint, /update_google_health_metric_visibility_and_project/);
+assert.match(
+  endpoint,
+  /body\.metricId === "exercise" && body\.visibility === "group"[\s\S]{0,120}queueWorkoutDetailCatchup/,
+  "private-to-group Active energy changes must queue a bounded history remap for pre-carrier imports",
+);
 assert.match(endpoint, /readBoundedJson/);
 assert.match(endpoint, /manual: true/);
 assert.match(endpoint, /function startGoogleHealthWorker/);

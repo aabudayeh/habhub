@@ -703,6 +703,26 @@ function mapRecordsToEntries(records: InternalRecord[], snapshot: Snapshot, user
           };
         }
       }
+      if (
+        entry &&
+        record.dataType === "workouts" &&
+        String(metric.id) === "workout"
+      ) {
+        const activeCalories = positive(record.measurements?.activeCalories);
+        // Keep this non-additive provider detail in the private account
+        // snapshot. The relational projector publishes it only into a
+        // destination group's explicitly shared Active energy tracker; a
+        // database trigger strips linked fields from the shared Workout row.
+        if (activeCalories !== undefined) {
+          entry = {
+            ...entry,
+            submetricValues: {
+              ...asObject(entry.submetricValues),
+              exercise: activeCalories,
+            },
+          };
+        }
+      }
       if (entry) {
         const entryId = String(entry.id ?? "");
         if (!entryId || emittedEntryIds.has(entryId)) continue;
