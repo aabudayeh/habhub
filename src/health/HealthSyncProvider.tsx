@@ -30,6 +30,7 @@ import {
   BackgroundHealthSyncRegistration,
   healthSyncMinimumIntervalMs,
   healthSyncSchedule,
+  normalizeBackgroundSyncIntervalHours,
   normalizeHealthSyncMode,
 } from '@/src/health/schedule';
 import { HealthAdapterAvailability, LiveStepDiagnostics, PersistedHealthStatus } from '@/src/health/types';
@@ -80,6 +81,7 @@ type HealthSyncContextValue = {
   syncNow: (reason?: 'open' | 'pull' | 'manual') => Promise<void>;
   syncHistory: () => Promise<void>;
   setSyncMode: (mode: SyncMode) => Promise<void>;
+  setBackgroundSyncIntervalHours: (hours: number) => Promise<void>;
   setSourceEnabled: (sourceId: string, enabled: boolean) => Promise<void>;
   setLiveStepConfiguration: (
     sources: LiveStepSource[],
@@ -114,6 +116,7 @@ const disabledHealthContext: HealthSyncContextValue = {
   syncNow: disabledHealthAction,
   syncHistory: disabledHealthAction,
   setSyncMode: disabledHealthAction,
+  setBackgroundSyncIntervalHours: disabledHealthAction,
   setSourceEnabled: disabledHealthAction,
   setLiveStepConfiguration: disabledHealthAction,
   disconnect: disabledHealthAction,
@@ -232,11 +235,14 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
       JSON.stringify({
         enabled: state.settings.healthSync.enabled,
         backgroundAccess: state.settings.healthSync.backgroundAccess,
+        backgroundIntervalHours:
+          state.settings.healthSync.backgroundIntervalHours,
         dataTypes: state.settings.healthSync.dataTypes,
         mode: normalizeHealthSyncMode(state.settings.syncMode),
       }),
     [
       state.settings.healthSync.backgroundAccess,
+      state.settings.healthSync.backgroundIntervalHours,
       state.settings.healthSync.dataTypes,
       state.settings.healthSync.enabled,
       state.settings.syncMode,
@@ -1159,7 +1165,10 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     const current = stateRef.current.settings;
     const dataTypes = enabledHealthDataTypes(current.healthSync.dataTypes);
     const requestedBackgroundAccess =
-      healthSyncSchedule(current.syncMode).requestsBackground;
+      healthSyncSchedule(
+        current.syncMode,
+        current.healthSync.backgroundIntervalHours,
+      ).requestsBackground;
     setStatus('requesting');
     try {
       if (
@@ -1239,11 +1248,20 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     }
   }, [availability, markPhysicalActivityMigrationAttempt, runSync, saveStatus, signedInNativeAccountId, updateSettings]);
 
-  const setSyncMode = useCallback(async (mode: SyncMode) => {
+  const setSyncMode = useCallback(async (
+    mode: SyncMode,
+    requestedIntervalHours?: number,
+  ) => {
     const currentState = stateRef.current;
     const current = currentState.settings;
-    const schedule = healthSyncSchedule(mode);
-    let healthSync = current.healthSync;
+    const backgroundIntervalHours = normalizeBackgroundSyncIntervalHours(
+      requestedIntervalHours ?? current.healthSync.backgroundIntervalHours,
+    );
+    const schedule = healthSyncSchedule(mode, backgroundIntervalHours);
+    let healthSync =
+      mode === 'custom'
+        ? { ...current.healthSync, backgroundIntervalHours }
+        : current.healthSync;
 
     if (!schedule.requestsBackground) {
       healthSync = { ...healthSync, backgroundAccess: false };
@@ -1289,6 +1307,16 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     updateSettings({ syncMode: mode, healthSync });
     setStatus(healthSync.enabled ? 'ready' : 'idle');
   }, [markPhysicalActivityMigrationAttempt, saveStatus, signedInNativeAccountId, updateSettings]);
+
+  const setBackgroundSyncIntervalHours = useCallback(
+    async (hours: number) => {
+      await setSyncMode(
+        'custom',
+        normalizeBackgroundSyncIntervalHours(hours),
+      );
+    },
+    [setSyncMode],
+  );
 
   const disconnect = useCallback(async () => {
     setCloudSyncPaused('health-backfill', false);
@@ -1400,7 +1428,10 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     // native background task in that case.
     let cancelled = false;
     const currentSettings = stateRef.current.settings;
-    const schedule = healthSyncSchedule(currentSettings.syncMode);
+    const schedule = healthSyncSchedule(
+      currentSettings.syncMode,
+      currentSettings.healthSync.backgroundIntervalHours,
+    );
     setBackgroundRegistration(
       currentSettings.healthSync.enabled &&
         currentSettings.healthSync.backgroundAccess &&
@@ -1565,7 +1596,10 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
       !state.settings.onboardingComplete ||
       !state.settings.healthSync.enabled ||
       state.settings.healthSync.initialHistoryImportPending ||
-      !healthSyncSchedule(state.settings.syncMode).requestsBackground
+      !healthSyncSchedule(
+        state.settings.syncMode,
+        state.settings.healthSync.backgroundIntervalHours,
+      ).requestsBackground
     ) return;
     // An automatic failure must remain quiet until the user retries or the app
     // is reopened. Including `error` here previously created an immediate loop.
@@ -1575,7 +1609,10 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
       : 0;
     const stale =
       Date.now() - last >=
-      healthSyncMinimumIntervalMs(state.settings.syncMode);
+      healthSyncMinimumIntervalMs(
+        state.settings.syncMode,
+        state.settings.healthSync.backgroundIntervalHours,
+      );
     if (stale) {
       const task = InteractionManager.runAfterInteractions(() => {
         runSync('open').catch(() => undefined);
@@ -1587,6 +1624,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     runSync,
     state.settings.healthSync.enabled,
     state.settings.healthSync.initialHistoryImportPending,
+    state.settings.healthSync.backgroundIntervalHours,
     state.settings.onboardingComplete,
     state.settings.syncMode,
     status,
@@ -1685,7 +1723,10 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
             !stateRef.current.settings.onboardingComplete ||
             !stateRef.current.settings.healthSync.enabled ||
             stateRef.current.settings.healthSync.initialHistoryImportPending ||
-            !healthSyncSchedule(stateRef.current.settings.syncMode)
+            !healthSyncSchedule(
+              stateRef.current.settings.syncMode,
+              stateRef.current.settings.healthSync.backgroundIntervalHours,
+            )
               .requestsBackground
           ) return;
           // Permission errors stay quiet until the user explicitly reconnects.
@@ -1707,7 +1748,10 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
           // Foreground refresh obeys the selected battery schedule.
           if (
             Date.now() - last <
-            healthSyncMinimumIntervalMs(stateRef.current.settings.syncMode)
+            healthSyncMinimumIntervalMs(
+              stateRef.current.settings.syncMode,
+              stateRef.current.settings.healthSync.backgroundIntervalHours,
+            )
           ) return;
           // Cloud chat/presence recover first. Health imports are larger and can
           // safely start after the resumed screen is interactive.
@@ -1793,11 +1837,12 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     syncNow,
     syncHistory: () => runSync('history'),
     setSyncMode,
+    setBackgroundSyncIntervalHours,
     setSourceEnabled,
     setLiveStepConfiguration,
     disconnect,
     openSettings: nativeHealthAdapter.openSettings,
-  }), [availability, backgroundRegistration, connect, disconnect, liveStepDiagnostics, persisted, runSync, setLiveStepConfiguration, setSourceEnabled, setSyncMode, sourceOptions, sourceOrigins, status, syncNow]);
+  }), [availability, backgroundRegistration, connect, disconnect, liveStepDiagnostics, persisted, runSync, setBackgroundSyncIntervalHours, setLiveStepConfiguration, setSourceEnabled, setSyncMode, sourceOptions, sourceOrigins, status, syncNow]);
 
   return <HealthSyncContext.Provider value={value}>{children}</HealthSyncContext.Provider>;
 }

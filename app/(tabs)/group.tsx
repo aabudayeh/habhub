@@ -334,7 +334,7 @@ function LeaderboardScreen() {
   const dateNavigatorOpen =
     state.settings.leaderboardDateNavigatorCollapsedByGroup?.[
       state.group.id
-    ] !== true;
+    ] === false;
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const leaderboardUsesPages =
@@ -352,12 +352,15 @@ function LeaderboardScreen() {
     id: string;
     title: string;
     detail: string;
+    viewDate: string;
+    cardId: string;
   }>();
   const celebratingChallengeIds = useRef(new Set<string>());
   const [, setClockTick] = useState(0);
   const [draggingCardId, setDraggingCardId] = useState<string | null>(null);
   const screenScrollRef = useRef<ScrollView>(null);
   const groupTodoY = useRef<number | undefined>(undefined);
+  const handledGroupTodoFocusKey = useRef<string | undefined>(undefined);
   const leaderboardBodyY = useRef<number | undefined>(undefined);
   const rankingSectionY = useRef<number | undefined>(undefined);
   const challengeCardYById = useRef(new Map<string, number>());
@@ -393,6 +396,11 @@ function LeaderboardScreen() {
   }, [editing]);
   useEffect(() => {
     if (!requestedGroupTodoId || state.group.groupTodosEnabled !== true) return;
+    const focusKey = `${state.group.id}:${requestedGroupTodoId}:${requestedGroupTodoAt ?? ""}`;
+    // Reveal a hidden Group To-Do once for this navigation request. Keeping
+    // the route params around must not fight the user's next eye-button tap.
+    if (handledGroupTodoFocusKey.current === focusKey) return;
+    handledGroupTodoFocusKey.current = focusKey;
     if (state.settings.showGroupTodosByGroup?.[state.group.id] !== true)
       updateSettings({
         showGroupTodosByGroup: {
@@ -509,6 +517,7 @@ function LeaderboardScreen() {
       {
         challenge: next,
         metric,
+        rows,
         canonicalResult,
         winnerIds: canonicalResult
           ? []
@@ -542,12 +551,23 @@ function LeaderboardScreen() {
     celebratingChallengeIds.current.add(next.challenge.id);
     const title =
       next.challenge.title?.trim() || `${next.metric.name} challenge`;
+    const userRank = next.rows.findIndex(
+      (row) => row.member.id === state.currentUserId,
+    );
+    const rankDetail = userRank >= 0 &&
+      !next.canonicalResult?.detail?.includes("You placed #")
+      ? ` You placed #${userRank + 1} of ${next.rows.length}.`
+      : "";
+    const celebrationBase = {
+      id: next.challenge.id,
+      viewDate: groupChallengeEndDate(next.challenge),
+      cardId: challengeCardId(next.challenge.id),
+    };
     if (next.canonicalResult) {
       setChallengeCelebration({
-        id: next.challenge.id,
+        ...celebrationBase,
         title: next.canonicalResult.title ?? `${title} complete`,
-        detail:
-          next.canonicalResult.detail ?? "The final standings are ready.",
+        detail: `${next.canonicalResult.detail ?? "The final standings are ready."}${rankDetail}`,
       });
     } else {
       const winnerNames = next.winnerIds
@@ -559,11 +579,11 @@ function LeaderboardScreen() {
         .filter(Boolean);
       const userWon = next.winnerIds.includes(state.currentUserId);
       setChallengeCelebration({
-        id: next.challenge.id,
+        ...celebrationBase,
         title: userWon ? `You won ${title}` : `${title} complete`,
         detail: winnerNames.length
-          ? `${winnerNames.join(" & ")} ${winnerNames.length === 1 ? "wins" : "tie for first"}.`
-          : "The final standings are ready.",
+          ? `${winnerNames.join(" & ")} ${winnerNames.length === 1 ? "wins" : "tie for first"}.${rankDetail}`
+          : `The final standings are ready.${rankDetail}`,
       });
     }
     updateSettings({
@@ -847,6 +867,16 @@ function LeaderboardScreen() {
     )
       ? requestedChallengeOccurrenceDate!
       : sourceChallenge.localDate;
+    const focusKey = [
+      requestedChallengeId,
+      focusDate,
+      requestedChallengeEvent,
+      requestedChallengeFocusAt,
+    ].join("|");
+    // Route params remain mounted after a push deep-link. Once the target was
+    // reached they must stop owning the Leaderboard date, otherwise every
+    // later date selection is immediately forced back to the alert date.
+    if (handledChallengeFocus.current === focusKey) return;
     // A challenge alert can point outside the currently selected date range.
     // Select its exact occurrence first; the next render can then resolve the
     // generated recurring card and its page without guessing an index.
@@ -866,13 +896,6 @@ function LeaderboardScreen() {
         (challenge) => challenge.id === requestedChallengeId,
       );
     if (!occurrence) return;
-    const focusKey = [
-      requestedChallengeId,
-      focusDate,
-      requestedChallengeEvent,
-      requestedChallengeFocusAt,
-    ].join("|");
-    if (handledChallengeFocus.current === focusKey) return;
     const cardId = challengeCardId(occurrence.id);
     if (
       pendingChallengeFocusKey.current !== focusKey ||
@@ -1350,8 +1373,8 @@ function LeaderboardScreen() {
                 <TutorialTarget id="leaderboard-create-challenge">
                   <IconButton
                     icon="trophy-outline"
-                    label="Create challenge"
-                    onPress={() => openChallengeEditor()}
+                    label="Challenges"
+                    onPress={() => router.navigate("/challenges" as never)}
                   />
                 </TutorialTarget>
               ) : null}
@@ -2105,6 +2128,19 @@ function LeaderboardScreen() {
           accent={accent}
           colors={colors}
           onClose={() => setChallengeCelebration(undefined)}
+          onView={() => {
+            const celebration = challengeCelebration;
+            setChallengeCelebration(undefined);
+            setPeriod("custom");
+            setAnchor(celebration.viewDate);
+            setCalendarOpen(false);
+            setPendingChallengeCardId(celebration.cardId);
+            pendingChallengeCardIdRef.current = celebration.cardId;
+            requestAnimationFrame(() => {
+              if (!scrollToChallengeCard(celebration.cardId)) return;
+              armChallengeHighlight(celebration.cardId);
+            });
+          }}
         />
       ) : null}
       </View>
@@ -2118,12 +2154,14 @@ function ChallengeCompletionCelebration({
   accent,
   colors,
   onClose,
+  onView,
 }: {
   title: string;
   detail: string;
   accent: string;
   colors: ReturnType<typeof useAppColors>;
   onClose: () => void;
+  onView: () => void;
 }) {
   const burst = useRef(new Animated.Value(0)).current;
   useEffect(() => {
@@ -2132,9 +2170,7 @@ function ChallengeCompletionCelebration({
       duration: 950,
       useNativeDriver: true,
     }).start();
-    const timer = setTimeout(onClose, 4_800);
-    return () => clearTimeout(timer);
-  }, [burst, onClose]);
+  }, [burst]);
   const confetti = Array.from({ length: 28 }, (_, index) => ({
     key: index,
     left: `${4 + ((index * 37) % 92)}%` as `${number}%`,
@@ -2181,7 +2217,10 @@ function ChallengeCompletionCelebration({
             />
           ))}
         </View>
-        <View
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Challenge result"
+          onPress={(event) => event.stopPropagation()}
           style={[
             styles.challengeCelebrationCard,
             { backgroundColor: colors.card, borderColor: `${accent}70` },
@@ -2198,8 +2237,15 @@ function ChallengeCompletionCelebration({
           <Text style={[styles.challengeCelebrationEyebrow, { color: accent }]}>CHALLENGE COMPLETE</Text>
           <Text style={[styles.challengeCelebrationTitle, { color: colors.ink }]}>{title}</Text>
           <Text style={[styles.challengeCelebrationDetail, { color: colors.muted }]}>{detail}</Text>
-          <Text style={[styles.challengeCelebrationClose, { color: colors.faint }]}>Tap anywhere to close</Text>
-        </View>
+          <View style={styles.challengeCelebrationActions}>
+            <Pressable accessibilityRole="button" onPress={onClose} style={[styles.challengeCelebrationButton, { borderColor: colors.border }]}>
+              <Text style={[styles.challengeCelebrationButtonText, { color: colors.muted }]}>Dismiss</Text>
+            </Pressable>
+            <Pressable accessibilityRole="button" onPress={onView} style={[styles.challengeCelebrationButton, { borderColor: accent, backgroundColor: `${accent}18` }]}>
+              <Text style={[styles.challengeCelebrationButtonText, { color: accent }]}>View challenge</Text>
+            </Pressable>
+          </View>
+        </Pressable>
       </Pressable>
     </Modal>
   );
@@ -2407,20 +2453,16 @@ function ChallengeRankingCard({
               <Text numberOfLines={1} style={[styles.name, { color: colors.ink }]}>
                 {memberDisplayName(state, row.member)}{row.member.id === state.currentUserId ? " · You" : ""}
               </Text>
-              <Text numberOfLines={1} style={[styles.challengeValue, { color: row.complete ? colors.ink : colors.muted }]}>
-                {!openCompetition && row.complete ? "Target reached" : row.valueLabel}
+              <Text numberOfLines={1} style={[styles.challengeValue, { color: colors.muted }]}>
+                {row.member.lastDataSyncedAt
+                  ? `Last synced ${relativeTime(row.member.lastDataSyncedAt)}`
+                  : "Not synced yet"}
               </Text>
             </View>
             <View style={styles.challengeProgress}>
               <View style={styles.challengeProgressLabel}>
                 <Text style={[styles.challengePercent, { color: row.mode === "exact" ? colors.ink : colors.faint }]}>
-                  {row.mode !== "exact"
-                    ? "—"
-                    : openCompetition
-                      ? row.member.id === state.currentUserId
-                        ? "Your goal"
-                        : "Their goal"
-                      : `${Math.round(row.progress * 100)}%`}
+                  {row.mode === "exact" ? row.valueLabel : "—"}
                 </Text>
                 {row.complete ? <Ionicons name="checkmark-circle" size={14} color={palette.lime} /> : null}
               </View>
@@ -2669,6 +2711,9 @@ const styles = StyleSheet.create({
   challengeCelebrationTitle: { marginTop: 7, fontSize: 20, lineHeight: 25, fontWeight: "900", textAlign: "center" },
   challengeCelebrationDetail: { marginTop: 7, fontSize: 11, lineHeight: 17, fontWeight: "700", textAlign: "center" },
   challengeCelebrationClose: { marginTop: 18, fontSize: 8, fontWeight: "800" },
+  challengeCelebrationActions: { width: "100%", flexDirection: "row", gap: 8, marginTop: 18 },
+  challengeCelebrationButton: { flex: 1, minHeight: 40, borderRadius: 13, borderWidth: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 10 },
+  challengeCelebrationButtonText: { fontSize: 9, fontWeight: "900" },
   rankingHead: {
     flexDirection: "row",
     alignItems: "center",

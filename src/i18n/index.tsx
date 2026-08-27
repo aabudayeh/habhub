@@ -17,6 +17,7 @@ import { googleHealthTranslationRows } from "@/src/i18n/googleHealth";
 import { weeklyBalanceTranslationRows } from "@/src/i18n/weeklyBalance";
 import { liveStepTranslationRows } from "@/src/i18n/liveSteps";
 import { releaseAdditionTranslationRows } from "@/src/i18n/releaseAdditions";
+import { integrationAdditionTranslationRows } from "@/src/i18n/integrationAdditions";
 import arGenerated from "@/src/i18n/catalogs/ar.json";
 import deGenerated from "@/src/i18n/catalogs/de.json";
 import esGenerated from "@/src/i18n/catalogs/es.json";
@@ -583,6 +584,7 @@ const allTranslationRows = [
   ...weeklyBalanceTranslationRows,
   ...liveStepTranslationRows,
   ...releaseAdditionTranslationRows,
+  ...integrationAdditionTranslationRows,
   ...templateTranslationRows,
 ] as const;
 

@@ -40,11 +40,28 @@ const status = {
   notes: "private note must not persist",
   nutrition: { meal: "private meal must not persist" },
 };
+const peerMeal = {
+  id: "peer-google-meal",
+  metricId: "food",
+  userId: peerId,
+  value: 540,
+  localDate: "2026-08-25",
+  recordedAt: "2026-08-25T11:30:00.000Z",
+  visibility: "group",
+  source: "imported",
+  sourceProvider: "google_health",
+  sourceRecordId: "provider-meal",
+  label: "Lunch",
+  nutrition: { proteinG: 34, fiberG: 8 },
+  imageUri: "https://signed.example/token-must-not-persist",
+  imageStoragePath: `${groupId}/${peerId}/meal.jpg`,
+};
 
 const serialized = serializeNativeGoogleHealthGroupCheckpoint(
   {
     currentUserId: accountId,
     groupId,
+    entries: [peerMeal, { ...peerMeal, id: "own-meal", userId: accountId }],
     dailyMetricStatuses: [
       { ...status, exactValue: 6_000, sourceRevision: 7 },
       status,
@@ -64,7 +81,10 @@ const serialized = serializeNativeGoogleHealthGroupCheckpoint(
 );
 assert.ok(serialized);
 assert.ok(serialized.length > 0);
-assert.doesNotMatch(serialized, /provider-record-must-not-persist|private note|private meal/);
+assert.doesNotMatch(
+  serialized,
+  /provider-record-must-not-persist|private note|private meal|token-must-not-persist/,
+);
 
 const restored = parseNativeGoogleHealthGroupCheckpoint(
   serialized,
@@ -73,6 +93,9 @@ const restored = parseNativeGoogleHealthGroupCheckpoint(
   now,
 );
 assert.ok(restored);
+assert.deepEqual(restored.entries.map((entry) => entry.id), [peerMeal.id]);
+assert.equal(restored.entries[0].nutrition?.fiberG, 8);
+assert.equal(restored.entries[0].imageUri, undefined);
 assert.deepEqual(
   restored.dailyMetricStatuses.map((item) => item.metricId),
   ["steps", "sleep"],

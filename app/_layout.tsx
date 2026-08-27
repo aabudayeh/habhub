@@ -21,6 +21,7 @@ import {
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { AiAssistantButton } from "@/src/components/AiAssistantButton";
 import { ActiveTimerOverlay } from "@/src/components/ActiveTimerOverlay";
+import { BatteryOptimizationPrompt } from "@/src/components/BatteryOptimizationPrompt";
 import { InAppChatBanner } from "@/src/components/InAppChatBanner";
 import { GroupTodoReminderReconciler } from "@/src/components/GroupTodoReminderReconciler";
 import { WebAlertHost } from "@/src/components/WebAlertHost";
@@ -141,6 +142,7 @@ function AppLocalizationBridge() {
         </TutorialHealthSyncBoundary>
       ) : (
         <HealthSyncProvider>
+          <BatteryOptimizationPrompt />
           <CloudSyncProvider>
             <RootNavigator />
           </CloudSyncProvider>
@@ -969,6 +971,7 @@ function RootNavigator() {
       calendar: state.settings.showCalendar !== false,
       journal: state.settings.showJournal !== false,
       performance: state.settings.showPerformance !== false,
+      recapfeed: state.settings.showRecap === true,
       status: state.settings.showStatus === true,
     } as const;
     return visible[target] ? target : "index";
@@ -981,6 +984,7 @@ function RootNavigator() {
     state.settings.showLeaderboard,
     state.settings.showLog,
     state.settings.showPerformance,
+    state.settings.showRecap,
     state.settings.showStatus,
   ]);
   useEffect(() => {

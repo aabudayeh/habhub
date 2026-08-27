@@ -478,13 +478,18 @@ assert.doesNotMatch(
 assert.match(pluginSource, /val dateLabel = item\.optString\("dateLabel"\)/);
 assert.match(
   pluginSource,
-  /val headerBaseline = if \(size\.compact\) 8\.7f else 16f[\s\S]*drawText\(canvas, dateLabel, pad, headerBaseline[\s\S]*eyebrowLeft,[\s\S]*headerBaseline/,
+  /val stackedCompact = size\.compact && size\.heightDp < 48f[\s\S]*val headerBaseline = if \(stackedCompact\) 7\.9f else if \(size\.compact\) 8\.7f else 16f[\s\S]*drawText\(canvas, dateLabel, pad, headerBaseline[\s\S]*eyebrowLeft,[\s\S]*headerBaseline/,
   "Featured date and TODAY'S FOCUS must share one baseline, with the date at the left",
+);
+assert.match(
+  pluginSource,
+  /val narrowCompact = size\.compact && size\.widthDp < 165f[\s\S]*fittedTextPaint\([\s\S]{0,100}eyebrowWidth,[\s\S]{0,80}if \(narrowCompact\) 4\.9f else 5\.1f,[\s\S]{0,60}if \(narrowCompact\) 3\.9f else 4\.1f/,
+  "The minimum 2x1 Featured header must fit TODAY'S FOCUS without truncating its last letters",
 );
 assert.match(pluginSource, /item\.optString\("compactSubtitle", item\.optString\("subtitle"\)\)/);
 assert.match(
   pluginSource,
-  /drawFeaturedSummary\([\s\S]*if \(size\.compact\) 31\.5f else 54f[\s\S]*todoSummary/,
+  /drawFeaturedSummary\([\s\S]*if \(stackedCompact\) 28\.6f else if \(size\.compact\) 31\.5f else 54f[\s\S]*todoSummary/,
   "The goals-left and To-Do count must share one baseline in every Featured size",
 );
 const featuredSummaryRenderer = pluginSource.slice(
@@ -503,6 +508,19 @@ assert.doesNotMatch(
   "Featured To-Dos must neither jump to the far edge nor use the green accent",
 );
 assert.match(pluginSource, /max\(34f, barTop - 10\.5f\)/);
+assert.match(
+  pluginSource,
+  /if \(stackedCompact\) max\(29\.5f, barTop - 7\.5f\)[\s\S]{0,100}barTop - if \(stackedCompact\) 0\.5f else 1\.5f/,
+  "Launcher stacks with a shorter reported height must still reserve visible goal tiles",
+);
+const minimumStackHeight = 42;
+const stackedBarTop = minimumStackHeight - 3.7;
+const stackedTileTop = Math.max(29.5, stackedBarTop - 7.5);
+const stackedTileBottom = stackedBarTop - 0.5;
+assert.ok(
+  stackedTileBottom - stackedTileTop >= 6,
+  "Even the minimum launcher-stack height must keep tiles above the renderer's 6dp visibility floor",
+);
 const featured2x1Width = 109;
 const featured2x1Pad = 5;
 const featuredBadgeDiameter = 24;

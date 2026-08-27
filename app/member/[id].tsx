@@ -40,14 +40,12 @@ import {
   Avatar,
   Button,
   Card,
-  Chip,
   IconButton,
   PageHeader,
   ProgressBar,
   Screen,
   SectionHeader,
 } from "@/src/components/ui";
-import { buildBadges } from "@/src/domain/badges";
 import {
   comparisonStats,
   metricHeadToHeadStats,
@@ -150,7 +148,10 @@ export default function MemberProfile() {
   const [photosOpen, setPhotosOpen] = useState(false);
   const [challengeEditorOpen, setChallengeEditorOpen] = useState(false);
   const [calendarOpen, setCalendarOpen] = useState(false);
-  const [dateNavigatorOpen, setDateNavigatorOpen] = useState(true);
+  const dateNavigatorOpen =
+    state.settings.comparisonDateNavigatorCollapsedByGroup?.[
+      state.group.id
+    ] === false;
   const comparisonReady = true;
   const challengeParticipantIds = useMemo(
     () => [...new Set([state.currentUserId, member.id])],
@@ -223,6 +224,17 @@ export default function MemberProfile() {
       weekStartsOn,
     ],
   );
+  const hasSharedComparisonPhotos = useMemo(
+    () =>
+      state.photos.some(
+        (photo) =>
+          selectedIds.includes(photo.userId) &&
+          dates.includes(photo.localDate) &&
+          (photo.userId === state.currentUserId ||
+            photo.visibility === "group"),
+      ),
+    [dates, selectedIds, state.currentUserId, state.photos],
+  );
   const navigationDates = useMemo(
     () => {
       void allTimeInputs;
@@ -290,69 +302,6 @@ export default function MemberProfile() {
       state.settings.weightDirection,
     ],
   );
-  const badgeInputs = useMemo(
-    () => ({
-      groupId: state.group.id,
-      groupMembers: state.group.members,
-      groupMetrics: state.group.metricConfiguration,
-      groupRestDays: state.group.streakRestDaysPerWeek,
-      metrics: state.metrics,
-      entries: state.entries,
-      statuses: state.dailyMetricStatuses,
-      trackedGoals: state.trackedGoalPeriods,
-      energyProfiles: state.energyProfiles,
-      gymSessions: state.gymSessions,
-      photos: state.photos,
-      energyProfile: state.settings.energyProfile,
-      weightDirection: state.settings.weightDirection,
-      baselineCalories: state.settings.baselineCalories,
-      foodGoalMode: state.settings.foodGoalMode,
-      vacationPeriods: state.settings.vacationPeriods,
-      currentUserId: state.currentUserId,
-    }),
-    [
-      state.group.id,
-      state.group.members,
-      state.group.metricConfiguration,
-      state.group.streakRestDaysPerWeek,
-      state.metrics,
-      state.entries,
-      state.dailyMetricStatuses,
-      state.trackedGoalPeriods,
-      state.energyProfiles,
-      state.gymSessions,
-      state.photos,
-      state.settings.energyProfile,
-      state.settings.weightDirection,
-      state.settings.baselineCalories,
-      state.settings.foodGoalMode,
-      state.settings.vacationPeriods,
-      state.currentUserId,
-    ],
-  );
-  const [allBadges, setAllBadges] = useState<ReturnType<typeof buildBadges>>(
-    [],
-  );
-  useEffect(() => {
-    let active = true;
-    // Do the heavier badge calculation after the first paint without waiting
-    // for React Native's global interaction queue. Long-running gestures or
-    // animations elsewhere in the app can keep that queue busy indefinitely
-    // and previously made the showcase disappear on Android.
-    const task = setTimeout(() => {
-      void badgeInputs;
-      const next = buildBadges(
-        calculationStateRef.current,
-        anchor,
-        challengeCloud.challenges,
-      );
-      if (active) setAllBadges(next);
-    }, 0);
-    return () => {
-      active = false;
-      clearTimeout(task);
-    };
-  }, [anchor, badgeInputs, challengeCloud.challenges]);
   const resultCache = useMemo(() => {
     void comparisonInputs;
     const cache = new Map<
@@ -486,63 +435,6 @@ export default function MemberProfile() {
       comparisonInputs,
     ],
   );
-  const periodBadge = period === "yesterday"
-    ? "yesterday"
-    : period === "week"
-      ? "week"
-      : period === "month"
-        ? "month"
-        : period === "year"
-          ? "year"
-          : period === "overall"
-            ? "achievement"
-            : "today";
-  const memberBadges = useMemo(
-    () =>
-      allBadges.filter(
-        (badge) => badge.memberId === member.id,
-      ),
-    [allBadges, member.id],
-  );
-  const badgeOptions = useMemo(
-    () =>
-      memberBadges.map((badge) => ({
-          id: badge.id,
-          label: badge.title,
-          icon: badge.icon,
-          color: badge.color,
-          sublabel: badge.caption,
-        })),
-    [memberBadges],
-  );
-  const showcase = useMemo(
-    () => state.settings.badgeShowcaseByGroup[state.group.id] ?? [],
-    [state.group.id, state.settings.badgeShowcaseByGroup],
-  );
-  const displayedBadges = useMemo(() => {
-    const prioritized = [
-      ...showcase.flatMap((id) =>
-        memberBadges.filter((badge) => badge.id === id),
-      ),
-      ...memberBadges.filter((badge) => badge.period === periodBadge),
-      ...memberBadges.filter((badge) => badge.period === "achievement"),
-      ...memberBadges,
-    ];
-    return prioritized
-      .filter(
-        (badge, index, badges) =>
-          badges.findIndex((candidate) => candidate.id === badge.id) === index,
-      )
-      .slice(0, 5);
-  }, [memberBadges, periodBadge, showcase]);
-  function shift(days: number) {
-    if (period === "overall") return;
-    const next = dateWithOffsetFrom(anchor, days);
-    if (next <= dateKey()) {
-      if (period === "today" || period === "yesterday") setPeriod("custom");
-      setAnchor(next);
-    }
-  }
   function choosePeriod(next: LeaderboardPeriod) {
     setPeriod(next);
     if (
@@ -565,7 +457,12 @@ export default function MemberProfile() {
   }
   function toggleDateNavigator() {
     if (dateNavigatorOpen) setCalendarOpen(false);
-    setDateNavigatorOpen((open) => !open);
+    updateSettings({
+      comparisonDateNavigatorCollapsedByGroup: {
+        ...(state.settings.comparisonDateNavigatorCollapsedByGroup ?? {}),
+        [state.group.id]: dateNavigatorOpen,
+      },
+    });
   }
   const pageSwipeResponder = useMemo(
     () =>
@@ -650,6 +547,35 @@ export default function MemberProfile() {
           </View>
         }
       />
+      <View style={styles.dateSection}>
+        <PeriodChoiceBar
+          period={period}
+          onChange={choosePeriod}
+          dateViewOpen={dateNavigatorOpen}
+          onToggleDateView={toggleDateNavigator}
+        />
+        {period !== "overall" && dateNavigatorOpen ? (
+          <DateRangeNavigator
+            period={period}
+            anchor={anchor}
+            dates={navigationDates}
+            calendarOpen={calendarOpen}
+            onToggleCalendar={() => setCalendarOpen((open) => !open)}
+            onShift={shiftRange}
+          >
+            <MonthCalendar
+              monthDate={anchor}
+              selectedDate={anchor}
+              onSelect={(date) => {
+                setAnchor(date);
+                setPeriod("custom");
+                setCalendarOpen(false);
+              }}
+              onMonthChange={setAnchor}
+            />
+          </DateRangeNavigator>
+        ) : null}
+      </View>
       <View {...pageSwipeResponder.panHandlers}>
       <Card style={styles.profile}>
         <Avatar
@@ -682,93 +608,6 @@ export default function MemberProfile() {
           color={colors.primary}
         />
       </Card>
-      {false ? (
-        <>
-          <SectionHeader title="Date range" />
-          <View style={styles.chips}>
-            <Chip
-              label="Today"
-              selected={period === "today"}
-              onPress={() => {
-                choosePeriod("today");
-                setAnchor(dateKey());
-              }}
-            />
-            <Chip
-              label="Yesterday"
-              selected={period === "yesterday"}
-              onPress={() => {
-                choosePeriod("yesterday");
-                setAnchor(dateWithOffsetFrom(dateKey(), -1));
-              }}
-            />
-            <Chip
-              label="7 days"
-              selected={period === "week"}
-              onPress={() => choosePeriod("week")}
-            />
-            <Chip
-              label="Month"
-              selected={period === "month"}
-              onPress={() => choosePeriod("month")}
-            />
-          </View>
-          <Card style={styles.navigator}>
-            <IconButton
-              icon="chevron-back"
-              label="Previous"
-              onPress={() =>
-                shift(period === "week" ? -7 : period === "month" ? -30 : -1)
-              }
-            />
-            <View style={styles.navCopy}>
-              <Text style={[styles.navTitle, { color: colors.ink }]}>
-                {periodTitle(period, anchor)}
-              </Text>
-              <Text style={[styles.navSub, { color: colors.muted }]}>
-                {dates.length > 1
-                  ? `${friendlyDate(dates[0])} – ${friendlyDate(dates[dates.length - 1])}`
-                  : friendlyDate(anchor)}
-              </Text>
-            </View>
-            <IconButton
-              icon="chevron-forward"
-              label="Next"
-              onPress={() =>
-                shift(period === "week" ? 7 : period === "month" ? 30 : 1)
-              }
-            />
-          </Card>
-          <SectionHeader title="Comparison filters" />
-          <View style={styles.selectors}>
-            <MetricSelector
-              title="What to show"
-              items={available.map((metric) => ({
-                id: metric.id,
-                label: metric.name,
-                icon: metric.icon as keyof typeof Ionicons.glyphMap,
-                color: metric.color,
-              }))}
-              selectedIds={metricIds}
-              onChange={chooseMetrics}
-            />
-            <MetricSelector
-              title="People on chart"
-              items={state.group.members.map((person) => ({
-                id: person.id,
-                label:
-                  person.id === state.currentUserId
-                    ? "You"
-                    : memberDisplayName(state, person),
-                icon: "person-outline",
-                color: person.color,
-              }))}
-              selectedIds={selectedIds}
-              onChange={setSelectedIds}
-            />
-          </View>
-        </>
-      ) : null}
       <TutorialTarget id="comparison-stats">
       {member.id === state.currentUserId ? (
         <>
@@ -794,7 +633,7 @@ export default function MemberProfile() {
             />
           </View>
         </>
-      ) : dates.length > 1 && headToHeads.length ? (
+      ) : headToHeads.length ? (
         <>
           <SectionHeader title="Head-to-head vs you" />
           {headToHeads.map(({ metric, stats: duel }) =>
@@ -979,76 +818,8 @@ export default function MemberProfile() {
           </Card>
         ))}
       </View>
-      <>
-          <SectionHeader
-            title={`${memberDisplayName(state, member)}'s badge showcase`}
-            action={
-              <Pressable
-                onPress={() =>
-                  router.navigate({
-                    pathname: "/badges",
-                    params: { anchor, filter: "achievement" },
-                  } as never)
-                }
-              >
-                <Text style={[styles.badgeLink, { color: colors.primary }]}>All badges</Text>
-              </Pressable>
-            }
-          />
-          <Card style={styles.badgeShowcaseCard}>
-            <View style={styles.badgeList}>
-              {displayedBadges.length ? displayedBadges.map((badge) => (
-                <View
-                  key={badge.id}
-                  style={[styles.badge, { borderLeftColor: badge.color }]}
-                >
-                  <View
-                    style={[
-                      styles.badgeIcon,
-                      { backgroundColor: `${badge.color}20` },
-                    ]}
-                  >
-                    <Ionicons name={badge.icon} size={18} color={badge.color} />
-                  </View>
-                  <View style={styles.copy}>
-                    <Text style={[styles.badgeTitle, { color: colors.ink }]}>{badge.title}</Text>
-                    <Text style={[styles.badgeCaption, { color: colors.muted }]}>
-                      {badge.caption} · {badge.description}
-                    </Text>
-                  </View>
-                </View>
-              )) : (
-                <View style={styles.badgeEmpty}>
-                  <Ionicons name="ribbon-outline" size={18} color={colors.faint} />
-                  <Text style={[styles.badgeCaption, { color: colors.muted }]}>No data</Text>
-                </View>
-              )}
-            </View>
-          </Card>
-          {member.id === state.currentUserId && badgeOptions.length ? (
-            <TutorialTarget id="badge-showcase-picker">
-            <MetricSelector
-              title="Choose up to 5 showcase badges"
-              items={badgeOptions}
-              selectedIds={
-                showcase.length
-                  ? showcase
-                  : displayedBadges.map((badge) => badge.id)
-              }
-              onChange={(ids) => {
-                if (ids.length <= 5)
-                  updateSettings({
-                    badgeShowcaseByGroup: {
-                      ...state.settings.badgeShowcaseByGroup,
-                      [state.group.id]: ids,
-                    },
-                  });
-              }}
-            />
-            </TutorialTarget>
-          ) : null}
-        </>
-      <Pressable onPress={() => setPhotosOpen((open) => !open)}>
+      {hasSharedComparisonPhotos ? (
+      <><Pressable onPress={() => setPhotosOpen((open) => !open)}>
         <Card style={styles.collapseHeader}>
           <Ionicons name="images-outline" size={18} color={colors.primary} />
           <Text style={[styles.collapseTitle, { color: colors.ink }]}>
@@ -1073,35 +844,8 @@ export default function MemberProfile() {
           ))}
         </Card>
       ) : null}
-      <View style={styles.dateSection}>
-        <PeriodChoiceBar
-          period={period}
-          onChange={choosePeriod}
-          dateViewOpen={dateNavigatorOpen}
-          onToggleDateView={toggleDateNavigator}
-        />
-        {period !== "overall" && dateNavigatorOpen ? (
-          <DateRangeNavigator
-            period={period}
-            anchor={anchor}
-            dates={navigationDates}
-            calendarOpen={calendarOpen}
-            onToggleCalendar={() => setCalendarOpen((open) => !open)}
-            onShift={shiftRange}
-          >
-            <MonthCalendar
-              monthDate={anchor}
-              selectedDate={anchor}
-              onSelect={(date) => {
-                setAnchor(date);
-                setPeriod("custom");
-                setCalendarOpen(false);
-              }}
-              onMonthChange={setAnchor}
-            />
-          </DateRangeNavigator>
-        ) : null}
-      </View>
+      </>
+      ) : null}
       <View style={styles.selectors}>
         <MetricSelector
           title="What to show"
@@ -1583,39 +1327,6 @@ const styles = StyleSheet.create({
     fontSize: 7,
     textAlign: "center",
     marginTop: 2,
-  },
-  badgeLink: { color: palette.primary, fontSize: 10, fontWeight: "900" },
-  badgeShowcaseCard: { paddingVertical: 14, overflow: "visible" },
-  badgeList: { width: "100%", gap: 12 },
-  badge: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: 10,
-    borderLeftWidth: 3,
-    paddingLeft: 10,
-    paddingVertical: 3,
-  },
-  badgeIcon: {
-    flexShrink: 0,
-    width: 36,
-    height: 36,
-    borderRadius: 12,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  badgeTitle: { color: palette.ink, fontSize: 11, fontWeight: "900" },
-  badgeCaption: {
-    color: palette.muted,
-    fontSize: 8,
-    lineHeight: 13,
-    marginTop: 2,
-  },
-  badgeEmpty: {
-    minHeight: 36,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
   },
   dateSection: { marginTop: 16 },
   photoPerson: { paddingVertical: 9, gap: 7 },

@@ -13,6 +13,7 @@ export const NATIVE_GOOGLE_GROUP_MANIFEST_VERSION = 1 as const;
 export const NATIVE_GOOGLE_GROUP_CHUNK_LENGTH = 1_800;
 export const NATIVE_GOOGLE_GROUP_MAX_CHUNKS = 48;
 export const NATIVE_GOOGLE_GROUP_MAX_STATUSES = 320;
+export const NATIVE_GOOGLE_GROUP_MAX_ENTRIES = 80;
 export const NATIVE_GOOGLE_GROUP_CACHE_DAYS = 7;
 export type NativeGoogleHealthGroupSlot = "slot-a" | "slot-b";
 
@@ -54,6 +55,7 @@ export function nativeGoogleHealthCheckpointContentSignature(
       accountId?: unknown;
       groupId?: unknown;
       createdAt?: unknown;
+      entries?: unknown;
       dailyMetricStatuses?: unknown;
     };
     return nativeGoogleHealthStableHash(
@@ -64,6 +66,7 @@ export function nativeGoogleHealthCheckpointContentSignature(
           typeof checkpoint.createdAt === "string"
             ? checkpoint.createdAt.slice(0, 10)
             : undefined,
+        entries: checkpoint.entries,
         dailyMetricStatuses: checkpoint.dailyMetricStatuses,
       }),
     );
@@ -104,17 +107,23 @@ export function serializeNativeGoogleHealthGroupCheckpoint(
       return (left.syncedAt ?? "").localeCompare(right.syncedAt ?? "");
     })
     .slice(-NATIVE_GOOGLE_GROUP_MAX_STATUSES);
-  if (!statuses.length) return;
+  const entries = checkpoint.entries
+    .filter((entry) => entry.localDate >= earliestDate)
+    .sort((left, right) => left.recordedAt.localeCompare(right.recordedAt))
+    .slice(-NATIVE_GOOGLE_GROUP_MAX_ENTRIES);
+  if (!statuses.length && !entries.length) return;
 
-  const compact = { ...checkpoint, dailyMetricStatuses: statuses };
+  const compact = { ...checkpoint, entries, dailyMetricStatuses: statuses };
   while (
-    compact.dailyMetricStatuses.length > 1 &&
+    (compact.entries.length > 0 || compact.dailyMetricStatuses.length > 1) &&
     asciiJson(compact).length >
       NATIVE_GOOGLE_GROUP_CHUNK_LENGTH * NATIVE_GOOGLE_GROUP_MAX_CHUNKS
   ) {
-    // Oldest projections yield first; today's last-known values survive even
-    // for unusually large groups without allowing unbounded Keychain growth.
-    compact.dailyMetricStatuses.shift();
+    // Oldest detail rows yield before compact totals. Today's last-known
+    // values survive even for unusually large groups without allowing
+    // unbounded Keychain growth.
+    if (compact.entries.length) compact.entries.shift();
+    else compact.dailyMetricStatuses.shift();
   }
   const serialized = asciiJson(compact);
   return serialized.length <=

@@ -43,6 +43,7 @@ const pages: {
   { id: "calendar", label: "Schedule", icon: "calendar-outline" },
   { id: "journal", label: "Journal", icon: "book-outline" },
   { id: "performance", label: "Performance", icon: "speedometer-outline" },
+  { id: "recapfeed", label: "Recap", icon: "newspaper-outline" },
   { id: "chat", label: "Chat", icon: "chatbubbles-outline" },
 ];
 
@@ -64,7 +65,9 @@ type ToggleKey =
   | "showJournal"
   | "showCalendarShortcut"
   | "showJournalShortcut"
+  | "showBadgeShortcut"
   | "showPerformance"
+  | "showRecap"
   | "showStatus"
   | "showWeightManagementSummary"
   | "showTodosToday"
@@ -105,6 +108,7 @@ export default function DisplaySettings() {
       (page.id !== "calendar" || state.settings.showCalendar) &&
       (page.id !== "journal" || state.settings.showJournal) &&
       (page.id !== "performance" || state.settings.showPerformance) &&
+      (page.id !== "recapfeed" || state.settings.showRecap) &&
       (page.id !== "status" || state.settings.showStatus !== false),
   );
   const landingPages = pages.filter(
@@ -147,6 +151,7 @@ export default function DisplaySettings() {
       showCalendar: "calendar",
       showJournal: "journal",
       showPerformance: "performance",
+      showRecap: "recapfeed",
       showStatus: "status",
     };
     if (
@@ -370,6 +375,7 @@ export default function DisplaySettings() {
               ["showCalendar", "Schedule", "Reminders, tasks, and prompts", "calendar-outline"],
               ["showJournal", "Journal", "Notes collected across the app", "book-outline"],
               ["showPerformance", "Performance", "Strengths, trends, and focus areas", "speedometer-outline"],
+              ["showRecap", "Recap", "Group feed, milestones, and meaningful shared logs", "newspaper-outline"],
               ["showStatus", "Status", "A visual dashboard around your tracked goals", "accessibility-outline"],
               ["showAiAssistant", "MetRal AI", "Floating logging and setup assistant", "sparkles-outline"],
             ] as [ToggleKey, string, string, keyof typeof Ionicons.glyphMap][]
@@ -599,6 +605,13 @@ export default function DisplaySettings() {
             copy="Show a Journal icon in the Today header"
             enabled={state.settings.showJournalShortcut !== false}
             onChange={(value) => toggle("showJournalShortcut", value)}
+          />
+          <ToggleRow
+            icon="trophy-outline"
+            title="Badge cabinet shortcut"
+            copy="Show a Badges icon in the Today header"
+            enabled={state.settings.showBadgeShortcut === true}
+            onChange={(value) => toggle("showBadgeShortcut", value)}
           />
         </Card>
       </CollapsibleSection>

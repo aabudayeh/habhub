@@ -414,7 +414,7 @@ function Today() {
   const heroMet = tutorialCompletionPreview
     ? heroTotal
     : todayHero.met;
-  const heroProgress = heroTotal ? heroMet / heroTotal : 0;
+  const heroProgress = tutorialCompletionPreview ? 1 : todayHero.progress;
   const heroAllMet = heroTotal > 0 && heroMet === heroTotal;
   const visible = useMemo(() => {
     // This is the section-level visibility switch, so it must fence every
@@ -1112,6 +1112,15 @@ function Today() {
                     icon="book-outline"
                     label="Open journal"
                     onPress={() => router.navigate("/journal" as never)}
+                    colors={colors}
+                    accent={accent}
+                  />
+                ) : null}
+                {state.settings.showBadgeShortcut ? (
+                  <HeaderIcon
+                    icon="trophy-outline"
+                    label="Open badge cabinet"
+                    onPress={() => router.navigate("/badges" as never)}
                     colors={colors}
                     accent={accent}
                   />

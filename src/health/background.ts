@@ -11,7 +11,8 @@ export async function configureBackgroundHealthSync(
 ): Promise<BackgroundHealthSyncRegistration> {
   return settings.enabled &&
     settings.backgroundAccess &&
-    healthSyncSchedule(mode).requestsBackground
+    healthSyncSchedule(mode, settings.backgroundIntervalHours)
+      .requestsBackground
     ? 'unavailable'
     : 'disabled';
 }

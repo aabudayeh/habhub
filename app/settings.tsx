@@ -2,6 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import React, { useState } from "react";
 import {
+  PanResponder,
   Platform,
   Pressable,
   Share,
@@ -31,6 +32,7 @@ import {
 import { useHealthSync } from "@/src/health/HealthSyncProvider";
 import {
   healthSyncSchedule,
+  normalizeBackgroundSyncIntervalHours,
   normalizeHealthSyncMode,
 } from "@/src/health/schedule";
 import { useApp } from "@/src/state/AppProvider";
@@ -79,6 +81,13 @@ const syncModes: {
     title: "Frequent",
     subtitle: "Background, including while HabHub is closed - ~1-hour minimum",
     icon: "flash-outline",
+    kind: "background",
+  },
+  {
+    id: "custom",
+    title: "Custom interval",
+    subtitle: "Choose a 1-12 hour minimum",
+    icon: "options-outline",
     kind: "background",
   },
 ];
@@ -273,6 +282,168 @@ const statusCopy = {
   error: ["Needs attention", "warning-outline"],
 } as const;
 
+function BackgroundIntervalSlider({
+  accent,
+  borderColor,
+  canvasColor,
+  disabled,
+  inkColor,
+  mutedColor,
+  onCommit,
+  value,
+}: {
+  accent: string;
+  borderColor: string;
+  canvasColor: string;
+  disabled: boolean;
+  inkColor: string;
+  mutedColor: string;
+  onCommit: (hours: number) => void;
+  value: number;
+}) {
+  const normalizedValue = normalizeBackgroundSyncIntervalHours(value);
+  const [draft, setDraft] = useState(normalizedValue);
+  const draftRef = React.useRef(normalizedValue);
+  const trackWidthRef = React.useRef(1);
+  const dragStartRef = React.useRef(0);
+  const draggingRef = React.useRef(false);
+  const configurationRef = React.useRef({
+    disabled,
+    onCommit,
+    value: normalizedValue,
+  });
+  configurationRef.current = { disabled, onCommit, value: normalizedValue };
+  draftRef.current = draft;
+  React.useEffect(() => {
+    if (draggingRef.current) return;
+    draftRef.current = normalizedValue;
+    setDraft(normalizedValue);
+  }, [normalizedValue]);
+
+  const updateFromXRef = React.useRef<(x: number) => void>(() => undefined);
+  updateFromXRef.current = (x) => {
+    if (configurationRef.current.disabled) return;
+    const fraction = Math.max(
+      0,
+      Math.min(1, x / Math.max(1, trackWidthRef.current)),
+    );
+    const next = normalizeBackgroundSyncIntervalHours(1 + fraction * 11);
+    if (next === draftRef.current) return;
+    draftRef.current = next;
+    setDraft(next);
+  };
+  const commit = (next: number) => {
+    if (configurationRef.current.disabled) return;
+    const normalized = normalizeBackgroundSyncIntervalHours(next);
+    draftRef.current = normalized;
+    setDraft(normalized);
+    configurationRef.current.onCommit(normalized);
+  };
+  const responderRef = React.useRef<ReturnType<typeof PanResponder.create> | null>(
+    null,
+  );
+  if (!responderRef.current) {
+    responderRef.current = PanResponder.create({
+      onStartShouldSetPanResponder: () => !configurationRef.current.disabled,
+      onMoveShouldSetPanResponder: () => !configurationRef.current.disabled,
+      onPanResponderGrant: (event) => {
+        draggingRef.current = true;
+        dragStartRef.current = Number(event.nativeEvent.locationX) || 0;
+        updateFromXRef.current(dragStartRef.current);
+      },
+      onPanResponderMove: (_event, gesture) =>
+        updateFromXRef.current(dragStartRef.current + gesture.dx),
+      onPanResponderRelease: () => {
+        draggingRef.current = false;
+        configurationRef.current.onCommit(draftRef.current);
+      },
+      onPanResponderTerminate: () => {
+        draggingRef.current = false;
+        draftRef.current = configurationRef.current.value;
+        setDraft(configurationRef.current.value);
+      },
+      onPanResponderTerminationRequest: () => false,
+    });
+  }
+  const progress = (draft - 1) / 11;
+
+  return (
+    <View style={[styles.intervalPanel, { borderTopColor: borderColor }]}>
+      <View style={styles.intervalHeading}>
+        <View style={styles.copy}>
+          <Text style={[styles.modeTitle, { color: inkColor }]}>Background sync interval</Text>
+          <Text style={[styles.meta, { color: mutedColor }]}>Health import and its compact group update; the OS may run it later.</Text>
+        </View>
+        <Text style={[styles.intervalValue, { color: accent }]}>
+          {draft} {draft === 1 ? "hour" : "hours"}
+        </Text>
+      </View>
+      <View style={styles.intervalControl}>
+        <Pressable
+          accessibilityLabel="Decrease background sync interval"
+          disabled={disabled || draft <= 1}
+          onPress={() => commit(draft - 1)}
+          style={[styles.intervalStep, { borderColor }]}
+        >
+          <Ionicons name="remove" size={16} color={draft <= 1 ? mutedColor : accent} />
+        </Pressable>
+        <View
+          accessible
+          accessibilityRole="adjustable"
+          accessibilityLabel="Background sync interval"
+          accessibilityValue={{
+            min: 1,
+            max: 12,
+            now: draft,
+            text: `${draft} hours`,
+          }}
+          accessibilityActions={[{ name: "increment" }, { name: "decrement" }]}
+          onAccessibilityAction={(event) => {
+            if (event.nativeEvent.actionName === "increment") commit(draft + 1);
+            if (event.nativeEvent.actionName === "decrement") commit(draft - 1);
+          }}
+          onLayout={(event) => {
+            trackWidthRef.current = Math.max(1, event.nativeEvent.layout.width);
+          }}
+          style={styles.intervalTrackTouch}
+          {...responderRef.current.panHandlers}
+        >
+          <View style={[styles.intervalTrack, { backgroundColor: borderColor }]}>
+            <View
+              style={[
+                styles.intervalFill,
+                { backgroundColor: accent, width: `${progress * 100}%` },
+              ]}
+            />
+            <View
+              style={[
+                styles.intervalThumb,
+                {
+                  backgroundColor: canvasColor,
+                  borderColor: accent,
+                  left: `${progress * 100}%`,
+                },
+              ]}
+            />
+          </View>
+        </View>
+        <Pressable
+          accessibilityLabel="Increase background sync interval"
+          disabled={disabled || draft >= 12}
+          onPress={() => commit(draft + 1)}
+          style={[styles.intervalStep, { borderColor }]}
+        >
+          <Ionicons name="add" size={16} color={draft >= 12 ? mutedColor : accent} />
+        </Pressable>
+      </View>
+      <View style={styles.intervalEnds}>
+        <Text style={[styles.intervalEnd, { color: mutedColor }]}>1h · freshest</Text>
+        <Text style={[styles.intervalEnd, { color: mutedColor }]}>12h · least battery</Text>
+      </View>
+    </View>
+  );
+}
+
 export default function SettingsScreen() {
   const tutorialSandbox = useTutorialSandboxActive();
   const { state, updateSettings, resetDemo } = useApp();
@@ -302,7 +473,13 @@ export default function SettingsScreen() {
     [state.currentUserId, state.entries],
   );
   const selectedSyncMode = normalizeHealthSyncMode(state.settings.syncMode);
-  const selectedHealthSchedule = healthSyncSchedule(selectedSyncMode);
+  const backgroundIntervalHours = normalizeBackgroundSyncIntervalHours(
+    state.settings.healthSync.backgroundIntervalHours,
+  );
+  const selectedHealthSchedule = healthSyncSchedule(
+    selectedSyncMode,
+    backgroundIntervalHours,
+  );
   const selectedLiveStepSources = React.useMemo(() => {
     const normalized = normalizeLiveStepSources(
       state.settings.healthSync.liveStepSources,
@@ -1210,7 +1387,12 @@ export default function SettingsScreen() {
                 onPress={() =>
                   void run(
                     "health",
-                    () => health.setSyncMode(mode.id),
+                    () =>
+                      mode.id === "custom"
+                        ? health.setBackgroundSyncIntervalHours(
+                            backgroundIntervalHours,
+                          )
+                        : health.setSyncMode(mode.id),
                     "Health schedule not changed",
                   )
                 }
@@ -1255,6 +1437,24 @@ export default function SettingsScreen() {
               </Pressable>
             </React.Fragment>
           ))}
+          {selectedSyncMode === "custom" ? (
+            <BackgroundIntervalSlider
+              value={backgroundIntervalHours}
+              disabled={busy === "health" || health.status === "requesting"}
+              accent={accent}
+              borderColor={colors.border}
+              canvasColor={colors.canvas}
+              inkColor={colors.ink}
+              mutedColor={colors.muted}
+              onCommit={(hours) =>
+                void run(
+                  "health",
+                  () => health.setBackgroundSyncIntervalHours(hours),
+                  "Health schedule not changed",
+                )
+              }
+            />
+          ) : null}
             </Card>
           ) : null}
           <View
@@ -1284,8 +1484,9 @@ export default function SettingsScreen() {
             Android may run them later or skip a run based on system conditions.
             Sync now is immediate; automatic app-open checks run only when the
             selected interval is due. On Android, Force stop pauses background
-            work until HabHub is opened again. Account cloud sync remains
-            separate.
+            work until HabHub is opened again. A successful signed-in
+            background health import also publishes a compact group update;
+            full account sync still runs in the app.
           </Text>
         </>
       ) : null}
@@ -1456,6 +1657,52 @@ const styles = StyleSheet.create({
   },
   modeActive: { backgroundColor: palette.canvas },
   modeTitle: { color: palette.ink, fontSize: 12, fontWeight: "900" },
+  intervalPanel: {
+    borderTopWidth: 1,
+    paddingHorizontal: 10,
+    paddingTop: 12,
+    paddingBottom: 11,
+    gap: 9,
+  },
+  intervalHeading: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  intervalValue: { fontSize: 10, fontWeight: "900" },
+  intervalControl: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  intervalStep: {
+    width: 32,
+    height: 32,
+    borderWidth: 1,
+    borderRadius: 9,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  intervalTrackTouch: { flex: 1, height: 32, justifyContent: "center" },
+  intervalTrack: { height: 6, borderRadius: 3 },
+  intervalFill: {
+    position: "absolute",
+    left: 0,
+    top: 0,
+    bottom: 0,
+    borderRadius: 3,
+  },
+  intervalThumb: {
+    position: "absolute",
+    top: -6,
+    width: 18,
+    height: 18,
+    marginLeft: -9,
+    borderWidth: 2,
+    borderRadius: 9,
+  },
+  intervalEnds: { flexDirection: "row", justifyContent: "space-between" },
+  intervalEnd: { fontSize: 6.5, fontWeight: "700" },
   disclaimer: {
     color: palette.muted,
     fontSize: 9,

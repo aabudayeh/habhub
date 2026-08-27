@@ -8,6 +8,7 @@ import {
 import { googleHealthConfig } from "./google-health-config.ts";
 import { decryptSecret, encryptSecret, sha256Hex } from "./google-health-crypto.ts";
 import { googleHealthProviderErrorCode } from "./google-health-http.ts";
+import { projectPublicChallengesFromSnapshot } from "./public-challenge-projection.ts";
 
 type JsonObject = Record<string, unknown>;
 type Metric = JsonObject & {
@@ -1284,6 +1285,25 @@ async function performGoogleHealthSync(
       throw projection.error;
   }
   if (!groupProjectionApplied) throw new Error("google_health_projection_conflict");
+
+  // A web-only participant may not belong to the public challenge creator's
+  // group, so the ordinary group projection cannot provide their score. Read
+  // the just-committed account snapshot and publish only consented aggregate
+  // totals before marking this Google Health sync complete.
+  const challengeSnapshot = await admin.from("user_snapshots")
+    .select("payload,revision")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (challengeSnapshot.error || !challengeSnapshot.data?.payload)
+    throw challengeSnapshot.error ?? new Error("google_health_snapshot_missing");
+  if (Number(challengeSnapshot.data.revision) !== projectionRevision)
+    throw new Error("google_health_projection_conflict");
+  await projectPublicChallengesFromSnapshot(
+    admin,
+    userId,
+    challengeSnapshot.data.payload as Snapshot,
+    now.toISOString(),
+  );
 
   const finished = await admin.rpc("finish_google_health_sync", {
     p_user_id: userId,

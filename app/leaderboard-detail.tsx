@@ -7,8 +7,10 @@ import {
   PanResponder,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   View,
+  findNodeHandle,
 } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
 import { LocalizedAlert as Alert, useLocalization } from "@/src/i18n";
@@ -68,6 +70,8 @@ import {
   sharedWorkoutBreakdownEntries,
 } from "@/src/domain/sharedLeaderboardLogs";
 import { useCloudSyncActions } from "@/src/cloud/CloudSyncProvider";
+import { GroupSocialTarget } from "@/src/cloud/groupSocial";
+import { useGroupSocialEngagement } from "@/src/cloud/useGroupSocialEngagement";
 import { isCloudGroupId } from "@/src/cloud/groupCloud";
 import { useApp } from "@/src/state/AppProvider";
 import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
@@ -81,8 +85,11 @@ export default function LeaderboardDetail() {
     period?: string;
     anchor?: string;
     metrics?: string;
+    memberId?: string;
+    entryId?: string;
+    logFocusAt?: string;
   }>();
-  const { state } = useApp();
+  const { state, updateSettings } = useApp();
   const cloud = useCloudSyncActions();
   const tutorialSandbox = useTutorialSandboxActive();
   const { language, t } = useLocalization();
@@ -90,17 +97,24 @@ export default function LeaderboardDetail() {
   calculationStateRef.current = state;
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const scrollRef = useRef<ScrollView>(null);
   const [period, setPeriod] = useState<LeaderboardPeriod>(
     (params.period as LeaderboardPeriod) || "today",
   );
   const [anchor, setAnchor] = useState(params.anchor || dateKey());
-  const [dateNavigatorOpen, setDateNavigatorOpen] = useState(true);
+  const dateNavigatorOpen =
+    state.settings.leaderboardDetailDateNavigatorCollapsed === false;
   const [showCalendar, setShowCalendar] = useState(false);
   const [openLogs, setOpenLogs] = useState<Record<string, boolean>>({});
   const [detailsReady, setDetailsReady] = useState(false);
-  const [peerDetailsAuthorized, setPeerDetailsAuthorized] = useState(false);
+  // In-memory rows have already passed the account, membership, revision and
+  // privacy-fence checks in CloudSyncProvider. Paint them immediately while a
+  // forced range refresh verifies changes instead of flashing a daily total.
+  const [peerDetailsAuthorized, setPeerDetailsAuthorized] = useState(true);
   const [detailsRefreshFailed, setDetailsRefreshFailed] = useState(false);
   const [detailsRefreshAttempt, setDetailsRefreshAttempt] = useState(0);
+  const [highlightedEntryId, setHighlightedEntryId] = useState<string>();
+  const handledLogFocus = useRef<string | undefined>(undefined);
   useEffect(() => {
     let active = true;
     // Paint the route shell first, then calculate details on the next task.
@@ -136,7 +150,6 @@ export default function LeaderboardDetail() {
       return;
     }
     let active = true;
-    setPeerDetailsAuthorized(false);
     setDetailsRefreshFailed(false);
     const timer = setTimeout(() => {
       cloud
@@ -186,6 +199,18 @@ export default function LeaderboardDetail() {
     () => [...new Set(visibleEntries.map((entry) => entry.metricId))],
     [visibleEntries],
   );
+  const socialTargets = useMemo<GroupSocialTarget[]>(
+    () =>
+      visibleEntries
+        .filter(
+          (entry) =>
+            entry.source !== "calculated" &&
+            !entry.id.startsWith("shared-total:"),
+        )
+        .map((entry) => ({ type: "metric_entry", id: entry.id })),
+    [visibleEntries],
+  );
+  const social = useGroupSocialEngagement(state.group.id, socialTargets);
   const available = useMemo(
     () =>
       (state.group.metricConfiguration ?? []).filter(
@@ -205,6 +230,22 @@ export default function LeaderboardDetail() {
         ? loggedIds
         : [SCORE_ID],
   );
+
+  useEffect(() => {
+    if (!params.entryId || !visibleEntries.length) return;
+    const focusKey = `${params.entryId}:${params.logFocusAt ?? "initial"}`;
+    if (handledLogFocus.current === focusKey) return;
+    const entry = visibleEntries.find((item) => item.id === params.entryId);
+    if (!entry) return;
+    handledLogFocus.current = focusKey;
+    setSelectedIds((current) =>
+      current.includes(entry.metricId) ? current : [entry.metricId],
+    );
+    setOpenLogs((current) => ({ ...current, [entry.userId]: true }));
+    setHighlightedEntryId(entry.id);
+    const timer = setTimeout(() => setHighlightedEntryId(undefined), 4_000);
+    return () => clearTimeout(timer);
+  }, [params.entryId, params.logFocusAt, visibleEntries]);
 
   const availableKey = available.map((metric) => metric.id).join("|");
   useEffect(() => {
@@ -336,7 +377,9 @@ export default function LeaderboardDetail() {
   }
   function toggleDateNavigator() {
     if (dateNavigatorOpen) setShowCalendar(false);
-    setDateNavigatorOpen((open) => !open);
+    updateSettings({
+      leaderboardDetailDateNavigatorCollapsed: dateNavigatorOpen,
+    });
   }
   const pageSwipeResponder = useMemo(
     () =>
@@ -358,7 +401,7 @@ export default function LeaderboardDetail() {
   );
 
   return (
-    <Screen>
+    <Screen scrollRef={scrollRef}>
       <PageHeader
         eyebrow="Leaderboard details"
         title={periodTitle(period, anchor)}
@@ -780,6 +823,9 @@ export default function LeaderboardDetail() {
                               entry,
                               authorizedEntries,
                             )}
+                            social={social}
+                            highlighted={highlightedEntryId === entry.id}
+                            scrollRef={scrollRef}
                           />
                         ))
                     : null}
@@ -830,17 +876,59 @@ function LogRow({
   entry,
   state,
   workoutBreakdown,
+  social,
+  highlighted,
+  scrollRef,
 }: {
   entry: MetricEntry;
   state: AppState;
   workoutBreakdown: MetricEntry[];
+  social: ReturnType<typeof useGroupSocialEngagement>;
+  highlighted: boolean;
+  scrollRef: React.RefObject<ScrollView | null>;
 }) {
   const colors = useAppColors();
   const { language } = useLocalization();
+  const rowRef = useRef<React.ElementRef<typeof Pressable>>(null);
+  const lastTapAt = useRef(0);
   const metric =
     (state.group.metricConfiguration ?? []).find(
       (item) => item.id === entry.metricId,
     ) ?? state.metrics.find((item) => item.id === entry.metricId);
+  const socialTarget = useMemo<GroupSocialTarget | undefined>(
+    () =>
+      entry.source === "calculated" || entry.id.startsWith("shared-total:")
+        ? undefined
+        : { type: "metric_entry", id: entry.id },
+    [entry.id, entry.source],
+  );
+  const targetKey = socialTarget ? social.targetKey(socialTarget) : undefined;
+  const reactions = targetKey
+    ? social.reactionsByTarget.get(targetKey) ?? []
+    : [];
+  const react = (reaction: "heart" | "thumbs_up" | "thumbs_down") => {
+    if (!socialTarget) return;
+    void social.react(socialTarget, reaction).catch((reason) =>
+      Alert.alert(
+        "Could not react",
+        reason instanceof Error ? reason.message : "Please try again.",
+      ),
+    );
+  };
+  useEffect(() => {
+    if (!highlighted) return;
+    const timer = setTimeout(() => {
+      if (!rowRef.current || !scrollRef.current) return;
+      const scrollHandle = findNodeHandle(scrollRef.current);
+      if (!scrollHandle) return;
+      rowRef.current.measureLayout(
+        scrollHandle,
+        (_x, y) => scrollRef.current?.scrollTo({ y: Math.max(0, y - 110), animated: true }),
+        () => undefined,
+      );
+    }, 180);
+    return () => clearTimeout(timer);
+  }, [highlighted, scrollRef]);
   if (!metric) return null;
   const value =
     typeof entry.value === "string"
@@ -865,10 +953,23 @@ function LogRow({
     ];
   });
   return (
-    <View
+    <Pressable
+      ref={rowRef}
+      accessibilityRole={socialTarget ? "button" : undefined}
+      accessibilityLabel={socialTarget ? "Double tap to like this shared log" : undefined}
+      onPress={
+        socialTarget
+          ? () => {
+              const now = Date.now();
+              if (now - lastTapAt.current <= 320) react("heart");
+              lastTapAt.current = now;
+            }
+          : undefined
+      }
       style={[
         styles.log,
         { borderLeftColor: metric.color, backgroundColor: `${metric.color}0D` },
+        highlighted && styles.highlightedLog,
       ]}
     >
       <View style={styles.logBody}>
@@ -915,6 +1016,53 @@ function LogRow({
             {workoutDetails.join(" · ")}
           </Text>
         ) : null}
+        {socialTarget ? (
+          <View style={styles.socialActions}>
+            {(
+              [
+                ["thumbs_up", "thumbs-up-outline"],
+                ["thumbs_down", "thumbs-down-outline"],
+                ["heart", "heart-outline"],
+              ] as const
+            ).map(([reaction, icon]) => {
+              const selected = reactions.some(
+                (item) =>
+                  item.userId === state.currentUserId &&
+                  item.reaction === reaction,
+              );
+              const count = reactions.filter(
+                (item) => item.reaction === reaction,
+              ).length;
+              return (
+                <Pressable
+                  key={reaction}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected }}
+                  accessibilityLabel={`${reaction.replaceAll("_", " ")}${count ? `, ${count}` : ""}`}
+                  onPress={() => react(reaction)}
+                  style={[
+                    styles.socialAction,
+                    {
+                      borderColor: selected ? metric.color : colors.border,
+                      backgroundColor: selected ? `${metric.color}18` : colors.card,
+                    },
+                  ]}
+                >
+                  <Ionicons
+                    name={selected && reaction === "heart" ? "heart" : icon}
+                    size={14}
+                    color={selected ? metric.color : colors.muted}
+                  />
+                  {count ? (
+                    <Text translate={false} style={[styles.socialCount, { color: selected ? metric.color : colors.muted }]}>
+                      {count}
+                    </Text>
+                  ) : null}
+                </Pressable>
+              );
+            })}
+          </View>
+        ) : null}
       </View>
       {entry.imageUri ? (
         <ExpandableImage
@@ -922,7 +1070,7 @@ function LogRow({
           thumbnailStyle={styles.logImage}
         />
       ) : null}
-    </View>
+    </Pressable>
   );
 }
 
@@ -1263,6 +1411,11 @@ const styles = StyleSheet.create({
     marginTop: 6,
     borderLeftWidth: 3,
   },
+  highlightedLog: {
+    borderColor: palette.amber,
+    borderWidth: 2,
+    borderLeftWidth: 4,
+  },
   logBody: { flex: 1 },
   logMetric: {
     flexDirection: "row",
@@ -1287,6 +1440,24 @@ const styles = StyleSheet.create({
     lineHeight: 13,
     marginTop: 4,
   },
+  socialActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginTop: 8,
+  },
+  socialAction: {
+    minWidth: 34,
+    height: 28,
+    paddingHorizontal: 8,
+    borderRadius: 14,
+    borderWidth: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+  },
+  socialCount: { fontSize: 8, fontWeight: "900" },
   logImage: { width: 64, height: 64, borderRadius: 10 },
   photos: { marginTop: 14, gap: 8 },
   photoGrid: { flexDirection: "row", gap: 8 },

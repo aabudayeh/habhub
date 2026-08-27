@@ -569,6 +569,7 @@ export default function NoteEditor() {
   return (
     <>
       <Screen
+        refreshEnabled={!composerFocused && !drawingMode}
         fixedTop={
           !tutorialFormatting &&
           !tutorialDrawing &&

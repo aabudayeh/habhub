@@ -883,7 +883,7 @@ assert.match(
 );
 assert.match(
   healthBackgroundSource,
-  /getAppStateStorageItem\(APP_STORAGE_KEY\)[\s\S]{0,500}activeState\?\.currentUserId !== state\.currentUserId[\s\S]{0,500}healthSyncSchedule\(latest\.settings\.syncMode\)[\s\S]{0,500}!latestSchedule\.requestsBackground/,
+  /getAppStateStorageItem\(APP_STORAGE_KEY\)[\s\S]{0,500}activeState\?\.currentUserId !== state\.currentUserId[\s\S]{0,500}healthSyncSchedule\([\s\S]{0,180}latest\.settings\.syncMode[\s\S]{0,180}latest\.settings\.healthSync\.backgroundIntervalHours[\s\S]{0,500}!latestSchedule\.requestsBackground/,
   "background health must abort after an account switch and re-check the latest background-sync schedule before writing",
 );
 assert.doesNotMatch(

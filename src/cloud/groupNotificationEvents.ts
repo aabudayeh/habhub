@@ -8,8 +8,11 @@ type GroupNotificationEventRow = {
   recipient_id: string;
   actor_id: string;
   event_type: GroupNotificationEvent["kind"];
-  challenge_id: string;
+  challenge_id: string | null;
   occurrence_date: string | null;
+  target_type: GroupNotificationEvent["targetType"] | null;
+  target_id: string | null;
+  reaction: GroupNotificationEvent["reaction"] | null;
   title: string | null;
   detail: string | null;
   created_at: string;
@@ -24,10 +27,13 @@ function fromRow(row: GroupNotificationEventRow): GroupNotificationEvent {
     recipientId: row.recipient_id,
     actorId: row.actor_id,
     kind: row.event_type,
-    challengeId: row.challenge_id,
+    challengeId: row.challenge_id ?? undefined,
     occurrenceDate: row.occurrence_date ?? undefined,
     title: row.title?.trim() || undefined,
     detail: row.detail?.trim() || undefined,
+    targetType: row.target_type ?? undefined,
+    targetId: row.target_id ?? undefined,
+    reaction: row.reaction ?? undefined,
     createdAt: row.created_at,
     readAt: row.read_at ?? undefined,
   };
@@ -52,12 +58,27 @@ export async function loadGroupNotificationEvents(groupId: string) {
   const { data, error } = await supabase
     .from("group_notification_events")
     .select(
-      "id, event_key, group_id, recipient_id, actor_id, event_type, challenge_id, occurrence_date, title, detail, created_at, read_at",
+      "id, event_key, group_id, recipient_id, actor_id, event_type, challenge_id, occurrence_date, target_type, target_id, reaction, title, detail, created_at, read_at",
     )
     .eq("group_id", groupId)
     .order("created_at", { ascending: false })
     // Match the bounded 30-day celebration scan so frequent reminder events
     // cannot push an unseen canonical result out of the local settlement view.
+    .limit(500);
+  if (error) throw notificationCloudError(error);
+  return (data as GroupNotificationEventRow[] | null)?.map(fromRow) ?? [];
+}
+
+/** Account bell feed. RLS still limits rows to the authenticated recipient and
+ * either an active group membership or an explicitly joined public challenge. */
+export async function loadAccountNotificationEvents() {
+  if (!supabase) return [];
+  const { data, error } = await supabase
+    .from("group_notification_events")
+    .select(
+      "id, event_key, group_id, recipient_id, actor_id, event_type, challenge_id, occurrence_date, target_type, target_id, reaction, title, detail, created_at, read_at",
+    )
+    .order("created_at", { ascending: false })
     .limit(500);
   if (error) throw notificationCloudError(error);
   return (data as GroupNotificationEventRow[] | null)?.map(fromRow) ?? [];

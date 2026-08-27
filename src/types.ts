@@ -303,6 +303,10 @@ export type Member = {
   initials: string;
   color: string;
   role: "owner" | "admin" | "member";
+  /** When this person joined the active group, if supplied by cloud membership. */
+  joinedGroupAt?: string;
+  /** Account creation time exposed to fellow active group members. */
+  joinedAppAt?: string;
   /** Lightweight group-visible presence, independent of tracker writes. */
   lastSeenAt?: string;
   /** Server-confirmed time this member last published current group data. */
@@ -473,7 +477,12 @@ export type GoogleHealthEntryOverride = {
   sourceUpdatedAt: string;
 };
 
-export type SyncMode = "manual" | "battery" | "balanced" | "frequent";
+export type SyncMode =
+  | "manual"
+  | "battery"
+  | "balanced"
+  | "frequent"
+  | "custom";
 export type BanterTone = "supportive" | "friendly" | "ruthless" | "off";
 export type FoodGoalMode = "activity_adjusted" | "fixed";
 export type WeightDirection = "lose" | "maintain" | "gain";
@@ -487,6 +496,7 @@ export type LandingPage =
   | "calendar"
   | "journal"
   | "performance"
+  | "recapfeed"
   | "status";
 export type ProgressViewMode = "overview" | "goal_maps" | "compact";
 export type ProgressLayoutAvailability = "overview" | "goal_maps" | "both";
@@ -546,6 +556,11 @@ export type GroupChallenge = {
   creatorId: string;
   metricId: string;
   title?: string;
+  /** Group challenges stay member-scoped; public challenges are discoverable
+   * by any signed-in HabHub account and joining is the sharing consent. */
+  audience?: "group" | "public";
+  /** Omitted means no creator-defined participant limit. */
+  participantLimit?: number;
   /** Omitted for an open competition where the highest period total wins. */
   target?: number;
   /** Inclusive first scoring date. */
@@ -593,13 +608,18 @@ export type GroupNotificationEvent = {
     | "challenge_all_accepted"
     | "challenge_standing"
     | "challenge_reminder"
-    | "challenge_result";
-  challengeId: string;
+    | "challenge_result"
+    | "social_reaction";
+  challengeId?: string;
   /** Scored occurrence settled by the server, including recurring series. */
   occurrenceDate?: string;
   /** Server-authored copy for standings/results; legacy invitation rows omit it. */
   title?: string;
   detail?: string;
+  /** Optional privacy-authorized social target for likes/reactions. */
+  targetType?: "metric_entry" | "photo_update";
+  targetId?: string;
+  reaction?: "heart" | "thumbs_up" | "thumbs_down";
   createdAt: string;
   readAt?: string;
 };
@@ -849,6 +869,8 @@ export type HealthSyncSettings = {
   liveStepStrategyVersion?: number;
   /** Requested separately because both mobile operating systems may decline it. */
   backgroundAccess: boolean;
+  /** OS-managed background health/cloud minimum selected by this user. */
+  backgroundIntervalHours?: number;
   /**
    * One-shot onboarding handoff. Health permissions are granted before the
    * first import is intentionally deferred, so the reducer consumes this flag
@@ -1030,6 +1052,10 @@ export type UserSettings = {
   statusAvatarCalculationSource?: StatusAvatarCalculationSource;
   /** Remember whether the Status range/date controls were collapsed. */
   statusDateNavigatorCollapsed?: boolean;
+  /** Remember the disclosure on the cross-member Leaderboard detail page. */
+  leaderboardDetailDateNavigatorCollapsed?: boolean;
+  /** Remember the disclosure on Friend comparison. */
+  comparisonDateNavigatorCollapsedByGroup?: Record<string, boolean>;
   /** Put the to-do block below goal trackers instead of above them (default). */
   todosBelowGoals?: boolean;
   /** Put the collaborative task block below Leaderboard tracker cards. */
@@ -1062,7 +1088,11 @@ export type UserSettings = {
   /** Optional Today-header shortcuts; tabs may remain hidden independently. */
   showCalendarShortcut?: boolean;
   showJournalShortcut?: boolean;
+  /** Optional compact entry point to the badge cabinet in the Today header. */
+  showBadgeShortcut?: boolean;
   showPerformance?: boolean;
+  /** Optional group recap/feed tab; hidden on first run. */
+  showRecap?: boolean;
   /** Default-visible avatar-and-goal Status tab; users may hide it in Display. */
   showStatus?: boolean;
   showTodosToday?: boolean;
@@ -1111,6 +1141,8 @@ export type UserSettings = {
   memberNicknamesByGroup: Record<string, Record<string, string>>;
   /** Up to five badge ids the current user chose to feature in each group. */
   badgeShowcaseByGroup: Record<string, string[]>;
+  /** Group recap date controls begin collapsed and remember later disclosure. */
+  recapDateNavigatorCollapsed?: boolean;
   progressMetricIds: string[];
   /** Personal Progress card order, independent from filters and visibility. */
   progressMetricOrderIds?: string[];

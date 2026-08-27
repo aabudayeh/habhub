@@ -32,8 +32,13 @@ const alertDomain = read("src/domain/alerts.ts");
 const inAppChatBanner = read("src/components/InAppChatBanner.tsx");
 const chatScreen = read("app/(tabs)/chat.tsx");
 const groupNotificationHook = read("src/cloud/useGroupNotificationEvents.ts");
+const accountNotificationHook = read("src/cloud/useAccountNotificationEvents.ts");
+const groupSocialHook = read("src/cloud/useGroupSocialEngagement.ts");
 const allAcceptedMigration = read(
   "supabase/migrations/202608230004_challenge_all_accepted_notification.sql",
+);
+const socialEngagementMigration = read(
+  "supabase/migrations/202608270001_group_social_engagement.sql",
 );
 
 assert.doesNotThrow(() => assertPushDeliveryComplete({ sent: 2 }));
@@ -142,7 +147,7 @@ assert.match(alerts, /setFilter\(latestUnread\?\.category \?\? "all"\)/);
 assert.match(alerts, /unreadCategories\.has\("challenge"\)/);
 assert.match(
   alerts,
-  /pathname: "\/group"[\s\S]{0,300}challengeId: alert\.challengeId[\s\S]{0,300}challengeOccurrenceDate/,
+  /pathname: "\/challenges"[\s\S]{0,300}challengeId: alert\.challengeId[\s\S]{0,300}challengeOccurrenceDate/,
   "an in-app challenge alert must preserve the exact challenge and occurrence route",
 );
 assert.match(alerts, /groupId: alert\.groupId/);
@@ -727,21 +732,76 @@ for (let page = 0; page < 10; page += 1) {
 }
 assert.equal(visited.length, 45);
 
+assert.match(
+  socialEngagementMigration,
+  /create index if not exists metric_entries_shared_client_target_idx[\s\S]{0,180}where visibility = 'group'/i,
+  "shared-log reaction lookup must use a group-visible client-id index",
+);
+assert.match(
+  socialEngagementMigration,
+  /create index if not exists photo_updates_shared_client_target_idx[\s\S]{0,220}where visibility = 'group'/i,
+  "shared-photo reaction lookup must use a group-visible client-id index",
+);
+assert.match(
+  socialEngagementMigration,
+  /create or replace function public\.valid_group_social_target[\s\S]{0,400}public\.is_group_member\(p_group_id\)/i,
+  "the callable social-target validator must enforce active group membership itself",
+);
+assert.match(
+  socialEngagementMigration,
+  /group_social_reactions_member_read[\s\S]{0,240}valid_group_social_target\(group_id, target_type, target_id\)/i,
+  "reaction reads must stop when their underlying shared target is revoked",
+);
+assert.match(
+  socialEngagementMigration,
+  /group_social_comments_member_read[\s\S]{0,240}valid_group_social_target\(group_id, target_type, target_id\)/i,
+  "comment reads must stop when their underlying shared target is revoked",
+);
+assert.match(
+  socialEngagementMigration,
+  /create policy metrally_group_broadcast_read[\s\S]{0,900}split_part[\s\S]{0,500}'social'/i,
+  "the compact group topic policy must authorize the private social stream",
+);
+assert.doesNotMatch(
+  socialEngagementMigration,
+  /realtime\.topic\(\)\)\s*(?:!~|~\*?)/i,
+  "group Broadcast authorization must not depend on SQL regular expressions",
+);
+assert.match(
+  socialEngagementMigration,
+  /create or replace function public\.broadcast_group_social_change[\s\S]{0,900}realtime\.send\([\s\S]{0,500}'social_updated'[\s\S]{0,300}':social'[\s\S]{0,100}true/i,
+  "social mutations must emit one private database-owned invalidation",
+);
+assert.match(
+  groupSocialHook,
+  /subscribePrivateBroadcast\([\s\S]{0,100}`group:\$\{groupId\}:social`[\s\S]{0,100}"social_updated"/,
+  "social consumers must use the shared private Broadcast helper",
+);
+assert.doesNotMatch(groupSocialHook, /\.channel\(`group-social:/);
+assert.doesNotMatch(groupSocialHook, /realtimeRef|\.send\(\{/);
+
 assert.match(group, /groupFeedUnreadCount/);
 assert.match(group, /router\.navigate\("\/alerts\?scope=group"/);
-assert.match(alerts, /markGroupFeedRead\(unreadEventIds\)/);
+assert.match(alerts, /markGroupFeedRead\(visibleUnreadEventIds\)/);
+assert.match(
+  alerts,
+  /if \(filter === "all"\) return unreadEventIds/,
+  "the All tab must still mark every visible unread group event",
+);
 assert.match(alerts, /filter === "challenge"/);
 assert.match(
   alerts,
-  /const feedKey = `\$\{alertScope\}:\$\{state\.group\.id\}`/,
-  "the newest-unread tab initializer must be scoped to both alert feed and active group",
+  /const feedKey = `\$\{alertScope\}:\$\{state\.currentUserId\}:\$\{state\.group\.id\}`/,
+  "the newest-unread tab initializer must be scoped to the alert feed, account, and active group",
 );
 assert.match(
   alerts,
-  /groupFeedLoadedGroupId !== state\.group\.id/,
-  "a reused Alerts route must wait for the active group's notification feed before selecting its tab",
+  /!groupFeedLoaded[\s\S]{0,80}groupFeedLoading/,
+  "a reused Alerts route must wait for its account notification feed before selecting its tab",
 );
 assert.match(groupNotificationHook, /loadedGroupId/);
+assert.match(accountNotificationHook, /loadAccountNotificationEvents/);
+assert.match(accountNotificationHook, /account:\$\{auth\.user\.id\}:group-notifications/);
 
 console.log(
   "Push validation passed: native and Web Push account lifecycle, PWA service worker, staged canonical outbox, private challenge feed, cursor drain, and per-target retry checkpoints.",

@@ -3,6 +3,7 @@ import * as BackgroundTask from 'expo-background-task';
 import * as TaskManager from 'expo-task-manager';
 
 import { isCloudGroupId, pushCloudRecentActivity } from '@/src/cloud/groupCloud';
+import { publishJoinedPublicChallengeTotals } from '@/src/cloud/publicChallengeProjection';
 import { dateKey } from '@/src/domain/date';
 import { applyImportedFoodFastBreaks } from '@/src/domain/fasting';
 import { enabledHealthDataTypes, healthFallbackContextForRead, healthVisibilityByMetric, mapHealthRecordsToEntries, mergeHealthEntries, metricIdsForHealthDataTypes } from '@/src/domain/health';
@@ -188,7 +189,10 @@ TaskManager.defineTask(TASK_NAME, async () => {
     const statusJson = await AsyncStorage.getItem(
       `${HEALTH_STATUS_STORAGE_KEY}:${state.currentUserId}`,
     );
-    const schedule = healthSyncSchedule(state.settings.syncMode);
+    const schedule = healthSyncSchedule(
+      state.settings.syncMode,
+      state.settings.healthSync.backgroundIntervalHours,
+    );
     if (
       !state.settings.healthSync.enabled ||
       !state.settings.healthSync.backgroundAccess ||
@@ -207,7 +211,10 @@ TaskManager.defineTask(TASK_NAME, async () => {
     if (
       Number.isFinite(lastSuccessfulSync) &&
       Date.now() - lastSuccessfulSync <
-        healthSyncMinimumIntervalMs(schedule.mode)
+        healthSyncMinimumIntervalMs(
+          schedule.mode,
+          state.settings.healthSync.backgroundIntervalHours,
+        )
     )
       return BackgroundTask.BackgroundTaskResult.Success;
     const dataTypes = enabledHealthDataTypes(state.settings.healthSync.dataTypes);
@@ -235,7 +242,10 @@ TaskManager.defineTask(TASK_NAME, async () => {
       // global active-account pointer.
       if (activeState?.currentUserId !== state.currentUserId) return null;
       const latest = activeState;
-      const latestSchedule = healthSyncSchedule(latest.settings.syncMode);
+      const latestSchedule = healthSyncSchedule(
+        latest.settings.syncMode,
+        latest.settings.healthSync.backgroundIntervalHours,
+      );
       if (
         !latest.settings.healthSync.enabled ||
         !latest.settings.healthSync.backgroundAccess ||
@@ -295,26 +305,33 @@ TaskManager.defineTask(TASK_NAME, async () => {
     // session is available, publish only the two-day compact leaderboard
     // overlap as a best-effort follow-up. Network/auth failure must never roll
     // back the native import or make WorkManager repeat the Health Connect read.
-    if (supabase && isCloudGroupId(nextState.group.id)) {
+    if (supabase) {
       try {
         const { data } = await supabase.auth.getSession();
         if (data.session?.user.id === nextState.currentUserId) {
-          const changedDates = [
-            ...new Set(
-              revisionSafeEntriesWithFloors.map((entry) => entry.localDate),
-            ),
-          ].sort((left, right) => right.localeCompare(left));
-          const published = await pushCloudRecentActivity(
-            nextState,
-            2,
-            undefined,
-            changedDates,
-          );
-          if (published.updatedAt)
-            await AsyncStorage.setItem(
-              `${CLOUD_SYNC_CHECKPOINT_KEY_PREFIX}${nextState.currentUserId}`,
-              published.updatedAt,
+          if (isCloudGroupId(nextState.group.id)) {
+            const changedDates = [
+              ...new Set(
+                revisionSafeEntriesWithFloors.map((entry) => entry.localDate),
+              ),
+            ].sort((left, right) => right.localeCompare(left));
+            const published = await pushCloudRecentActivity(
+              nextState,
+              2,
+              undefined,
+              changedDates,
             );
+            if (published.updatedAt)
+              await AsyncStorage.setItem(
+                `${CLOUD_SYNC_CHECKPOINT_KEY_PREFIX}${nextState.currentUserId}`,
+                published.updatedAt,
+              );
+          }
+          // Public participants may not share the creator's group. Refresh
+          // their explicitly consented challenge aggregates in the same
+          // background pass so settlement never mistakes a stale score for a
+          // completed post-deadline sync.
+          await publishJoinedPublicChallengeTotals(nextState);
         }
       } catch {
         // The foreground durable outbox publishes this state on next resume.
@@ -351,7 +368,10 @@ export async function configureBackgroundHealthSync(
   mode: SyncMode,
 ): Promise<BackgroundHealthSyncRegistration> {
   const registered = await TaskManager.isTaskRegisteredAsync(TASK_NAME);
-  const schedule = healthSyncSchedule(mode);
+  const schedule = healthSyncSchedule(
+    mode,
+    settings.backgroundIntervalHours,
+  );
   // Android Health Connect background reads require the separate background
   // grant. If it is unavailable, foreground/resume sync remains active and we
   // avoid registering an OS task that can only fail and waste battery.

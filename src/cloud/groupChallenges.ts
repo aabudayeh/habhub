@@ -12,6 +12,8 @@ type GroupChallengeRow = {
   creator_id: string;
   metric_slug: string;
   title: string | null;
+  audience?: "group" | "public";
+  participant_limit?: number | null;
   target_value: number | string | null;
   local_date: string;
   end_date: string;
@@ -33,6 +35,8 @@ export type SaveGroupChallengeInput = {
   groupId: string;
   metricId: string;
   title?: string;
+  audience?: "group" | "public";
+  participantLimit?: number;
   target?: number;
   localDate: string;
   endDate?: string;
@@ -60,6 +64,8 @@ function fromRow(row: GroupChallengeRow): GroupChallenge {
     creatorId: row.creator_id,
     metricId: row.metric_slug,
     title: row.title?.trim() || undefined,
+    audience: row.audience ?? "group",
+    participantLimit: row.participant_limit ?? undefined,
     target:
       row.target_value === null || row.target_value === undefined
         ? undefined
@@ -89,13 +95,31 @@ export async function loadGroupChallenges(groupId: string) {
   const { data, error } = await supabase
     .from("group_challenges")
     .select(
-      "id, group_id, creator_id, metric_slug, title, target_value, local_date, end_date, participant_ids, accepted_participant_ids, declined_participant_ids, recurrence, created_at, updated_at",
+      "id, group_id, creator_id, metric_slug, title, audience, participant_limit, target_value, local_date, end_date, participant_ids, accepted_participant_ids, declined_participant_ids, recurrence, created_at, updated_at",
     )
     .eq("group_id", groupId)
     .is("deleted_at", null)
     .order("local_date", { ascending: false })
     .order("created_at", { ascending: false })
     .limit(200);
+  if (error) throw challengeCloudError(error);
+  return (data as GroupChallengeRow[] | null)?.map(fromRow) ?? [];
+}
+
+/** Participant-scoped catalogue across every group the account belongs to.
+ * RLS still requires an explicit invitation/join and active membership for
+ * non-public rows; this only removes the active-group client filter. */
+export async function loadMyChallenges() {
+  if (!supabase) return [];
+  const { data, error } = await supabase
+    .from("group_challenges")
+    .select(
+      "id, group_id, creator_id, metric_slug, title, audience, participant_limit, target_value, local_date, end_date, participant_ids, accepted_participant_ids, declined_participant_ids, recurrence, created_at, updated_at",
+    )
+    .is("deleted_at", null)
+    .order("local_date", { ascending: false })
+    .order("created_at", { ascending: false })
+    .limit(500);
   if (error) throw challengeCloudError(error);
   return (data as GroupChallengeRow[] | null)?.map(fromRow) ?? [];
 }
@@ -114,9 +138,21 @@ export async function loadActiveGroupChallenges(groupId: string) {
   return (data as GroupChallengeRow[] | null)?.map(fromRow) ?? [];
 }
 
+/** Bounded public catalogue. It deliberately returns counts/caller state, not
+ * another challenge's UUID roster, until the viewer explicitly joins. */
+export async function loadPublicChallenges() {
+  if (!supabase) return [];
+  const { data, error } = await supabase.rpc("list_public_challenges");
+  if (error) throw challengeCloudError(error);
+  return (data as GroupChallengeRow[] | null)?.map(fromRow) ?? [];
+}
+
 export async function saveGroupChallenge(input: SaveGroupChallengeInput) {
   if (!supabase) throw new Error("Sign in to create a shared challenge.");
-  const { data, error } = await supabase.rpc("save_group_challenge", {
+  const operation = input.audience === "public"
+    ? "save_public_challenge"
+    : "save_group_challenge";
+  const parameters = {
     p_challenge_id: input.id ?? null,
     p_group_id: input.groupId,
     p_metric_slug: input.metricId,
@@ -126,7 +162,11 @@ export async function saveGroupChallenge(input: SaveGroupChallengeInput) {
     p_end_date: input.endDate ?? input.localDate,
     p_participant_ids: input.participantIds,
     p_recurrence: input.recurrence ?? null,
-  });
+    ...(operation === "save_public_challenge"
+      ? { p_participant_limit: input.participantLimit ?? null }
+      : {}),
+  };
+  const { data, error } = await supabase.rpc(operation, parameters);
   if (error) throw challengeCloudError(error);
   return fromRow(data as GroupChallengeRow);
 }

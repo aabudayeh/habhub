@@ -265,6 +265,9 @@ Deno.serve(async (request) => {
           canonical.eventType === "challenge_accepted"
             ? "accepted"
             : "started",
+          canonical.eventType === "challenge_accepted"
+            ? canonical.data.acceptingName
+            : undefined,
         );
         canonical.titles = copy.titles;
         canonical.bodies = copy.bodies;
@@ -1108,6 +1111,16 @@ async function legacyCommittedCanonicalEvent(
     : acceptedIds.includes(dispatcherId) &&
       Date.now() - new Date(challenge.updated_at).getTime() <= 30 * 60 * 1000;
   if (!valid) return { recognized: true };
+  let acceptingName: string | undefined;
+  if (accepted) {
+    const { data: profile, error: profileError } = await admin
+      .from("profiles")
+      .select("display_name")
+      .eq("id", dispatcherId)
+      .maybeSingle();
+    if (profileError) throw profileError;
+    acceptingName = profile?.display_name?.trim() || undefined;
+  }
   return {
     recognized: true,
     row: await storeCanonicalLegacyEvent(admin, {
@@ -1122,12 +1135,15 @@ async function legacyCommittedCanonicalEvent(
       title: started ? "Challenge started" : "Challenge accepted",
       body: started
         ? "Open HabHub to accept or decline."
-        : "A friend accepted your challenge.",
+        : acceptingName
+          ? `${acceptingName} accepted your challenge.`
+          : "A friend accepted your challenge.",
       data: {
         route: "/group",
         groupId,
         challengeId,
         challengeEvent: started ? "started" : "accepted",
+        ...(acceptingName ? { acceptingName } : {}),
       },
       expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
     }),
@@ -1839,8 +1855,12 @@ function preferenceAllowed(
   return !Array.isArray(ids) || ids.includes(event.metricId);
 }
 
-function challengePushCopy(event: "started" | "accepted") {
-  if (event === "accepted")
+function challengePushCopy(
+  event: "started" | "accepted",
+  acceptingName?: string,
+) {
+  if (event === "accepted") {
+    const name = acceptingName?.trim();
     return {
       titles: {
         en: "Challenge accepted",
@@ -1850,13 +1870,14 @@ function challengePushCopy(event: "started" | "accepted") {
         fr: "Défi accepté",
       },
       bodies: {
-        en: "A friend accepted your challenge.",
-        es: "Un amigo aceptó tu reto.",
-        sv: "En vän accepterade din utmaning.",
-        de: "Ein Freund hat deine Challenge angenommen.",
-        fr: "Un ami a accepté votre défi.",
+        en: name ? `${name} accepted your challenge.` : "A friend accepted your challenge.",
+        es: name ? `${name} aceptó tu reto.` : "Un amigo aceptó tu reto.",
+        sv: name ? `${name} accepterade din utmaning.` : "En vän accepterade din utmaning.",
+        de: name ? `${name} hat deine Challenge angenommen.` : "Ein Freund hat deine Challenge angenommen.",
+        fr: name ? `${name} a accepté votre défi.` : "Un ami a accepté votre défi.",
       },
     };
+  }
   return {
     titles: {
       en: "Challenge started",

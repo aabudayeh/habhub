@@ -92,6 +92,11 @@ assert.match(
   /Keep the native toolbar mounted through the press that blurred the DOM/,
 );
 assert.match(editor, /<NoteDrawingCanvas/);
+assert.match(
+  editor,
+  /refreshEnabled=\{!composerFocused && !drawingMode\}/,
+  "Drawing or editing a note must not become the screen's pull-to-sync gesture",
+);
 assert.match(editor, /drawing: normalizeJournalDrawing\(drawing\)/);
 assert.match(editor, /journalDrawingFingerprint\(drawing\)/);
 assert.match(types, /drawing\?: JournalDrawing/);

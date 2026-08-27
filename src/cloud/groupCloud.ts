@@ -1509,7 +1509,7 @@ async function groupMembers(groupIds: string[], signal?: AbortSignal) {
   let currentMembershipQuery = client
     .from("group_members")
     .select(
-      "group_id, user_id, role, status, last_seen_at, last_data_synced_at",
+      "group_id, user_id, role, status, last_seen_at, last_data_synced_at, joined_at",
     )
     .in("group_id", groupIds);
   if (signal)
@@ -1523,6 +1523,7 @@ async function groupMembers(groupIds: string[], signal?: AbortSignal) {
     status: string;
     last_seen_at?: string | null;
     last_data_synced_at?: string | null;
+    joined_at?: string | null;
   }[];
   if (!currentMembership.error) {
     membership = (currentMembership.data ?? []) as typeof membership;
@@ -1532,7 +1533,7 @@ async function groupMembers(groupIds: string[], signal?: AbortSignal) {
     // because the new freshness column is not visible in the schema cache yet.
     let compatibleQuery = client
       .from("group_members")
-      .select("group_id, user_id, role, status, last_seen_at")
+      .select("group_id, user_id, role, status, last_seen_at, joined_at")
       .in("group_id", groupIds);
     if (signal) compatibleQuery = compatibleQuery.abortSignal(signal);
     const compatible = await compatibleQuery;
@@ -1547,7 +1548,7 @@ async function groupMembers(groupIds: string[], signal?: AbortSignal) {
     } else {
       let legacyQuery = client
         .from("group_members")
-        .select("group_id, user_id, role")
+        .select("group_id, user_id, role, joined_at")
         .in("group_id", groupIds);
       if (signal) legacyQuery = legacyQuery.abortSignal(signal);
       const legacy = await legacyQuery;
@@ -1563,7 +1564,7 @@ async function groupMembers(groupIds: string[], signal?: AbortSignal) {
   } else if (/status|last_seen_at|column/i.test(currentMembership.error.message)) {
     let legacyQuery = client
       .from("group_members")
-      .select("group_id, user_id, role")
+      .select("group_id, user_id, role, joined_at")
       .in("group_id", groupIds);
     if (signal) legacyQuery = legacyQuery.abortSignal(signal);
     const legacy = await legacyQuery;
@@ -1583,7 +1584,7 @@ async function groupMembers(groupIds: string[], signal?: AbortSignal) {
     ? await (async () => {
         let profileQuery = client
         .from("profiles")
-        .select("id, display_name, avatar_path, account_revision")
+        .select("id, display_name, avatar_path, account_revision, created_at")
           .in("id", userIds);
         if (signal) profileQuery = profileQuery.abortSignal(signal);
         const profileResult = await profileQuery;
@@ -1609,6 +1610,8 @@ async function groupMembers(groupIds: string[], signal?: AbortSignal) {
       initials: initials(name),
       color: memberColor(membershipRow.user_id),
       role: membershipRow.role,
+      joinedGroupAt: membershipRow.joined_at ?? undefined,
+      joinedAppAt: profile?.created_at ?? undefined,
       lastSeenAt: membershipRow.last_seen_at ?? undefined,
       lastDataSyncedAt:
         membershipRow.last_data_synced_at ?? undefined,

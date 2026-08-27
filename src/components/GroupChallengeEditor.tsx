@@ -185,6 +185,9 @@ export function GroupChallengeEditor({
   const [target, setTarget] = useState("");
   const [targetEnabled, setTargetEnabled] = useState(true);
   const [title, setTitle] = useState("");
+  const [audience, setAudience] = useState<"group" | "public">("group");
+  const [limitEnabled, setLimitEnabled] = useState(false);
+  const [participantLimit, setParticipantLimit] = useState("");
   const [localDate, setLocalDate] = useState(initialDate ?? dateKey());
   const [endDate, setEndDate] = useState(initialDate ?? dateKey());
   const [durationPreset, setDurationPreset] =
@@ -222,6 +225,13 @@ export function GroupChallengeEditor({
     );
     setTargetEnabled(!challenge || challenge.target !== undefined);
     setTitle(challenge?.title ?? "");
+    setAudience(challenge?.audience ?? "group");
+    setLimitEnabled(challenge?.participantLimit !== undefined);
+    setParticipantLimit(
+      challenge?.participantLimit !== undefined
+        ? String(challenge.participantLimit)
+        : "",
+    );
     const nextLocalDate =
       challenge?.recurrence?.anchorDate ??
       challenge?.localDate ??
@@ -331,9 +341,13 @@ export function GroupChallengeEditor({
       );
       return;
     }
-    const participantIds = [
-      ...new Set([...participants, currentUserId, challengeCreatorId]),
-    ];
+    const participantIds = audience === "public"
+      ? [...new Set([currentUserId, challengeCreatorId])]
+      : [...new Set([...participants, currentUserId, challengeCreatorId])];
+    const numericParticipantLimit =
+      audience === "public" && limitEnabled
+        ? Number(participantLimit)
+        : undefined;
     const repeatingScheduleChanged = Boolean(
       recurrence &&
         recurringScheduleKey(recurrence) !==
@@ -347,6 +361,8 @@ export function GroupChallengeEditor({
       metric: selectedMetric,
       participantIds,
       creatorId: challengeCreatorId,
+      audience,
+      participantLimit: numericParticipantLimit,
       recurrence,
       // Active multi-day periods may retain a past start. Repeating series
       // cannot be moved into history because that would create retroactive
@@ -365,6 +381,8 @@ export function GroupChallengeEditor({
         groupId: group.id,
         metricId,
         title,
+        audience,
+        participantLimit: numericParticipantLimit,
         target: numericTarget,
         localDate,
         endDate: resolvedEndDate,
@@ -682,7 +700,66 @@ export function GroupChallengeEditor({
               style={[styles.titleInput, { color: colors.ink, borderColor: colors.border, backgroundColor: colors.canvas }]}
             />
 
-            <View style={styles.peopleHeader}>
+            <Text style={[styles.label, { color: colors.ink }]}>Who can join</Text>
+            <View style={styles.ruleChoices}>
+              {([
+                { id: "group", label: "Your group", detail: "Invite group members" },
+                { id: "public", label: "Public", detail: "Anyone on HabHub can join" },
+              ] as const).map((option) => {
+                const selected = audience === option.id;
+                return (
+                  <Pressable
+                    key={option.id}
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected, disabled: Boolean(challenge) }}
+                    disabled={Boolean(challenge)}
+                    onPress={() => setAudience(option.id)}
+                    style={[
+                      styles.ruleChoice,
+                      {
+                        borderColor: selected ? accent : colors.border,
+                        backgroundColor: selected ? colors.primarySoft : colors.canvas,
+                      },
+                    ]}
+                  >
+                    <Ionicons name={selected ? "radio-button-on" : "radio-button-off"} size={16} color={selected ? accent : colors.faint} />
+                    <View style={styles.ruleCopy}>
+                      <Text style={[styles.ruleTitle, { color: colors.ink }]}>{option.label}</Text>
+                      <Text style={[styles.ruleDetail, { color: colors.muted }]}>{option.detail}</Text>
+                    </View>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            {audience === "public" ? (
+              <View style={[styles.publicLimit, { borderColor: colors.border, backgroundColor: colors.canvas }]}>
+                <Pressable
+                  accessibilityRole="checkbox"
+                  accessibilityState={{ checked: limitEnabled }}
+                  onPress={() => setLimitEnabled((current) => !current)}
+                  style={styles.publicLimitToggle}
+                >
+                  <Ionicons name={limitEnabled ? "checkbox" : "square-outline"} size={18} color={limitEnabled ? accent : colors.faint} />
+                  <View style={styles.ruleCopy}>
+                    <Text style={[styles.ruleTitle, { color: colors.ink }]}>Limit participants</Text>
+                    <Text style={[styles.ruleDetail, { color: colors.muted }]}>Off means no creator-defined limit.</Text>
+                  </View>
+                </Pressable>
+                {limitEnabled ? (
+                  <TextInput
+                    value={participantLimit}
+                    onChangeText={setParticipantLimit}
+                    keyboardType="number-pad"
+                    maxLength={4}
+                    placeholder="100"
+                    style={[styles.publicLimitInput, { color: colors.ink, borderColor: colors.border }]}
+                  />
+                ) : null}
+              </View>
+            ) : null}
+
+            {audience === "group" ? <><View style={styles.peopleHeader}>
               <View>
                 <Text style={[styles.label, { color: colors.ink }]}>People</Text>
                 <Text style={[styles.peopleHint, { color: colors.muted }]}>
@@ -745,6 +822,9 @@ export function GroupChallengeEditor({
                 );
               })}
             </View>
+            </> : (
+              <Text style={[styles.peopleHint, { color: colors.muted }]}>Joining is instant and shares only this challenge tracker for its scoring dates.</Text>
+            )}
 
             {error ? (
               <View style={[styles.error, { backgroundColor: `${palette.red}14` }]}>
@@ -813,6 +893,9 @@ const styles = StyleSheet.create({
   repeatUntilLabel: { fontSize: 8, fontWeight: "800" },
   repeatUntilInput: { width: 88, padding: 0, fontSize: 9, fontWeight: "900" },
   titleInput: { height: 42, borderRadius: 13, borderWidth: 1, paddingHorizontal: 11, fontSize: 11, marginBottom: 14 },
+  publicLimit: { borderWidth: 1, borderRadius: 13, padding: 10, marginBottom: 13, gap: 8 },
+  publicLimitToggle: { minHeight: 34, flexDirection: "row", alignItems: "center", gap: 8 },
+  publicLimitInput: { height: 36, borderWidth: 1, borderRadius: 11, paddingHorizontal: 10, fontSize: 11, fontWeight: "800" },
   peopleHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 7 },
   peopleHint: { fontSize: 8, lineHeight: 11 },
   allButton: { minHeight: 31, borderRadius: 11, paddingHorizontal: 10, alignItems: "center", justifyContent: "center" },

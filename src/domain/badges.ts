@@ -58,6 +58,98 @@ export type EarnedBadge = {
   progress?: { current: number; target: number };
 };
 
+export type BadgeLevelSummary = {
+  xp: number;
+  level: number;
+  levelTitle: string;
+  levelProgress: number;
+  levelStartXp: number;
+  nextLevelXp: number;
+  earned: number;
+  active: number;
+  recurring: number;
+  nextBadge?: EarnedBadge;
+};
+
+const LEVEL_TITLES = [
+  "Starting out",
+  "Building rhythm",
+  "Finding momentum",
+  "Goal keeper",
+  "Consistency maker",
+  "Habit builder",
+  "Momentum leader",
+  "Goal specialist",
+  "HabHub veteran",
+] as const;
+
+/**
+ * A stable, easy-to-explain motivation score derived from badge counters.
+ * It deliberately ignores live leaderboard positions so XP never falls when
+ * another member overtakes the user. Canonical counters are counted once;
+ * their visual milestone copies are excluded to avoid double rewards.
+ */
+export function badgeLevelSummary(
+  badges: readonly EarnedBadge[],
+  memberId: string,
+): BadgeLevelSummary {
+  const owned = badges.filter(
+    (badge) => badge.memberId === memberId && badge.period === "achievement",
+  );
+  const canonical = owned.filter((badge) => !badge.id.startsWith("earned:"));
+  const countFor = (prefix: string) =>
+    canonical
+      .filter((badge) => badge.id.startsWith(prefix))
+      .reduce((sum, badge) => sum + Math.max(0, badge.earnedCount ?? 0), 0);
+  const personalRecords = canonical.filter((badge) =>
+    badge.id.startsWith("personal-best:"),
+  ).length;
+  const xp = Math.round(
+    countFor("goal-count:") * 10 +
+      countFor("perfect-days:") * 30 +
+      countFor("check-ins:") * 5 +
+      countFor("streak-progress:") * 3 +
+      countFor("challenge-wins:") * 100 +
+      personalRecords * 75,
+  );
+  // Quadratic levels keep early rewards close together while leaving useful
+  // headroom for long-running accounts without an arbitrary maximum level.
+  const level = Math.max(1, Math.floor(Math.sqrt(xp / 250)) + 1);
+  const levelStartXp = Math.pow(level - 1, 2) * 250;
+  const nextLevelXp = Math.pow(level, 2) * 250;
+  const levelProgress = Math.min(
+    1,
+    Math.max(0, (xp - levelStartXp) / Math.max(1, nextLevelXp - levelStartXp)),
+  );
+  const nextBadge = canonical
+    .filter((badge) => badge.progress && badge.progress.target > 0)
+    .sort((left, right) => {
+      const leftRemaining = left.progress!
+        ? (left.progress!.target - left.progress!.current) /
+          left.progress!.target
+        : 1;
+      const rightRemaining = right.progress!
+        ? (right.progress!.target - right.progress!.current) /
+          right.progress!.target
+        : 1;
+      return leftRemaining - rightRemaining;
+    })[0];
+  return {
+    xp,
+    level,
+    levelTitle:
+      LEVEL_TITLES[Math.min(level - 1, LEVEL_TITLES.length - 1)] ??
+      "HabHub veteran",
+    levelProgress,
+    levelStartXp,
+    nextLevelXp,
+    earned: owned.filter((badge) => badge.status === "earned").length,
+    active: owned.filter((badge) => badge.status === "progress").length,
+    recurring: owned.filter((badge) => badge.status === "recurring").length,
+    nextBadge,
+  };
+}
+
 const labels: Record<BadgePeriod, string> = {
   today: "Selected day",
   yesterday: "Previous day",
@@ -708,16 +800,6 @@ export function buildBadges(
       "month",
       "Current monthly lead",
       "Highest average normalized score in the selected month.",
-    ),
-    overall(
-      "year",
-      "Year leader",
-      year,
-      "star",
-      palette.purple,
-      "year",
-      "Current yearly lead",
-      "Highest average normalized score in the selected calendar year.",
     ),
     ...metricBadges,
     ...perfectDayBadges,

@@ -515,13 +515,13 @@ const SOCIAL_STEPS = [
   }),
   step("badges", {
     id: "full.badges.showcase",
-    path: "/member/tutorial-you",
+    path: "/member-profile/tutorial-you",
     target: "badge-showcase-picker",
     title: "Choose your showcase",
     copy: "On your own profile, choose up to five earned badges below the showcase card. Other members see the selected set.",
     primaryLabel: "Next",
     required: false,
-    navigation: { before: "/member/tutorial-you" },
+    navigation: { before: "/member-profile/tutorial-you" },
   }),
   step("badges", {
     id: "full.badges.cabinet",

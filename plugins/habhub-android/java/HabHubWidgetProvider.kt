@@ -1048,14 +1048,16 @@ object HabHubWidgetRenderer {
     accent: Int,
   ) {
     val pad = if (size.compact) 5f else 11f
-    val badgeDiameter = if (size.compact) 24f else 35f
+    val stackedCompact = size.compact && size.heightDp < 48f
+    val narrowCompact = size.compact && size.widthDp < 165f
+    val badgeDiameter = if (stackedCompact) 21f else if (size.compact) 24f else 35f
     val badgeCenterX = size.widthDp - pad - badgeDiameter / 2f
-    val badgeCenterY = if (size.compact) min(19f, size.heightDp * 0.42f) else 30f
+    val badgeCenterY = if (size.compact) min(if (stackedCompact) 17f else 19f, size.heightDp * 0.42f) else 30f
     val contentWidth = max(24f, badgeCenterX - badgeDiameter / 2f - pad - 5f)
     val eyebrow = item.optString("eyebrow").ifBlank { item.optString("title", "HabHub") }
       .uppercase(Locale.getDefault())
     val dateLabel = item.optString("dateLabel")
-    val headerBaseline = if (size.compact) 8.7f else 16f
+    val headerBaseline = if (stackedCompact) 7.9f else if (size.compact) 8.7f else 16f
     val datePaint = textPaint(
       if (size.compact) 4.7f else 7.3f,
       Color.argb(225, 222, 230, 242),
@@ -1075,8 +1077,8 @@ object HabHubWidgetRenderer {
       fittedTextPaint(
         eyebrow,
         eyebrowWidth,
-        5.1f,
-        4.1f,
+        if (narrowCompact) 4.9f else 5.1f,
+        if (narrowCompact) 3.9f else 4.1f,
         Color.argb(205, 255, 255, 255),
         true,
         0.04f,
@@ -1096,7 +1098,7 @@ object HabHubWidgetRenderer {
       canvas,
       item.optString("value", "\u2014"),
       pad,
-      if (size.compact) 25.2f else 42f,
+      if (stackedCompact) 22.9f else if (size.compact) 25.2f else 42f,
       contentWidth,
       textPaint(if (size.compact) 13.2f else 24f, Color.WHITE, true),
     )
@@ -1112,7 +1114,7 @@ object HabHubWidgetRenderer {
       canvas,
       size,
       pad,
-      if (size.compact) 31.5f else 54f,
+      if (stackedCompact) 28.6f else if (size.compact) 31.5f else 54f,
       goalSummary,
       todoSummary,
     )
@@ -1126,9 +1128,11 @@ object HabHubWidgetRenderer {
 
     val barLeft = pad
     val barRight = size.widthDp - pad
-    val barHeight = if (size.compact) 3.2f else 5.2f
+    val barHeight = if (stackedCompact) 2.4f else if (size.compact) 3.2f else 5.2f
     val goals = item.optJSONArray("goals") ?: JSONArray()
-    val barTop = if (size.compact) {
+    val barTop = if (stackedCompact) {
+      size.heightDp - 3.7f
+    } else if (size.compact) {
       size.heightDp - 5.5f
     } else if (goals.length() > 0) {
       61f
@@ -1147,8 +1151,8 @@ object HabHubWidgetRenderer {
         canvas,
         size,
         goals,
-        max(34f, barTop - 10.5f),
-        barTop - 1.5f,
+        if (stackedCompact) max(29.5f, barTop - 7.5f) else max(34f, barTop - 10.5f),
+        barTop - if (stackedCompact) 0.5f else 1.5f,
         accent,
       )
     } else if (!size.compact) {

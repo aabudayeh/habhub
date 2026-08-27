@@ -17,7 +17,8 @@ import {
 import { AlertCategory, buildAlerts } from "@/src/domain/alerts";
 import { buildBadges } from "@/src/domain/badges";
 import { friendlyDate } from "@/src/domain/date";
-import { useGroupNotificationEvents } from "@/src/cloud/useGroupNotificationEvents";
+import { isCloudGroupId } from "@/src/cloud/groupCloud";
+import { useAccountNotificationEvents } from "@/src/cloud/useAccountNotificationEvents";
 import { useApp } from "@/src/state/AppProvider";
 import { useAppColors, useGroupAccent } from "@/src/theme";
 
@@ -33,25 +34,35 @@ export default function Alerts() {
   const [filter, setFilter] = useState<Filter>("all");
   const initializedFeedKey = useRef<string | undefined>(undefined);
   const alertScope = scope === "group" ? "group" : "personal";
-  const feedKey = `${alertScope}:${state.group.id}`;
+  const hasGroup = isCloudGroupId(state.group.id);
+  const feedKey = `${alertScope}:${state.currentUserId}:${state.group.id}`;
+  const accountFeed = useAccountNotificationEvents();
   const {
-    events: groupFeedEvents,
+    events: accountFeedEvents,
     loading: groupFeedLoading,
     loaded: groupFeedLoaded,
-    loadedGroupId: groupFeedLoadedGroupId,
     markRead: markGroupFeedRead,
-  } = useGroupNotificationEvents(
-    state.group.id,
-    state.settings.notifications.groupPreferencesByGroup?.[state.group.id],
+  } = accountFeed;
+  const groupFeedEvents = useMemo(
+    () =>
+      alertScope === "group"
+        ? accountFeedEvents.filter((event) => event.groupId === state.group.id)
+        : accountFeedEvents,
+    [accountFeedEvents, alertScope, state.group.id],
   );
   const allAlerts = useMemo(
     () =>
-      buildAlerts(state, groupFeedEvents).filter(
-        (alert) => alert.scope === alertScope,
+      buildAlerts(state, groupFeedEvents).filter((alert) =>
+        alertScope === "group"
+          ? alert.scope === "group"
+          : alert.scope === "personal" ||
+            alert.category === "challenge" ||
+            hasGroup,
       ),
     [
       alertScope,
       groupFeedEvents,
+      hasGroup,
       state,
     ],
   );
@@ -76,10 +87,8 @@ export default function Alerts() {
   useEffect(() => {
     if (
       initializedFeedKey.current === feedKey ||
-      (alertScope === "group" &&
-        (!groupFeedLoaded ||
-          groupFeedLoading ||
-          groupFeedLoadedGroupId !== state.group.id))
+      !groupFeedLoaded ||
+      groupFeedLoading
     )
       return;
     initializedFeedKey.current = feedKey;
@@ -90,9 +99,7 @@ export default function Alerts() {
     allAlerts,
     feedKey,
     groupFeedLoaded,
-    groupFeedLoadedGroupId,
     groupFeedLoading,
-    state.group.id,
   ]);
   const chooseFilter = (next: Filter) => {
     initializedFeedKey.current = feedKey;
@@ -105,29 +112,50 @@ export default function Alerts() {
         .map((event) => event.id),
     [groupFeedEvents],
   );
+  const visibleUnreadEventIds = useMemo(() => {
+    if (filter === "all") return unreadEventIds;
+    if (filter === "challenge")
+      return groupFeedEvents
+        .filter((event) => !event.readAt && event.kind !== "social_reaction")
+        .map((event) => event.id);
+    if (filter === "lead")
+      return groupFeedEvents
+        .filter((event) => !event.readAt && event.kind === "social_reaction")
+        .map((event) => event.id);
+    return [];
+  }, [filter, groupFeedEvents, unreadEventIds]);
   useEffect(() => {
-    if (
-      alertScope !== "group" ||
-      (filter !== "all" && filter !== "challenge") ||
-      unreadEventIds.length === 0
-    )
-      return;
-    // Viewing All or Challenges is the read boundary for challenge events.
-    // Other tabs keep their orange category dot until the user visits them.
+    if (visibleUnreadEventIds.length === 0) return;
+    // Viewing All or a matching category is the durable read boundary.
     const timer = setTimeout(() => {
-      void markGroupFeedRead(unreadEventIds).catch(() => undefined);
+      void markGroupFeedRead(visibleUnreadEventIds).catch(() => undefined);
     }, 600);
     return () => clearTimeout(timer);
-  }, [alertScope, filter, markGroupFeedRead, unreadEventIds]);
+  }, [markGroupFeedRead, visibleUnreadEventIds]);
   const badges = useMemo(
     () =>
       buildBadges(state)
         .filter((badge) =>
-          alertScope === "personal"
+          (alertScope === "personal"
             ? !badge.memberId || badge.memberId === state.currentUserId
-            : Boolean(badge.memberId),
+            : Boolean(badge.memberId)) &&
+          (badge.status === "earned" || badge.status === "progress"),
         )
-        .slice(0, 20),
+        .sort((left, right) => {
+          if (left.status !== right.status)
+            return left.status === "earned" ? -1 : 1;
+          if (left.status === "progress") {
+            const leftProgress = left.progress
+              ? left.progress.current / Math.max(1, left.progress.target)
+              : 0;
+            const rightProgress = right.progress
+              ? right.progress.current / Math.max(1, right.progress.target)
+              : 0;
+            return rightProgress - leftProgress;
+          }
+          return right.anchorDate.localeCompare(left.anchorDate);
+        })
+        .slice(0, 12),
     [alertScope, state],
   );
   const showBadges = filter === "badges";
@@ -193,23 +221,33 @@ export default function Alerts() {
           selected={filter === "all"}
           onPress={() => chooseFilter("all")}
         />
-        <View style={styles.filterChip}>
+        {alertScope === "personal" ? (
+          <View style={styles.filterChip}>
+            <Chip
+              label="Today"
+              selected={filter === "today"}
+              onPress={() => chooseFilter("today")}
+            />
+            {unreadCategories.has("today") ? <View style={styles.filterUnreadDot} /> : null}
+          </View>
+        ) : null}
+        {hasGroup ? <View style={styles.filterChip}>
           <Chip
             label="Leaderboard"
             selected={filter === "lead"}
             onPress={() => chooseFilter("lead")}
           />
           {unreadCategories.has("lead") ? <View style={styles.filterUnreadDot} /> : null}
-        </View>
-        <View style={styles.filterChip}>
+        </View> : null}
+        {hasGroup ? <View style={styles.filterChip}>
           <Chip
             label="Messages"
             selected={filter === "message"}
             onPress={() => chooseFilter("message")}
           />
           {unreadCategories.has("message") ? <View style={styles.filterUnreadDot} /> : null}
-        </View>
-        <View style={styles.filterChip}>
+        </View> : null}
+        {hasGroup ? <View style={styles.filterChip}>
           <Chip
             label="Challenges"
             translate={false}
@@ -217,7 +255,7 @@ export default function Alerts() {
             onPress={() => chooseFilter("challenge")}
           />
           {unreadCategories.has("challenge") ? <View style={styles.filterUnreadDot} /> : null}
-        </View>
+        </View> : null}
         <Chip
           label="Badge cabinet"
           icon="ribbon-outline"
@@ -242,7 +280,7 @@ export default function Alerts() {
                 key={badge.id}
                 onPress={() =>
                   badge.memberId
-                    ? router.push(`/member/${badge.memberId}` as never)
+                    ? router.push(`/member-profile/${badge.memberId}` as never)
                     : undefined
                 }
                 style={[
@@ -299,12 +337,16 @@ export default function Alerts() {
                   key={alert.id}
                   onPress={() => {
                     if (alert.category === "message") {
-                      router.push("/chat" as never);
+                      router.push(
+                        alert.memberId
+                          ? ({ pathname: "/chat", params: { recipient: alert.memberId } } as never)
+                          : ("/chat" as never),
+                      );
                       return;
                     }
                     if (alert.category === "challenge") {
                       router.navigate({
-                        pathname: "/group",
+                        pathname: "/challenges",
                         params: {
                           ...(alert.challengeId
                             ? { challengeId: alert.challengeId }
@@ -323,8 +365,51 @@ export default function Alerts() {
                       } as never);
                       return;
                     }
+                    if (alert.todoId) {
+                      router.navigate({
+                        pathname: "/metric-detail",
+                        params: {
+                          metric: "todos",
+                          date: alert.localDate,
+                          focusTodo: alert.todoId,
+                          todoFocusAt: String(Date.now()),
+                        },
+                      } as never);
+                      return;
+                    }
+                    if (alert.metricId && alert.scope === "personal") {
+                      router.navigate({
+                        pathname: "/metric-detail",
+                        params: { metric: alert.metricId, date: alert.localDate },
+                      } as never);
+                      return;
+                    }
+                    if (alert.targetType === "photo_update" && alert.entryId) {
+                      router.navigate({
+                        pathname: "/recap",
+                        params: {
+                          scope: "group",
+                          highlight: `photo:${alert.entryId}`,
+                        },
+                      } as never);
+                      return;
+                    }
+                    if (alert.metricId || alert.entryId) {
+                      router.navigate({
+                        pathname: "/leaderboard-detail",
+                        params: {
+                          period: "custom",
+                          anchor: alert.localDate,
+                          ...(alert.metricId ? { metrics: alert.metricId } : {}),
+                          memberId: alert.memberId,
+                          entryId: alert.entryId,
+                          logFocusAt: String(Date.now()),
+                        },
+                      } as never);
+                      return;
+                    }
                     if (alert.memberId)
-                      router.push(`/member/${alert.memberId}` as never);
+                      router.push(`/member-profile/${alert.memberId}` as never);
                   }}
                 >
                   <Card

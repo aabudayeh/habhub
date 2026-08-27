@@ -1,15 +1,23 @@
 import { Ionicons } from "@expo/vector-icons";
 
-import { dateKey, dateKeyWithOffset } from "@/src/domain/date";
+import { dateKey, dateKeyWithOffset, dateRangeEnding } from "@/src/domain/date";
 import { leaderboardRows } from "@/src/domain/leaderboard";
 import { memberDisplayName } from "@/src/domain/members";
+import { buildGroupRecapFeed } from "@/src/domain/recaps";
+import { todoAppearsOnDate, todoResolvedOnDate } from "@/src/domain/schedule";
+import { todayHeroSummary } from "@/src/domain/todayHero";
 import { palette } from "@/src/theme";
 import {
   AppState,
   GroupNotificationEvent,
 } from "@/src/types";
 
-export type AlertCategory = "lead" | "message" | "achievement" | "challenge";
+export type AlertCategory =
+  | "today"
+  | "lead"
+  | "message"
+  | "achievement"
+  | "challenge";
 export type PaceAlert = {
   id: string;
   category: AlertCategory;
@@ -26,6 +34,11 @@ export type PaceAlert = {
   challengeId?: string;
   challengeOccurrenceDate?: string;
   groupId?: string;
+  metricId?: string;
+  entryId?: string;
+  localDate?: string;
+  todoId?: string;
+  targetType?: "metric_entry" | "photo_update";
 };
 export function buildAlerts(
   state: AppState,
@@ -88,6 +101,106 @@ export function buildAlerts(
       },
     ];
   });
+  const personalProgress = state.settings.notifications.reminders
+    ? todayHeroSummary(state, state.currentUserId, today).goalProgress
+        .filter(
+          (goal) =>
+            !goal.unavailable &&
+            goal.progress > 0 &&
+            (allowedMetricIds.length === 0 || allowedMetricIds.includes(goal.id)),
+        )
+        .sort((left, right) => right.progress - left.progress)
+        .slice(0, 8)
+        .map((goal): PaceAlert => {
+          const percentage = Math.round(goal.progress * 100);
+          return {
+            id: `today-progress-${goal.id}-${today}-${percentage}`,
+            category: "today",
+            icon: goal.metric.icon as PaceAlert["icon"],
+            color: goal.metric.color,
+            title:
+              percentage >= 100
+                ? `${goal.metric.name} goal reached`
+                : `${goal.metric.name} is ${percentage}% complete`,
+            detail:
+              percentage >= 100
+                ? "Nice work. Open the tracker to see today's progress."
+                : `${Math.max(0, 100 - percentage)}% remains for today's goal.`,
+            createdAt: `${today}T12:00:00.000`,
+            scope: "personal",
+            metricId: goal.id,
+            localDate: today,
+          };
+        })
+    : [];
+  const personalTodos = state.settings.notifications.todoReminders !== false
+    ? (state.todos ?? [])
+        .filter(
+          (todo) =>
+            !todo.parentId &&
+            todoAppearsOnDate(todo, today) &&
+            !todoResolvedOnDate(todo, today),
+        )
+        .sort((left, right) =>
+          (left.dueAt ?? left.scheduledStartAt ?? left.createdAt).localeCompare(
+            right.dueAt ?? right.scheduledStartAt ?? right.createdAt,
+          ),
+        )
+        .slice(0, 6)
+        .map((todo): PaceAlert => ({
+          id: `today-todo-${todo.id}-${today}`,
+          category: "today",
+          icon: "checkbox-outline",
+          color: palette.primary,
+          title: todo.title,
+          detail: todo.dueAt?.startsWith(today)
+            ? "Due today · tap to find this to-do."
+            : "On today's to-do list.",
+          createdAt:
+            todo.dueAt?.startsWith(today) ||
+            todo.scheduledStartAt?.startsWith(today)
+              ? todo.dueAt ?? todo.scheduledStartAt!
+              : `${today}T08:00:00.000`,
+          scope: "personal",
+          todoId: todo.id,
+          localDate: today,
+        }))
+    : [];
+  const trackerUpdatesEnabled =
+    groupPreferences?.enabled !== false &&
+    (groupPreferences?.trackerUpdates ?? notifications.groupMetricActivity);
+  const groupActivity = trackerUpdatesEnabled
+    ? buildGroupRecapFeed(state, dateRangeEnding(today, 7))
+        .filter(
+          (item) =>
+            item.memberId !== state.currentUserId &&
+            Boolean(item.memberId) &&
+            Boolean(item.metricId) &&
+            ["log", "meal", "workout", "photo"].includes(item.kind) &&
+            (!Array.isArray(allowedMemberIds) ||
+              allowedMemberIds.includes(item.memberId!)) &&
+            (allowedMetricIds.length === 0 ||
+              allowedMetricIds.includes(item.metricId!)),
+        )
+        .slice(0, 24)
+        .map((item): PaceAlert => ({
+          id: `group-activity-${item.id}`,
+          category: "lead",
+          icon: item.icon as PaceAlert["icon"],
+          color: item.color,
+          title: item.title,
+          detail: [item.value, item.body].filter(Boolean).join(" · "),
+          createdAt: item.createdAt,
+          memberId: item.memberId,
+          scope: "group",
+          metricId: item.metricId,
+          entryId:
+            item.socialTarget.type === "metric_entry"
+              ? item.socialTarget.id
+              : undefined,
+          localDate: item.localDate,
+        }))
+    : [];
   const messages = state.messages
     .filter((message) => {
       const conversation = message.conversationId ?? "group";
@@ -153,10 +266,17 @@ export function buildAlerts(
     const allAccepted = event.kind === "challenge_all_accepted";
     const result = event.kind === "challenge_result";
     const reminder = event.kind === "challenge_reminder";
+    const socialReaction = event.kind === "social_reaction";
     return {
       id: `group-notification-${event.id}`,
-      category: "challenge",
-      icon: invitation
+      category: socialReaction ? "lead" : "challenge",
+      icon: socialReaction
+        ? event.reaction === "thumbs_down"
+          ? "thumbs-down-outline"
+          : event.reaction === "thumbs_up"
+            ? "thumbs-up-outline"
+            : "heart-outline"
+        : invitation
         ? "flag-outline"
         : allAccepted
           ? "checkmark-circle-outline"
@@ -165,7 +285,9 @@ export function buildAlerts(
             : reminder
               ? "flame-outline"
               : "swap-vertical-outline",
-      color: invitation
+      color: socialReaction
+        ? palette.red
+        : invitation
         ? palette.primary
         : result
           ? palette.amber
@@ -190,7 +312,7 @@ export function buildAlerts(
           : allAccepted
             ? "Everyone accepted the challenge."
             : accepted
-              ? "A friend accepted your challenge."
+              ? `${actor ? memberDisplayName(state, actor) : "A friend"} accepted your challenge.`
               : "Open the Leaderboard for the latest challenge standings."),
       createdAt: event.createdAt,
       memberId: actor?.id,
@@ -200,9 +322,17 @@ export function buildAlerts(
       challengeId: event.challengeId,
       challengeOccurrenceDate: event.occurrenceDate,
       groupId: event.groupId,
+      entryId: event.targetId,
+      localDate: event.occurrenceDate,
+      targetType: event.targetType,
     };
   });
-  return [...leads, ...messages, ...challengeEvents].sort((a, b) =>
-    b.createdAt.localeCompare(a.createdAt),
-  );
+  return [
+    ...personalProgress,
+    ...personalTodos,
+    ...leads,
+    ...groupActivity,
+    ...messages,
+    ...challengeEvents,
+  ].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }

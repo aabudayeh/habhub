@@ -995,6 +995,11 @@ assert.match(
   "Complete all must stay hidden until the workout contains at least one planned set",
 );
 assert.match(gymScreen, /setExercises\(\(current\) => completeGymWorkout\(current\)\)/);
+assert.match(
+  gymScreen,
+  /function completeAllSets\(\)[\s\S]{0,220}setOpenExerciseId\(null\)/,
+  "Complete all must collapse every completed exercise after marking its sets",
+);
 assert.match(gymScreen, /setGymExerciseCompletion\(item, completed\)/);
 assert.match(
   gymScreen,
@@ -1010,6 +1015,23 @@ assert.match(gymScreen, />\s*Template options\s*</);
 assert.match(gymScreen, /Save personal template/);
 assert.match(gymScreen, /Save personal copy/);
 assert.match(gymScreen, /Share template with group/);
+assert.match(
+  gymScreen,
+  /canManageGroup && !isPersonalSetupGroup\(state\.group\)/,
+  "Share template with group must stay hidden until the user has an active group",
+);
+for (const trackingMode of ["duration", "reps", "load_reps"]) {
+  assert.match(
+    gymScreen,
+    new RegExp(`id: "${trackingMode}"`),
+    `Custom exercise creation must expose ${trackingMode} tracking`,
+  );
+}
+assert.match(
+  gymScreen,
+  /trackingMode: customExerciseTrackingMode/,
+  "A custom exercise must retain the selected time, reps, or load/reps mode",
+);
 assert.match(
   gymScreen,
   /\{selectedPersonalPlan \? \([\s\S]{0,500}Save personal copy/,

@@ -23,6 +23,7 @@ assert.deepEqual(DEFAULT_TAB_ORDER, [
   "calendar",
   "journal",
   "performance",
+  "recapfeed",
   "chat",
 ]);
 
@@ -45,6 +46,7 @@ assert.deepEqual(
     "calendar",
     "journal",
     "performance",
+    "recapfeed",
     "chat",
   ],
   "fixed tabs must be repaired without losing the user's middle-page order",
@@ -61,6 +63,7 @@ assert.deepEqual(
     "calendar",
     "journal",
     "performance",
+    "recapfeed",
     "chat",
   ],
   "hiding Status must leave Today first and Chat last",
@@ -122,6 +125,7 @@ assert.match(display, /isFixedNavigationPage\(id\)/);
 assert.match(onboarding, /landingPage === "status" \|\| state\.settings\.showStatus !== false/);
 assert.match(seed, /version: 27/);
 assert.match(seed, /showStatus: true/);
+assert.match(seed, /showRecap: false/);
 assert.match(provider, /const restoredState: AppState = \{[\s\S]{0,100}version: 27/);
 assert.doesNotMatch(cloudProvider, /version: 24/);
 

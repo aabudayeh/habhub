@@ -49,6 +49,17 @@ import { usePageSwipeGesture } from "@/src/components/usePageSwipeGesture";
 import { useSoftwareKeyboardVisibility } from "@/src/components/useSoftwareKeyboardVisibility";
 import { useTodoItemVisibility } from "@/src/components/useTodoItemVisibility";
 
+function recapShareLink(text: string) {
+  const match = text.match(/(?:^|\n)habhub:\/\/recap\?([^\s]+)/i);
+  if (!match) return undefined;
+  const query = new URLSearchParams(match[1]);
+  const highlight = query.get("highlight") ?? undefined;
+  return {
+    highlight,
+    text: text.replace(match[0], "").trim(),
+  };
+}
+
 function ChatScreen() {
   const tutorialSandbox = useTutorialSandboxActive();
   const params = useLocalSearchParams<{ recipient?: string | string[] }>();
@@ -163,6 +174,7 @@ function ChatScreen() {
     (id: string) =>
       state.messages.some(
         (message) =>
+          message.kind !== "achievement" &&
           (!message.groupId || message.groupId === state.group.id) &&
           (message.conversationId ?? "group") === id &&
           message.senderId !== state.currentUserId &&
@@ -203,6 +215,9 @@ function ChatScreen() {
     () =>
       state.messages
         .filter((message) => {
+          // Goal/badge celebrations belong in the notification and badge feeds,
+          // not as synthetic messages mixed into a human conversation.
+          if (message.kind === "achievement") return false;
           const id = message.conversationId ?? "group";
           if (message.groupId && message.groupId !== state.group.id) return false;
           if (
@@ -637,7 +652,7 @@ function ChatScreen() {
           >
             {recipient ? (
               <Pressable
-                onPress={() => router.push(`/member/${recipient.id}` as never)}
+                onPress={() => router.push(`/member-profile/${recipient.id}` as never)}
               >
                 <Avatar
                   initials={recipient.initials}
@@ -657,7 +672,7 @@ function ChatScreen() {
             <Pressable
               disabled={!recipient}
               onPress={() =>
-                recipient && router.push(`/member/${recipient.id}` as never)
+                recipient && router.push(`/member-profile/${recipient.id}` as never)
               }
               style={styles.threadCopy}
             >
@@ -688,7 +703,7 @@ function ChatScreen() {
             {recipient ? (
               <Pressable
                 accessibilityLabel="View friend profile"
-                onPress={() => router.push(`/member/${recipient.id}` as never)}
+                onPress={() => router.push(`/member-profile/${recipient.id}` as never)}
                 style={styles.profileButton}
               >
                 <Ionicons name="person-outline" size={18} color={accent} />
@@ -803,6 +818,7 @@ function ChatScreen() {
                   (candidate) => candidate.id === message.senderId,
                 );
                 const mine = message.senderId === state.currentUserId;
+                const recapLink = recapShareLink(message.text);
                 return (
                   <React.Fragment key={message.id}>
                     {showDate ? (
@@ -825,7 +841,7 @@ function ChatScreen() {
                       {!mine && sender ? (
                         <Pressable
                           onPress={() =>
-                            router.push(`/member/${sender.id}` as never)
+                            router.push(`/member-profile/${sender.id}` as never)
                           }
                         >
                           <Avatar
@@ -842,7 +858,7 @@ function ChatScreen() {
                             disabled={!sender}
                             onPress={() =>
                               sender &&
-                              router.push(`/member/${sender.id}` as never)
+                              router.push(`/member-profile/${sender.id}` as never)
                             }
                           >
                             <Text translate={false} style={styles.sender}>
@@ -912,7 +928,70 @@ function ChatScreen() {
                               <Ionicons name="chevron-forward" size={14} color={mine ? palette.white : colors.faint} />
                             </Pressable>
                           ) : null}
-                          {message.text ? (
+                          {recapLink ? (
+                            <Pressable
+                              accessibilityRole="link"
+                              accessibilityLabel="Open shared group recap"
+                              onPress={() =>
+                                router.navigate({
+                                  pathname: "/recap",
+                                  params: {
+                                    scope: "group",
+                                    ...(recapLink.highlight
+                                      ? { highlight: recapLink.highlight }
+                                      : {}),
+                                  },
+                                } as never)
+                              }
+                              style={[
+                                styles.todoAttachment,
+                                {
+                                  borderColor: mine
+                                    ? "rgba(255,255,255,.3)"
+                                    : colors.border,
+                                  backgroundColor: mine
+                                    ? "rgba(255,255,255,.14)"
+                                    : colors.canvas,
+                                },
+                              ]}
+                            >
+                              <Ionicons
+                                name="sparkles-outline"
+                                size={16}
+                                color={mine ? palette.white : accent}
+                              />
+                              <View style={styles.todoAttachmentCopy}>
+                                <Text
+                                  translate={false}
+                                  preserveColor={mine}
+                                  style={[
+                                    styles.todoAttachmentTitle,
+                                    { color: mine ? palette.white : colors.ink },
+                                  ]}
+                                >
+                                  {recapLink.text || "Shared group recap"}
+                                </Text>
+                                <Text
+                                  preserveColor={mine}
+                                  style={[
+                                    styles.todoAttachmentMeta,
+                                    {
+                                      color: mine
+                                        ? "rgba(255,255,255,.72)"
+                                        : colors.muted,
+                                    },
+                                  ]}
+                                >
+                                  Open the highlighted recap moment
+                                </Text>
+                              </View>
+                              <Ionicons
+                                name="chevron-forward"
+                                size={14}
+                                color={mine ? palette.white : colors.faint}
+                              />
+                            </Pressable>
+                          ) : message.text ? (
                             <Text
                               translate={false}
                               selectable

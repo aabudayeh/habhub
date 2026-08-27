@@ -14,6 +14,7 @@ export const DEFAULT_TAB_ORDER: readonly LandingPage[] = [
   "calendar",
   "journal",
   "performance",
+  "recapfeed",
   "chat",
 ];
 

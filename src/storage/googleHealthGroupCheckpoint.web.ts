@@ -172,7 +172,10 @@ export async function writeGoogleHealthGroupCheckpoint(
       source.currentUserId,
       source.groupId,
     );
-  const signature = JSON.stringify(checkpoint.dailyMetricStatuses);
+  const signature = JSON.stringify({
+    entries: checkpoint.entries,
+    dailyMetricStatuses: checkpoint.dailyMetricStatuses,
+  });
   if (lastWrittenSignature.get(id) === signature) return;
   latestRequestedSignature.set(id, signature);
   const prior = operationByRecord.get(id) ?? Promise.resolve();

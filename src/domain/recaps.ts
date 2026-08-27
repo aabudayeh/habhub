@@ -1,4 +1,9 @@
-import { AppState, MetricDefinition } from "@/src/types";
+import {
+  AppState,
+  MetricDefinition,
+  NutritionDetails,
+  PhotoUpdate,
+} from "@/src/types";
 import { dateKey, dateRangeEnding, friendlyDate } from "./date";
 import { memberDisplayName } from "./members";
 import {
@@ -22,6 +27,276 @@ export type RecapStory = {
   icon: string;
   color: string;
 };
+
+export type RecapFeedKind =
+  | "log"
+  | "meal"
+  | "workout"
+  | "photo"
+  | "leader"
+  | "badge";
+
+export type RecapFeedItem = {
+  id: string;
+  kind: RecapFeedKind;
+  localDate: string;
+  createdAt: string;
+  memberId?: string;
+  metricId?: string;
+  eyebrow: string;
+  title: string;
+  body: string;
+  value?: string;
+  icon: string;
+  color: string;
+  image?: PhotoUpdate["uri"];
+  nutrition?: NutritionDetails;
+  socialTarget: {
+    type: "recap_feed" | "metric_entry" | "photo_update" | "badge";
+    id: string;
+  };
+  deepLink?: {
+    pathname: string;
+    params?: Record<string, string>;
+  };
+};
+
+function meaningfulFeedEntry(
+  metric: MetricDefinition,
+  entry: AppState["entries"][number],
+) {
+  if (entry.visibility !== "group") return false;
+  if (entry.source === "calculated") return false;
+  const note = `${entry.label ?? ""} ${entry.note ?? ""}`.toLowerCase();
+  if (/estimated unrecorded|passive walking|from step difference/.test(note))
+    return false;
+  // High-frequency ambient readings belong in charts, not a social feed.
+  if (
+    ["steps", "pulse", "heart_rate", "active_energy", "total_energy"].includes(
+      metric.id,
+    ) &&
+    !entry.label &&
+    !entry.note &&
+    !entry.imageUri
+  )
+    return false;
+  return (
+    entry.source === "manual" ||
+    Boolean(entry.label || entry.note || entry.imageUri || entry.nutrition) ||
+    metric.healthMapping?.dataType === "workouts" ||
+    metric.category === "gym"
+  );
+}
+
+/**
+ * Builds a privacy-safe, deterministic feed from content already authorized in
+ * the local group projection. It never manufactures detail rows from compact
+ * daily totals, so a recap cannot bypass per-entry visibility.
+ */
+export function buildGroupRecapFeed(
+  state: AppState,
+  dates: readonly string[],
+  badgeItems: readonly {
+    id: string;
+    memberId?: string;
+    anchorDate: string;
+    title: string;
+    caption: string;
+    description: string;
+    icon: string;
+    color: string;
+    status: string;
+  }[] = [],
+): RecapFeedItem[] {
+  const dateSet = new Set(dates);
+  const groupMetricIds = new Set(
+    (state.group.metricConfiguration ?? [])
+      .filter((metric) => metric.sections.group)
+      .map((metric) => metric.id),
+  );
+  const metrics = new Map(
+    state.metrics
+      .filter((metric) => groupMetricIds.has(metric.id))
+      .map((metric) => [metric.id, metric]),
+  );
+  const items: RecapFeedItem[] = [];
+  for (const entry of state.entries) {
+    if (!dateSet.has(entry.localDate)) continue;
+    const metric = metrics.get(entry.metricId);
+    if (!metric || !meaningfulFeedEntry(metric, entry)) continue;
+    const member = state.group.members.find((item) => item.id === entry.userId);
+    if (!member) continue;
+    const memberName = memberDisplayName(state, member);
+    const workout =
+      metric.healthMapping?.dataType === "workouts" ||
+      metric.category === "gym" ||
+      /workout|walk|run|cycle|swim|gym/.test(
+        `${entry.label ?? ""} ${entry.note ?? ""}`.toLowerCase(),
+      );
+    const meal = metric.id === "food" || Boolean(entry.nutrition);
+    const label = entry.label?.trim() || entry.note?.trim();
+    const value =
+      typeof entry.value === "number"
+        ? formatMetricValue(metric, entry.value)
+        : typeof entry.value === "boolean"
+          ? entry.value
+            ? "Completed"
+            : "Not completed"
+          : String(entry.value || "Logged");
+    items.push({
+      id: `entry:${entry.id}`,
+      kind: meal ? "meal" : workout ? "workout" : "log",
+      localDate: entry.localDate,
+      createdAt: entry.recordedAt,
+      memberId: entry.userId,
+      metricId: entry.metricId,
+      eyebrow: meal ? "MEAL LOG" : workout ? "WORKOUT LOG" : "SHARED LOG",
+      title: `${memberName} logged ${label || metric.name.toLowerCase()}`,
+      body:
+        label && label.toLowerCase() !== metric.name.toLowerCase()
+          ? metric.name
+          : meal
+            ? entry.nutrition?.mealType
+              ? `${entry.nutrition.mealType[0].toUpperCase()}${entry.nutrition.mealType.slice(1)}`
+              : "Nutrition update"
+            : workout
+              ? "Workout activity"
+              : "Shared group activity",
+      value,
+      icon: metric.icon,
+      color: metric.color,
+      image: entry.imageUri ? { uri: entry.imageUri } : undefined,
+      nutrition: entry.nutrition,
+      socialTarget: { type: "metric_entry", id: entry.id },
+      deepLink: {
+        pathname: "/leaderboard-detail",
+        params: {
+          period: "custom",
+          anchor: entry.localDate,
+          metrics: entry.metricId,
+        },
+      },
+    });
+  }
+  for (const photo of state.photos) {
+    if (photo.visibility !== "group" || !dateSet.has(photo.localDate)) continue;
+    const member = state.group.members.find((item) => item.id === photo.userId);
+    if (!member) continue;
+    items.push({
+      id: `photo:${photo.id}`,
+      kind: "photo",
+      localDate: photo.localDate,
+      createdAt: photo.createdAt,
+      memberId: photo.userId,
+      eyebrow: "PHOTO UPDATE",
+      title: `${memberDisplayName(state, member)} shared a photo`,
+      body: photo.caption || "A moment from their day.",
+      icon: "image-outline",
+      color: member.color,
+      image: photo.uri,
+      socialTarget: { type: "photo_update", id: photo.id },
+    });
+  }
+  for (const badge of badgeItems) {
+    if (
+      badge.status !== "earned" ||
+      !badge.memberId ||
+      !dateSet.has(badge.anchorDate)
+    )
+      continue;
+    const member = state.group.members.find(
+      (item) => item.id === badge.memberId,
+    );
+    if (!member) continue;
+    items.push({
+      id: `badge:${badge.id}:${badge.anchorDate}`,
+      kind: "badge",
+      localDate: badge.anchorDate,
+      createdAt: `${badge.anchorDate}T23:59:00`,
+      memberId: badge.memberId,
+      eyebrow: "BADGE UNLOCKED",
+      title: `${memberDisplayName(state, member)} earned ${badge.title}`,
+      body: badge.description,
+      value: badge.caption,
+      icon: badge.icon,
+      color: badge.color,
+      socialTarget: {
+        type: "badge",
+        id: `${badge.id}:${badge.anchorDate}`,
+      },
+      deepLink: {
+        pathname: "/badges",
+        params: {
+          anchor: badge.anchorDate,
+          filter: "achievement",
+          memberId: badge.memberId,
+          highlight: badge.id,
+        },
+      },
+    });
+  }
+  // One daily group headline gives the feed rhythm without duplicating every
+  // live rank change or background health sample. Only evaluate dates with a
+  // real group projection and cap headline work for year/all-time feeds; raw
+  // entry/photo cards remain available throughout the selected range.
+  const activeDates = new Set([
+    ...state.entries
+      .filter(
+        (entry) =>
+          entry.visibility === "group" && groupMetricIds.has(entry.metricId),
+      )
+      .map((entry) => entry.localDate),
+    ...(state.dailyMetricStatuses ?? [])
+      .filter(
+        (status) =>
+          status.groupId === state.group.id && status.visibility !== "private",
+      )
+      .map((status) => status.localDate),
+  ]);
+  const headlineDates = dates
+    .filter((localDate) => activeDates.has(localDate))
+    .slice(-45);
+  for (const localDate of headlineDates) {
+    const ranked = state.group.members
+      .map((member) => ({
+        member,
+        score: dailyScore(state, member.id, localDate),
+      }))
+      .filter((row) => row.score > 0)
+      .sort((left, right) => right.score - left.score);
+    const leader = ranked[0];
+    if (!leader) continue;
+    items.push({
+      id: `leader:${localDate}`,
+      kind: "leader",
+      localDate,
+      createdAt: `${localDate}T23:58:00`,
+      memberId: leader.member.id,
+      eyebrow: "DAILY LEADER",
+      title: `${memberDisplayName(state, leader.member)} led the board`,
+      body:
+        ranked.length > 1
+          ? `${Math.max(0, Math.round(leader.score - ranked[1].score))} points ahead of second place.`
+          : "The first score on the board—there is room for company.",
+      value: `${Math.round(leader.score)}/100`,
+      icon: "trophy-outline",
+      color: leader.member.color,
+      socialTarget: { type: "recap_feed", id: `leader:${localDate}` },
+      deepLink: {
+        pathname: "/group",
+        params: { period: "custom", anchor: localDate },
+      },
+    });
+  }
+  const unique = new Map(items.map((item) => [item.id, item]));
+  return [...unique.values()]
+    .sort(
+      (left, right) =>
+        right.createdAt.localeCompare(left.createdAt) ||
+        left.id.localeCompare(right.id),
+    )
+    .slice(0, 160);
+}
 
 function average(
   state: AppState,

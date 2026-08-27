@@ -42,6 +42,7 @@ const icons: Record<string, keyof typeof Ionicons.glyphMap> = {
   performance: "speedometer-outline",
   status: "accessibility-outline",
   timers: "timer-outline",
+  recapfeed: "newspaper-outline",
 };
 
 type TabRouteName = LandingPage | "timers";
@@ -157,6 +158,7 @@ export default function TabLayout() {
   const showCalendar = state.settings.showCalendar !== false;
   const showJournal = state.settings.showJournal !== false;
   const showPerformance = state.settings.showPerformance !== false;
+  const showRecap = state.settings.showRecap === true;
   const showStatus = state.settings.showStatus !== false;
   const tabOrder = useMemo(
     () => normalizeTabOrder(state.settings.tabOrder),
@@ -198,6 +200,10 @@ export default function TabLayout() {
     performance: {
       title: t("Performance"),
       href: showPerformance ? "/performance" : null,
+    },
+    recapfeed: {
+      title: t("Recap"),
+      href: showRecap ? ("/recapfeed" as Href) : null,
     },
     status: {
       title: t("Status"),

@@ -94,6 +94,7 @@ import {
   type PrivacyAwareSnapshotRow,
   syncPrivacyAwareUserSnapshot,
 } from "@/src/cloud/snapshotPrivacy";
+import { publishJoinedPublicChallengeTotals } from "@/src/cloud/publicChallengeProjection";
 import {
   readPersistedAccountState,
   useApp,
@@ -2666,6 +2667,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   const groupConfigurationHashRef = useRef<string | null>(null);
   const deviceIdRef = useRef<string | null>(null);
   const deviceHeartbeatAtRef = useRef(0);
+  const publicChallengeProjectionRef = useRef({ userId: "", at: 0 });
   const presenceHeartbeatAtRef = useRef(0);
   const lastResumeRecoveryAtRef = useRef(0);
   const initializedUserRef = useRef<string | null>(null);
@@ -3233,7 +3235,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
 
   const hydrateCachedGroupActivity = useCallback(
     async (groupId: string, expectedUserId: string) => {
-      const [cached, protectedGoogleStatuses] = await Promise.all([
+      const [cached, protectedGoogleActivity] = await Promise.all([
         readGroupActivityCache(groupId).catch(() => null),
         readGoogleHealthGroupCheckpoint(expectedUserId, groupId).catch(
           () => undefined,
@@ -3250,13 +3252,13 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             groupId,
           )
         : null;
-      const scopedGoogleStatuses = protectedGoogleStatuses
+      const scopedGoogleActivity = protectedGoogleActivity
         ? scopeCachedGroupActivity(
             {
               groupId,
-              entries: [],
+              entries: protectedGoogleActivity.entries,
               dailyMetricStatuses:
-                protectedGoogleStatuses.dailyMetricStatuses,
+                protectedGoogleActivity.dailyMetricStatuses,
             },
             live,
             expectedUserId,
@@ -3264,7 +3266,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             true,
           )
         : null;
-      if (!scopedCached && !scopedGoogleStatuses) return false;
+      if (!scopedCached && !scopedGoogleActivity) return false;
 
       // A slow disk read must never reintroduce rows that a newer server
       // snapshot already deleted or fenced after a visibility change.
@@ -3276,14 +3278,17 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             scopedCached.version >= observedVersion))
           ? scopedCached
           : null;
-      const reusableGoogleStatuses =
+      const reusableGoogleActivity =
         observedVersion === undefined || reusableCached
-          ? scopedGoogleStatuses
+          ? scopedGoogleActivity
           : null;
-      const entries = reusableCached?.entries ?? [];
+      const entries = [
+        ...(reusableCached?.entries ?? []),
+        ...(reusableGoogleActivity?.entries ?? []),
+      ];
       const statuses = [
         ...(reusableCached?.dailyMetricStatuses ?? []),
-        ...(reusableGoogleStatuses?.dailyMetricStatuses ?? []),
+        ...(reusableGoogleActivity?.dailyMetricStatuses ?? []),
       ];
       if (!entries.length && !statuses.length) return false;
 
@@ -4553,6 +4558,28 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         if (!operationIsCurrent()) return;
         await persistPrivateSnapshot();
         if (!operationIsCurrent()) return;
+        const projectionCheckpoint = publicChallengeProjectionRef.current;
+        if (
+          forceAttempt ||
+          projectionCheckpoint.userId !== operationUserId ||
+          (Boolean(syncedAt) &&
+            Date.now() - projectionCheckpoint.at >= 60 * 1000) ||
+          Date.now() - projectionCheckpoint.at >= 15 * 60 * 1000
+        ) {
+          await yieldCloudMaintenanceToUi();
+          try {
+            await publishJoinedPublicChallengeTotals(candidate);
+            publicChallengeProjectionRef.current = {
+              userId: operationUserId,
+              at: Date.now(),
+            };
+          } catch (projectionError) {
+            workspaceWarning =
+              workspaceWarning ??
+              `Public challenge progress will retry: ${errorText(projectionError)}`;
+          }
+          if (!operationIsCurrent()) return;
+        }
         // The server revision is not a durable acknowledgement until the
         // corresponding (or newer locally edited) state is on this device.
         // Otherwise a crash can restart from an older cache, misclassify it as
@@ -6165,6 +6192,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
               writeGoogleHealthGroupCheckpoint({
                 currentUserId: next.currentUserId,
                 groupId,
+                entries: next.entries,
                 dailyMetricStatuses: next.dailyMetricStatuses,
               }),
             ]);
@@ -6425,6 +6453,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
               writeGoogleHealthGroupCheckpoint({
                 currentUserId: next.currentUserId,
                 groupId,
+                entries: next.entries,
                 dailyMetricStatuses: next.dailyMetricStatuses,
               }),
             ]);

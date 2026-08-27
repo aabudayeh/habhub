@@ -70,6 +70,7 @@ import {
   performancePeriod,
   type PerformanceRange,
 } from "@/src/domain/performance";
+import { isPersonalSetupGroup } from "@/src/domain/groupSetup";
 import {
   acknowledgeWorkoutActionsAfterPersistence,
   webWorkoutActionAckRetryDelay,
@@ -112,6 +113,7 @@ import {
   GymTimerMode,
   MuscleGroup,
   Visibility,
+  WorkoutExerciseTrackingMode,
 } from "@/src/types";
 
 const uniqueId = (prefix: string) =>
@@ -135,6 +137,16 @@ type WorkoutTimer = {
 
 type GymMode = "workout" | "progress" | "performance";
 type GymPerformancePriority = "all" | "gaining" | "steady" | "focus" | "learning";
+
+const CUSTOM_EXERCISE_MODES: {
+  id: WorkoutExerciseTrackingMode;
+  label: string;
+  hint: string;
+}[] = [
+  { id: "duration", label: "Minutes", hint: "Time only" },
+  { id: "reps", label: "Reps", hint: "Count only" },
+  { id: "load_reps", label: "kg + reps", hint: "Weight and count" },
+];
 
 const GYM_PERFORMANCE_RANGES: { id: PerformanceRange; label: string }[] = [
   { id: "day", label: "Daily" },
@@ -530,6 +542,8 @@ function GymScreen() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerSearch, setPickerSearch] = useState("");
   const [customExerciseName, setCustomExerciseName] = useState("");
+  const [customExerciseTrackingMode, setCustomExerciseTrackingMode] =
+    useState<WorkoutExerciseTrackingMode>("load_reps");
   const [pickerMuscle, setPickerMuscle] = useState<MuscleGroup | "all">("all");
   const [pickerCategory, setPickerCategory] = useState<ExerciseCategory | "all">(
     "strength",
@@ -1791,6 +1805,7 @@ function GymScreen() {
   function completeAllSets() {
     if (workoutTimer && workoutTimer.mode !== "whole_workout") return;
     setExercises((current) => completeGymWorkout(current));
+    setOpenExerciseId(null);
   }
 
   function patchExercise(exerciseId: string, changes: Partial<GymExercise>) {
@@ -1902,8 +1917,9 @@ function GymScreen() {
       name,
       muscles: [pickerMuscle === "all" ? "full_body" : pickerMuscle],
       equipment: "other",
-      category: "strength",
-      trackingMode: "load_reps",
+      category:
+        customExerciseTrackingMode === "duration" ? "cardio" : "strength",
+      trackingMode: customExerciseTrackingMode,
       aliases: [],
       met: 3.5,
     };
@@ -4154,7 +4170,7 @@ function GymScreen() {
                             />
                           </View>
                         ) : null}
-                        {canManageGroup ? (
+                        {canManageGroup && !isPersonalSetupGroup(state.group) ? (
                           <View style={styles.actionCell}>
                             <Button
                               label={
@@ -4741,22 +4757,53 @@ function GymScreen() {
                 <Chip key={muscle} label={localizeMuscleLabel(language, muscle)} selected={pickerMuscle === muscle} onPress={() => setPickerMuscle(muscle)} />
               ))}
             </View>
-            <View style={styles.customRow}>
-              <TextInput
-                value={customExerciseName}
-                onChangeText={setCustomExerciseName}
-                placeholder="Can't find it? Name a custom exercise"
-                placeholderTextColor={colors.faint}
-                style={[styles.customInput, { color: colors.ink, borderColor: colors.border }]}
-                onSubmitEditing={addCustomExercise}
-              />
-              <Pressable
-                disabled={!customExerciseName.trim()}
-                onPress={addCustomExercise}
-                style={[styles.customAdd, { backgroundColor: customExerciseName.trim() ? accent : colors.border }]}
-              >
-                <Ionicons name="add" size={21} color={palette.white} />
-              </Pressable>
+            <View style={[styles.customExerciseCreator, { borderColor: colors.border }]}>
+              <View style={styles.customRow}>
+                <TextInput
+                  value={customExerciseName}
+                  onChangeText={setCustomExerciseName}
+                  placeholder="Can't find it? Name a custom exercise"
+                  placeholderTextColor={colors.faint}
+                  style={[styles.customInput, { color: colors.ink, borderColor: colors.border }]}
+                  onSubmitEditing={addCustomExercise}
+                />
+                <Pressable
+                  disabled={!customExerciseName.trim()}
+                  onPress={addCustomExercise}
+                  style={[styles.customAdd, { backgroundColor: customExerciseName.trim() ? accent : colors.border }]}
+                >
+                  <Ionicons name="add" size={21} color={palette.white} />
+                </Pressable>
+              </View>
+              <Text style={[styles.customModeLabel, { color: colors.muted }]}>TRACK EACH SET BY</Text>
+              <View style={styles.customModeRow}>
+                {CUSTOM_EXERCISE_MODES.map((option) => {
+                  const selected = customExerciseTrackingMode === option.id;
+                  return (
+                    <Pressable
+                      key={option.id}
+                      accessibilityRole="radio"
+                      accessibilityState={{ selected }}
+                      accessibilityLabel={`${option.label}, ${option.hint}`}
+                      onPress={() => setCustomExerciseTrackingMode(option.id)}
+                      style={[
+                        styles.customModeChoice,
+                        {
+                          borderColor: selected ? accent : colors.border,
+                          backgroundColor: selected ? colors.primarySoft : colors.canvas,
+                        },
+                      ]}
+                    >
+                      <Text style={[styles.customModeTitle, { color: selected ? accent : colors.ink }]}>
+                        {option.label}
+                      </Text>
+                      <Text style={[styles.customModeHint, { color: colors.muted }]}>
+                        {option.hint}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
             </View>
             <ScrollView style={styles.pickerList} keyboardShouldPersistTaps="handled">
               {pickerItems.map((item) => (
@@ -5360,9 +5407,15 @@ const styles = StyleSheet.create({
     rowGap: 6,
     paddingVertical: 2,
   },
+  customExerciseCreator: { borderWidth: 1, borderRadius: 12, padding: 8, gap: 7 },
   customRow: { flexDirection: "row", gap: 7 },
   customInput: { flex: 1, height: 40, borderWidth: 1, borderRadius: 11, paddingHorizontal: 11, fontSize: 10 },
   customAdd: { width: 40, height: 40, borderRadius: 11, alignItems: "center", justifyContent: "center" },
+  customModeLabel: { fontSize: 6, fontWeight: "900", letterSpacing: 0.7 },
+  customModeRow: { flexDirection: "row", gap: 5 },
+  customModeChoice: { flex: 1, minHeight: 39, borderWidth: 1, borderRadius: 9, alignItems: "center", justifyContent: "center", paddingHorizontal: 3 },
+  customModeTitle: { fontSize: 7.5, fontWeight: "900" },
+  customModeHint: { fontSize: 5.7, fontWeight: "700", marginTop: 1 },
   pickerList: { maxHeight: 390 },
   pickerItem: { minHeight: 48, borderBottomWidth: 1, flexDirection: "row", alignItems: "center", gap: 8 },
   catalogIcon: { width: 34, height: 34, borderRadius: 10, alignItems: "center", justifyContent: "center" },

@@ -69,7 +69,6 @@ export function todayHeroSummary(
   const usesGoals = state.settings.showGoalsToday !== false;
   const total = usesGoals ? trackedGoals.total : todos.length;
   const met = usesGoals ? trackedGoals.met : completedTodos;
-  const progress = total ? met / total : 0;
   const unavailableIds = new Set(
     trackedGoals.unavailable.map((metric) => metric.id),
   );
@@ -101,6 +100,17 @@ export function todayHeroSummary(
       value,
     };
   });
+  // Match Status/avatar semantics: Featured progress is the average progress
+  // inside each scheduled goal, not only the fraction that crossed 100%.
+  // To-Do-only mode remains a completed-item fraction.
+  const progress = usesGoals
+    ? goalProgress.length
+      ? goalProgress.reduce((sum, goal) => sum + goal.progress, 0) /
+        goalProgress.length
+      : 0
+    : total
+      ? met / total
+      : 0;
 
   return {
     allMet: total > 0 && met === total,

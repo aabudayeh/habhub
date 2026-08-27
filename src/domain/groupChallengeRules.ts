@@ -364,6 +364,8 @@ export function validateGroupChallenge(input: {
   metric?: ChallengeMetricShape;
   participantIds: string[];
   creatorId: string;
+  audience?: "group" | "public";
+  participantLimit?: number;
   recurrence?: GoalSchedule;
   today?: string;
 }) {
@@ -396,6 +398,16 @@ export function validateGroupChallenge(input: {
   if ((input.title?.trim().length ?? 0) > 80)
     return "Keep the challenge title under 80 characters.";
   const participants = new Set([...input.participantIds, input.creatorId]);
+  if (input.audience === "public") {
+    if (
+      input.participantLimit !== undefined &&
+      (!Number.isInteger(input.participantLimit) ||
+        input.participantLimit < 2 ||
+        input.participantLimit > 5_000)
+    )
+      return "Enter a participant limit from 2 to 5,000, or leave it unlimited.";
+    return undefined;
+  }
   if (participants.size < 2) return "Choose at least one friend.";
   if (participants.size > 50) return "Choose no more than 49 friends.";
   return undefined;

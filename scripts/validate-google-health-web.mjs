@@ -415,6 +415,54 @@ assert.equal(
   undefined,
   "a protected group checkpoint must never cross account boundaries",
 );
+const protectedPeerMealCheckpoint = buildGoogleHealthGroupCheckpoint(
+  {
+    currentUserId: "viewer",
+    groupId: "group",
+    entries: [
+      {
+        id: "peer-google-meal",
+        metricId: "food",
+        userId: "peer",
+        value: 620,
+        localDate: "2026-08-23",
+        recordedAt: "2026-08-23T18:30:00.000Z",
+        visibility: "group",
+        source: "imported",
+        sourceProvider: "google_health",
+        sourceRecordId: "provider-meal-1",
+        label: "Dinner",
+        nutrition: { proteinG: 38, fiberG: 9 },
+        imageUri: "https://signed.example/private-token-must-not-persist",
+        imageStoragePath: "group/group/peer/meal.jpg",
+      },
+      {
+        id: "own-google-meal",
+        metricId: "food",
+        userId: "viewer",
+        value: 400,
+        localDate: "2026-08-23",
+        recordedAt: "2026-08-23T12:00:00.000Z",
+        visibility: "group",
+        source: "imported",
+        sourceProvider: "google_health",
+        label: "Lunch",
+        nutrition: { proteinG: 20 },
+      },
+    ],
+    dailyMetricStatuses: [],
+  },
+  new Date("2026-08-24T12:00:00.000Z"),
+);
+assert.equal(protectedPeerMealCheckpoint?.entries.length, 1);
+assert.equal(protectedPeerMealCheckpoint?.entries[0].id, "peer-google-meal");
+assert.equal(protectedPeerMealCheckpoint?.entries[0].nutrition?.fiberG, 9);
+assert.equal(protectedPeerMealCheckpoint?.entries[0].imageUri, undefined);
+assert.equal(
+  protectedPeerMealCheckpoint?.entries[0].imageStoragePath,
+  "group/group/peer/meal.jpg",
+  "encrypted detail checkpoints retain the object path but never a temporary signed URL",
+);
 const editedGoogleEntry = {
   ...googleEntry,
   localDate: "2026-08-20",

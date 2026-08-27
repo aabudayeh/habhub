@@ -21,6 +21,7 @@ import {
   BadgePeriod,
   BadgeStatus,
   EarnedBadge,
+  badgeLevelSummary,
   buildBadges,
 } from "@/src/domain/badges";
 import { dateKey, friendlyDate } from "@/src/domain/date";
@@ -112,8 +113,10 @@ export default function BadgesScreen() {
     anchor?: string;
     filter?: Filter;
     highlight?: string;
+    memberId?: string;
+    selectShowcase?: string;
   }>();
-  const { state } = useApp();
+  const { state, updateSettings } = useApp();
   const challengeCloud = useGroupChallenges(state.group.id);
   const colors = useAppColors();
   const accent = useGroupAccent();
@@ -124,7 +127,20 @@ export default function BadgesScreen() {
       ? (params.filter as Filter)
       : "achievement",
   );
-  const [memberIds, setMemberIds] = useState([state.currentUserId]);
+  const requestedMemberId = state.group.members.some(
+    (member) => member.id === params.memberId,
+  )
+    ? params.memberId
+    : undefined;
+  const [memberIds, setMemberIds] = useState([
+    requestedMemberId ?? state.currentUserId,
+  ]);
+  const [openSections, setOpenSections] = useState<Record<BadgeStatus, boolean>>({
+    earned: true,
+    progress: true,
+    locked: false,
+    recurring: false,
+  });
   const trackerItems = useMemo(
     () =>
       (state.group.metricConfiguration ?? [])
@@ -162,6 +178,7 @@ export default function BadgesScreen() {
         .filter(
           (badge) =>
             (filter === "all" || badge.period === filter) &&
+            (params.selectShowcase !== "true" || badge.status === "earned") &&
             (!badge.memberId || memberIds.includes(badge.memberId)) &&
             (!badge.metricId ||
               metricIds.includes(badge.metricId) ||
@@ -169,26 +186,47 @@ export default function BadgesScreen() {
                 metricIds.includes("food"))),
         )
         .sort(sortBadges),
-    [badges, filter, memberIds, metricIds],
+    [badges, filter, memberIds, metricIds, params.selectShowcase],
   );
+  const levelOwnerId = memberIds.length === 1 ? memberIds[0] : state.currentUserId;
+  const levelOwner = state.group.members.find((member) => member.id === levelOwnerId);
+  const level = useMemo(
+    () => badgeLevelSummary(badges, levelOwnerId),
+    [badges, levelOwnerId],
+  );
+  const showcaseSelection =
+    params.selectShowcase === "true" && levelOwnerId === state.currentUserId;
+  const showcased = state.settings.badgeShowcaseByGroup[state.group.id] ?? [];
+  function toggleShowcase(badgeId: string) {
+    const next = showcased.includes(badgeId)
+      ? showcased.filter((id) => id !== badgeId)
+      : showcased.length < 5
+        ? [...showcased, badgeId]
+        : showcased;
+    updateSettings({
+      badgeShowcaseByGroup: {
+        ...state.settings.badgeShowcaseByGroup,
+        [state.group.id]: next,
+      },
+    });
+  }
   const sections = statusSections
     .map((section) => ({
       ...section,
       badges: visible.filter((badge) => badge.status === section.id),
     }))
     .filter((section) => section.badges.length);
-  const statusCounts = statusSections.map((section) => ({
-    ...section,
-    count: visible.filter((badge) => badge.status === section.id).length,
-  }));
-
   return (
     <Screen>
       <PageHeader
         eyebrow={state.group.name}
         translateEyebrow={false}
-        title="Badge cabinet"
-        subtitle="See what you earned, what is progressing, and what to aim for next."
+        title={showcaseSelection ? "Choose showcase badges" : "Badge cabinet"}
+        subtitle={
+          showcaseSelection
+            ? `${showcased.length}/5 selected · tap earned badges to feature them.`
+            : "A clear path from today's actions to lasting milestones."
+        }
         showMenu={false}
         action={
           <IconButton
@@ -212,15 +250,43 @@ export default function BadgesScreen() {
           </View>
           <View style={styles.copy}>
             <Text style={[styles.summaryTitle, { color: colors.ink }]}>
-              Your award path
+              Level {level.level} · {level.levelTitle}
             </Text>
             <Text style={[styles.meta, { color: colors.muted }]}>
-              Milestones adapt to the trackers and goals shared in this group.
+              {levelOwner ? memberDisplayName(state, levelOwner) : "Member"} · {level.xp.toLocaleString()} momentum XP
             </Text>
           </View>
+          <View style={[styles.levelBubble, { backgroundColor: `${accent}18`, borderColor: accent }]}>
+            <Text style={[styles.levelNumber, { color: accent }]}>{level.level}</Text>
+          </View>
         </View>
+        <View style={styles.levelProgressRow}>
+          <View style={[styles.levelTrack, { backgroundColor: colors.border }]}>
+            <View
+              style={[
+                styles.levelFill,
+                { backgroundColor: accent, width: `${Math.max(2, level.levelProgress * 100)}%` },
+              ]}
+            />
+          </View>
+          <Text style={[styles.levelProgressText, { color: colors.muted }]}>
+            {Math.max(0, level.nextLevelXp - level.xp).toLocaleString()} XP to level {level.level + 1}
+          </Text>
+        </View>
+        {level.nextBadge?.progress ? (
+          <View style={[styles.nextAim, { backgroundColor: colors.primarySoft }]}>
+            <Ionicons name="navigate-circle-outline" size={15} color={accent} />
+            <Text style={[styles.nextAimText, { color: colors.ink }]} numberOfLines={1}>
+              Closest unlock: {level.nextBadge.title} · {level.nextBadge.progress.current}/{level.nextBadge.progress.target}
+            </Text>
+          </View>
+        ) : null}
         <View style={styles.statusCounts}>
-          {statusCounts.map((item) => (
+          {[
+            { id: "earned", title: "Earned", count: level.earned },
+            { id: "progress", title: "In progress", count: level.active },
+            { id: "recurring", title: "Recurring", count: level.recurring },
+          ].map((item) => (
             <View key={item.id} style={styles.statusCount}>
               <Text style={[styles.countValue, { color: colors.ink }]}>
                 {item.count}
@@ -311,23 +377,42 @@ export default function BadgesScreen() {
       {sections.length ? (
         sections.map((section) => (
           <View key={section.id}>
-            <SectionHeader title={`${section.title} · ${section.badges.length}`} />
-            <View style={styles.sectionIntro}>
-              <Ionicons name={section.icon} size={14} color={accent} />
-              <Text style={[styles.sectionDescription, { color: colors.muted }]}>
-                {section.description}
-              </Text>
-            </View>
-            <View style={styles.list}>
+            <Pressable
+              onPress={() =>
+                setOpenSections((current) => ({
+                  ...current,
+                  [section.id]: !current[section.id],
+                }))
+              }
+            >
+              <SectionHeader
+                title={`${section.title} · ${section.badges.length}`}
+                action={
+                  <Ionicons
+                    name={openSections[section.id] ? "chevron-up" : "chevron-down"}
+                    size={16}
+                    color={colors.muted}
+                  />
+                }
+              />
+              <View style={styles.sectionIntro}>
+                <Ionicons name={section.icon} size={14} color={accent} />
+                <Text style={[styles.sectionDescription, { color: colors.muted }]}>
+                  {section.description}
+                </Text>
+              </View>
+            </Pressable>
+            {openSections[section.id] ? <View style={styles.list}>
               {section.badges.map((badge) => {
                 const member = badge.memberId
                   ? state.group.members.find(
                       (item) => item.id === badge.memberId,
                     )
                   : undefined;
-                const highlightPerfectDay =
-                  params.highlight === "perfect-day" &&
-                  badge.id === `perfect-days:${state.currentUserId}`;
+                const highlighted =
+                  params.highlight === badge.id ||
+                  (params.highlight === "perfect-day" &&
+                    badge.id === `perfect-days:${state.currentUserId}`);
                 const progress = badge.progress
                   ? Math.min(
                       1,
@@ -348,21 +433,29 @@ export default function BadgesScreen() {
                 return (
                   <Pressable
                     key={badge.id}
-                    disabled={!badge.memberId}
-                    onPress={() =>
-                      badge.memberId &&
-                      router.navigate(`/member/${badge.memberId}` as never)
-                    }
+                    disabled={!showcaseSelection && !badge.memberId}
+                    onPress={() => {
+                      if (showcaseSelection && badge.status === "earned") {
+                        toggleShowcase(badge.id);
+                        return;
+                      }
+                      if (badge.memberId)
+                        router.navigate(`/member-profile/${badge.memberId}` as never);
+                    }}
                   >
                     <Card
                       style={[
                         styles.badge,
                         { borderLeftColor: badge.color },
-                        highlightPerfectDay && {
+                        highlighted && {
                           borderColor: "#D6A82F",
                           backgroundColor: colors.isDark
                             ? "#332B17"
                             : "#FFF9E8",
+                        },
+                        showcaseSelection && showcased.includes(badge.id) && {
+                          borderColor: accent,
+                          borderWidth: 2,
                         },
                       ]}
                     >
@@ -451,14 +544,22 @@ export default function BadgesScreen() {
                           </View>
                         ) : null}
                       </View>
-                      <Text style={[styles.date, { color: colors.faint }]}>
-                        {friendlyDate(badge.anchorDate)}
-                      </Text>
+                      {showcaseSelection && badge.status === "earned" ? (
+                        <Ionicons
+                          name={showcased.includes(badge.id) ? "checkmark-circle" : "ellipse-outline"}
+                          size={20}
+                          color={showcased.includes(badge.id) ? accent : colors.faint}
+                        />
+                      ) : (
+                        <Text style={[styles.date, { color: colors.faint }]}>
+                          {friendlyDate(badge.anchorDate)}
+                        </Text>
+                      )}
                     </Card>
                   </Pressable>
                 );
               })}
-            </View>
+            </View> : null}
           </View>
         ))
       ) : (
@@ -491,6 +592,28 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   summaryTitle: { fontSize: 12, fontWeight: "900" },
+  levelBubble: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  levelNumber: { fontSize: 15, fontWeight: "900" },
+  levelProgressRow: { gap: 4 },
+  levelTrack: { height: 7, borderRadius: 5, overflow: "hidden" },
+  levelFill: { height: "100%", borderRadius: 5 },
+  levelProgressText: { fontSize: 7, fontWeight: "800", textAlign: "right" },
+  nextAim: {
+    minHeight: 30,
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  nextAimText: { flex: 1, fontSize: 8, fontWeight: "900" },
   statusCounts: { flexDirection: "row", gap: 5 },
   statusCount: { flex: 1, minWidth: 0, alignItems: "center" },
   countValue: { fontSize: 14, fontWeight: "900" },

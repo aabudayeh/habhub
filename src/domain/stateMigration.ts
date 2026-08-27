@@ -445,10 +445,17 @@ function repairOrphanedGroupMetrics(state: AppState): AppState {
         state.settings.healthSync.liveStepCombination === "sum"
       ? state.settings.healthSync.liveStepCombination
       : "highest";
+  const storedBackgroundIntervalHours = Number(
+    state.settings.healthSync.backgroundIntervalHours,
+  );
+  const backgroundIntervalHours = Number.isFinite(storedBackgroundIntervalHours)
+    ? Math.max(1, Math.min(12, Math.round(storedBackgroundIntervalHours)))
+    : 6;
   const repairedSettings: AppState["settings"] = {
     ...state.settings,
     healthSync: {
       ...state.settings.healthSync,
+      backgroundIntervalHours,
       dataTypes: {
         ...state.settings.healthSync.dataTypes,
         total_energy:

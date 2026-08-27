@@ -27,6 +27,13 @@ const theme = {
 };
 const today = dateKey();
 const state = createInitialState();
+const todayScreen = read("app/(tabs)/index.tsx");
+
+assert.match(
+  todayScreen,
+  /const heroProgress = tutorialCompletionPreview \? 1 : todayHero\.progress/,
+  "The in-app Featured percentage must use the same partial-goal average as its widget snapshot",
+);
 
 const hero = todayHeroSummary(state, state.currentUserId, today);
 const featured = featuredWidgetSnapshot(
@@ -38,7 +45,25 @@ const featured = featuredWidgetSnapshot(
 );
 assert.equal(featured.id, "__featured__");
 assert.equal(featured.progress, hero.progress);
+assert.equal(
+  featured.progress,
+  hero.goalProgress.length
+    ? hero.goalProgress.reduce((sum, goal) => sum + goal.progress, 0) /
+        hero.goalProgress.length
+    : 0,
+  "Featured progress must average each goal's partial completion like the Status avatar",
+);
+assert.notEqual(
+  featured.progress,
+  hero.total ? hero.met / hero.total : 0,
+  "The seeded partial goals must prove Featured is no longer a binary completed-goal percentage",
+);
 assert.equal(featured.allComplete, hero.allMet);
+assert.equal(
+  featured.deepLink,
+  "paceboard://",
+  "Tapping Featured must open Today rather than Status",
+);
 assert.match(
   featured.dateLabel,
   /\s/,

@@ -246,6 +246,34 @@ assert.match(
   validateGroupChallenge({ ...valid, participantIds: ["creator"] }),
   /at least one friend/i,
 );
+assert.equal(
+  validateGroupChallenge({
+    ...valid,
+    audience: "public",
+    participantIds: ["creator"],
+  }),
+  undefined,
+  "a public challenge starts with its creator and allows instant self-join",
+);
+assert.match(
+  validateGroupChallenge({
+    ...valid,
+    audience: "public",
+    participantIds: ["creator"],
+    participantLimit: 1,
+  }),
+  /limit from 2 to 5,000/i,
+);
+assert.match(
+  validateGroupChallenge({
+    ...valid,
+    audience: "public",
+    participantIds: ["creator"],
+    participantLimit: 5_001,
+  }),
+  /limit from 2 to 5,000/i,
+  "creator-unlimited challenges still need an operational row-size ceiling",
+);
 
 const root = path.resolve(import.meta.dirname, "..");
 const migration = fs.readFileSync(
@@ -338,6 +366,15 @@ const allAcceptedMigration = fs.readFileSync(
   ),
   "utf8",
 );
+const publicChallengeMigration = fs.readFileSync(
+  path.join(
+    root,
+    "supabase",
+    "migrations",
+    "202608270002_public_challenges_and_sync_settlement.sql",
+  ),
+  "utf8",
+);
 const challengeWorker = fs.readFileSync(
   path.join(
     root,
@@ -371,6 +408,10 @@ const badges = fs.readFileSync(
 const badgeScreen = fs.readFileSync(path.join(root, "app", "badges.tsx"), "utf8");
 const memberComparison = fs.readFileSync(
   path.join(root, "app", "member", "[id].tsx"),
+  "utf8",
+);
+const memberProfile = fs.readFileSync(
+  path.join(root, "app", "member-profile", "[id].tsx"),
   "utf8",
 );
 const challengeEditor = fs.readFileSync(
@@ -562,10 +603,12 @@ assert.match(
   /challengeCloud\.save\(input\)/,
   "friend-created challenges must update the shared read model immediately",
 );
-assert.ok(
-  memberComparison.indexOf("<Card style={styles.badgeShowcaseCard}") <
-    memberComparison.indexOf('title="Choose up to 5 showcase badges"'),
-  "the self-profile badge chooser belongs below the badge showcase card",
+assert.match(memberProfile, /title="Badge showcase"/);
+assert.match(memberProfile, /selectShowcase: "true"/);
+assert.match(
+  memberProfile,
+  /accessibilityLabel=\{isSelf \? "Edit badge showcase" : "View all badges"\}/,
+  "the profile must expose a compact, accessible showcase editor",
 );
 assert.match(
   challengeEditor,
@@ -663,7 +706,16 @@ assert.match(
   /target === undefined[\s\S]{0,300}openChallengeGoalProgress/,
   "open challenges must use each member's tracker-goal bar instead of a leader percentage",
 );
-assert.match(groupScreen, /openCompetition[\s\S]{0,180}"Your goal"[\s\S]{0,80}"Their goal"/);
+assert.match(
+  groupScreen,
+  /row\.member\.lastDataSyncedAt[\s\S]{0,900}row\.mode === "exact" \? row\.valueLabel : "—"/,
+  "challenge rows must put last-sync under the name and the scored value above the progress bar",
+);
+assert.doesNotMatch(
+  groupScreen,
+  /"Your goal"[\s\S]{0,80}"Their goal"/,
+  "challenge cards no longer label the same progress bar as your/their goal",
+);
 assert.match(groupScreen, /<ChallengeCompletionCelebration/);
 assert.match(groupScreen, /const CHALLENGE_CELEBRATION_SCAN_LIMIT = 500/);
 assert.match(
@@ -674,6 +726,49 @@ assert.match(periodMigration, /alter column target_value drop not null/i);
 assert.match(periodMigration, /add column if not exists end_date date/i);
 assert.match(periodMigration, /create or replace function public\.group_challenge_exact_standings/i);
 assert.match(periodMigration, /create or replace function public\.stage_group_challenge_notifications/i);
+assert.match(publicChallengeMigration, /create or replace function public\.list_public_challenges/i);
+assert.match(publicChallengeMigration, /create or replace function public\.save_public_challenge/i);
+assert.match(
+  publicChallengeMigration,
+  /using gin \(accepted_participant_ids\)[\s\S]{0,100}audience = 'public'/i,
+  "background public challenge projection needs an accepted-participant GIN index",
+);
+assert.match(
+  publicChallengeMigration,
+  /\(select auth\.uid\(\)\) = any\(participant_ids\)[\s\S]{0,180}audience = 'public'/i,
+  "public challenge metadata must use an RPC while participant detail remains opt-in and RLS protected",
+);
+assert.match(
+  publicChallengeMigration,
+  /last_data_synced_at/i,
+  "challenge results must wait for post-deadline participant sync and name outstanding accounts",
+);
+assert.match(publicChallengeMigration, /Waiting for challenge results/i);
+assert.match(publicChallengeMigration, /v_waiting_names/i);
+assert.match(
+  publicChallengeMigration,
+  /then challenge_projection\.synced_at/i,
+  "public settlement must require the challenge-specific aggregate sync checkpoint",
+);
+assert.match(
+  publicChallengeMigration,
+  /left join public\.public_challenge_participant_syncs challenge_projection/i,
+);
+assert.match(
+  publicChallengeMigration,
+  /jsonb_array_length\(p_rows\) > 500[\s\S]{0,1800}jsonb_to_recordset\(p_rows\)[\s\S]{0,5200}on conflict \(challenge_id, occurrence_date, user_id\) do update/i,
+  "public aggregate publishing must be bounded and set-based",
+);
+assert.match(
+  publicChallengeMigration,
+  /cardinality\(v_challenge\.participant_ids\) >= 5000/i,
+  "creator-unlimited public challenges need an operational anti-row-bloat ceiling",
+);
+assert.match(
+  publicChallengeMigration,
+  /name_group_challenge_acceptance[\s\S]{0,1200}accepted your challenge/i,
+  "acceptance events must name the accepting account",
+);
 assert.match(
   notificationAmbiguityRepair,
   /on conflict on constraint group_notification_events_recipient_id_event_key_key do nothing/i,

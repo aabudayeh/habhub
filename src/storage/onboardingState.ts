@@ -1,5 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
+import type { LandingPage } from "@/src/types";
+
 const PREFIX = "metric-rally-onboarding-complete-v1:";
 const DRAFT_PREFIX = "metric-rally-onboarding-draft-v3:";
 
@@ -23,7 +25,7 @@ export type OnboardingDraft = {
   weeklyChange: string;
   sex: "female" | "male" | "unspecified";
   activity: "sedentary" | "light" | "moderate" | "very_active" | "athlete";
-  landingPage: "index" | "log" | "group" | "insights" | "chat" | "gym" | "calendar" | "journal" | "performance" | "status";
+  landingPage: LandingPage;
   darkMode: boolean;
   startShortTour: boolean;
   healthHistoryDays: 30 | 90 | 365 | 730;

@@ -224,7 +224,7 @@ export function featuredWidgetSnapshot(
     showProgressOutline:
       state.settings.showFeaturedCardProgressOutline !== false,
     completionIcon,
-    deepLink: "paceboard://status",
+    deepLink: "paceboard://",
     goals,
   };
 }

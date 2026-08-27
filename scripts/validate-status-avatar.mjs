@@ -167,8 +167,8 @@ assert.match(
 );
 assert.match(
   seedSource,
-  /statusDateNavigatorCollapsed: false/,
-  "new users must start with the Status date controls visible",
+  /statusDateNavigatorCollapsed: true/,
+  "new users must start with the Status date controls compact",
 );
 assert.match(
   statusPageSource,

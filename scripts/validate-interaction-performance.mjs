@@ -138,7 +138,7 @@ assert.match(
 );
 assert.match(
   chatScreen,
-  /\{message\.text \? \([\s\S]{0,180}translate=\{false\}[\s\S]{0,80}selectable[\s\S]{0,500}\{message\.text\}/,
+  /message\.text \? \(\s*<Text[\s\S]{0,180}translate=\{false\}[\s\S]{0,80}selectable[\s\S]{0,500}\{message\.text\}/,
   "chat message copy must remain intentionally available",
 );
 

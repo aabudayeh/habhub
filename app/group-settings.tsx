@@ -1240,7 +1240,7 @@ export default function GroupSettings() {
             ]}
           >
             <Pressable
-              onPress={() => router.navigate(`/member/${member.id}` as never)}
+              onPress={() => router.navigate(`/member-profile/${member.id}` as never)}
             >
               <Avatar
                 initials={member.initials}
@@ -1251,7 +1251,7 @@ export default function GroupSettings() {
             </Pressable>
             <View style={styles.copy}>
               <Pressable
-                onPress={() => router.navigate(`/member/${member.id}` as never)}
+                onPress={() => router.navigate(`/member-profile/${member.id}` as never)}
               >
                 <Text translate={false} style={[styles.name, { color: colors.ink }]}>
                   {member.name}
