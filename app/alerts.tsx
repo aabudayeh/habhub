@@ -1,7 +1,12 @@
 import { Ionicons } from "@expo/vector-icons";
-import { router, useLocalSearchParams } from "expo-router";
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Pressable, StyleSheet, View } from "react-native";
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  AppState as NativeAppState,
+  Pressable,
+  StyleSheet,
+  View,
+} from "react-native";
 
 import { AppText as Text } from "@/src/components/AppText";
 import { BadgeMedallion } from "@/src/components/BadgeMedallion";
@@ -27,6 +32,16 @@ import { useAppColors, useGroupAccent } from "@/src/theme";
 
 type Filter = "all" | AlertCategory | "badges";
 
+function badgeSetSignature(ids: readonly string[]) {
+  let hash = 2166136261;
+  for (const value of [...ids].sort())
+    for (let index = 0; index < value.length; index += 1) {
+      hash ^= value.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+  return `${ids.length}:${(hash >>> 0).toString(36)}`;
+}
+
 export default function Alerts() {
   const { scope } = useLocalSearchParams<{ scope?: string }>();
   const { state, updateSettings } = useApp();
@@ -35,6 +50,10 @@ export default function Alerts() {
   const locale = useLocale();
   const t = useTranslation();
   const [filter, setFilter] = useState<Filter>("all");
+  const filterRef = useRef<Filter>("all");
+  const commitVisibleTabRef = useRef<(filter: Filter) => void>(() => undefined);
+  const visibleBadgeStateRef = useRef({ scopeKey: "", signature: "" });
+  const unreadBadgeRef = useRef(false);
   const initializedFeedKey = useRef<string | undefined>(undefined);
   const alertScope = scope === "group" ? "group" : "personal";
   const hasGroup = isCloudGroupId(state.group.id);
@@ -103,7 +122,12 @@ export default function Alerts() {
       return;
     initializedFeedKey.current = feedKey;
     const latestUnread = allAlerts.find((alert) => alert.unread === true);
-    setFilter(latestUnread?.category ?? "all");
+    setFilter(
+      latestUnread?.category === "achievement"
+        ? "badges"
+        : latestUnread?.category ??
+            (unreadBadgeRef.current ? "badges" : "all"),
+    );
   }, [
     alertScope,
     allAlerts,
@@ -111,20 +135,14 @@ export default function Alerts() {
     groupFeedLoaded,
     groupFeedLoading,
   ]);
-  const chooseFilter = (next: Filter) => {
-    initializedFeedKey.current = feedKey;
-    setFilter(next);
-  };
-  const unreadEventIds = useMemo(
-    () =>
-      groupFeedEvents
-        .filter((event) => !event.readAt)
-        .map((event) => event.id),
-    [groupFeedEvents],
-  );
-  const visibleUnreadEventIds = useMemo(() => {
-    if (filter === "all") return unreadEventIds;
-    if (filter === "challenge")
+  useEffect(() => {
+    filterRef.current = filter;
+  }, [filter]);
+  const unreadEventIdsForFilter = useCallback((targetFilter: Filter) => {
+    // "All" is an overview, not permission to clear tabs the user has not
+    // opened. A category becomes read only after that category itself leaves
+    // the screen (tab switch, navigation blur, or app backgrounding).
+    if (targetFilter === "challenge")
       return groupFeedEvents
         .filter(
           (event) =>
@@ -133,7 +151,7 @@ export default function Alerts() {
             event.kind !== "social_comment",
         )
         .map((event) => event.id);
-    if (filter === "lead")
+    if (targetFilter === "lead")
       return groupFeedEvents
         .filter(
           (event) =>
@@ -143,22 +161,16 @@ export default function Alerts() {
         )
         .map((event) => event.id);
     return [];
-  }, [filter, groupFeedEvents, unreadEventIds]);
-  useEffect(() => {
-    if (visibleUnreadEventIds.length === 0) return;
-    // Viewing All or a matching category is the durable read boundary.
-    const timer = setTimeout(() => {
-      void markGroupFeedRead(visibleUnreadEventIds).catch(() => undefined);
-    }, 600);
-    return () => clearTimeout(timer);
-  }, [markGroupFeedRead, visibleUnreadEventIds]);
-  const visibleActivityReadCursors = useMemo(() => {
+  }, [groupFeedEvents]);
+  const activityReadCursorsForFilter = useCallback((targetFilter: Filter) => {
     const latestByKey: Record<string, string> = {};
     allAlerts.forEach((alert) => {
       if (
         alert.unread !== true ||
         !alert.readCursorKey ||
-        (filter !== "all" && alert.category !== filter)
+        targetFilter === "all" ||
+        targetFilter === "badges" ||
+        alert.category !== targetFilter
       )
         return;
       if (
@@ -168,29 +180,77 @@ export default function Alerts() {
         latestByKey[alert.readCursorKey] = alert.createdAt;
     });
     return latestByKey;
-  }, [allAlerts, filter]);
-  const visibleActivityReadCursorKey = JSON.stringify(
-    visibleActivityReadCursors,
-  );
-  useEffect(() => {
-    if (!Object.keys(visibleActivityReadCursors).length) return;
-    const timer = setTimeout(() => {
+  }, [allAlerts]);
+  const commitVisibleTab = useCallback((targetFilter: Filter) => {
+    if (targetFilter === "all") return;
+    if (targetFilter === "badges") {
+      const { scopeKey, signature } = visibleBadgeStateRef.current;
+      if (!scopeKey || !signature) return;
+      const currentByScope =
+        state.settings.notifications.badgeNotificationReadSignatureByScope ?? {};
+      if (currentByScope[scopeKey] === signature) return;
+      updateSettings({
+        notifications: {
+          ...state.settings.notifications,
+          badgeNotificationReadSignatureByScope: {
+            ...currentByScope,
+            [scopeKey]: signature,
+          },
+        },
+      });
+      return;
+    }
+    const eventIds = unreadEventIdsForFilter(targetFilter);
+    if (eventIds.length)
+      void markGroupFeedRead(eventIds).catch(() => undefined);
+    const cursors = activityReadCursorsForFilter(targetFilter);
+    if (Object.keys(cursors).length)
       updateSettings({
         notifications: {
           ...state.settings.notifications,
           activityReadAtByCategory: {
             ...state.settings.notifications.activityReadAtByCategory,
-            ...visibleActivityReadCursors,
+            ...cursors,
           },
         },
       });
-    }, 600);
-    return () => clearTimeout(timer);
-    // The serialized key is the stable boundary; the object is intentionally
-    // recreated from the currently visible unread activity cards.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [updateSettings, visibleActivityReadCursorKey]);
-  const badges = useMemo(
+  }, [
+    activityReadCursorsForFilter,
+    markGroupFeedRead,
+    state.settings.notifications,
+    unreadEventIdsForFilter,
+    updateSettings,
+  ]);
+  commitVisibleTabRef.current = commitVisibleTab;
+  const chooseFilter = (next: Filter) => {
+    initializedFeedKey.current = feedKey;
+    if (next === filterRef.current) return;
+    commitVisibleTabRef.current(filterRef.current);
+    filterRef.current = next;
+    setFilter(next);
+  };
+  useFocusEffect(
+    useCallback(
+      () => {
+        // Capturing the scoped feed makes a group/account change close the
+        // prior viewing lifecycle before the replacement feed is shown.
+        const viewedFeedKey = feedKey;
+        return () => {
+          void viewedFeedKey;
+          commitVisibleTabRef.current(filterRef.current);
+        };
+      },
+      [feedKey],
+    ),
+  );
+  useEffect(() => {
+    const subscription = NativeAppState.addEventListener("change", (next) => {
+      if (next !== "active")
+        commitVisibleTabRef.current(filterRef.current);
+    });
+    return () => subscription.remove();
+  }, [feedKey]);
+  const badgeCatalog = useMemo(
     () =>
       buildBadges(
         state,
@@ -219,8 +279,7 @@ export default function Alerts() {
             return rightProgress - leftProgress;
           }
           return right.anchorDate.localeCompare(left.anchorDate);
-        })
-        .slice(0, 12),
+        }),
     [
       alertScope,
       badgeAnchor,
@@ -230,7 +289,30 @@ export default function Alerts() {
       state,
     ],
   );
+  const badges = useMemo(() => badgeCatalog.slice(0, 12), [badgeCatalog]);
   const showBadges = filter === "badges";
+  const badgeReadScope = `${alertScope}:${state.currentUserId}:${state.group.id}`;
+  const earnedBadgeIds = useMemo(
+    () =>
+      badgeCatalog
+        .filter((badge) => badge.status === "earned")
+        .map(
+          (badge) =>
+            `${badge.id}|${badge.earnedCount ?? ""}|${badge.anchorDate}`,
+        ),
+    [badgeCatalog],
+  );
+  const badgeSignature = badgeSetSignature(earnedBadgeIds);
+  const hasUnreadBadges =
+    earnedBadgeIds.length > 0 &&
+    state.settings.notifications.badgeNotificationReadSignatureByScope?.[
+      badgeReadScope
+    ] !== badgeSignature;
+  unreadBadgeRef.current = hasUnreadBadges;
+  visibleBadgeStateRef.current = {
+    scopeKey: badgeReadScope,
+    signature: badgeSignature,
+  };
 
   return (
     <Screen>
@@ -328,12 +410,15 @@ export default function Alerts() {
           />
           {unreadCategories.has("challenge") ? <View style={styles.filterUnreadDot} /> : null}
         </View> : null}
-        <Chip
-          label="Badge cabinet"
-          icon="ribbon-outline"
-          selected={filter === "badges"}
-          onPress={() => chooseFilter("badges")}
-        />
+        <View style={styles.filterChip}>
+          <Chip
+            label="Badge cabinet"
+            icon="ribbon-outline"
+            selected={filter === "badges"}
+            onPress={() => chooseFilter("badges")}
+          />
+          {hasUnreadBadges ? <View style={styles.filterUnreadDot} /> : null}
+        </View>
       </View>
 
       {showBadges ? (
@@ -452,6 +537,26 @@ export default function Alerts() {
                       router.navigate({
                         pathname: "/metric-detail",
                         params: { metric: alert.metricId, date: alert.localDate },
+                      } as never);
+                      return;
+                    }
+                    if (
+                      alert.interactionSurface === "leaderboard_log" &&
+                      alert.targetType === "metric_entry" &&
+                      alert.entryId
+                    ) {
+                      router.navigate({
+                        pathname: "/leaderboard-detail",
+                        params: {
+                          period: "custom",
+                          anchor: alert.localDate,
+                          ...(alert.metricId ? { metrics: alert.metricId } : {}),
+                          // The reacted-to log belongs to the notification
+                          // recipient, not the actor shown on the card.
+                          memberId: state.currentUserId,
+                          entryId: alert.entryId,
+                          logFocusAt: String(Date.now()),
+                        },
                       } as never);
                       return;
                     }

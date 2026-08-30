@@ -28,6 +28,9 @@ export function useBadgeChallengeInputs(
   const [publicViewerStandings, setPublicViewerStandings] = useState(
     new Map<string, ChallengeViewerStanding>(),
   );
+  const [loadedPublicPlacementKey, setLoadedPublicPlacementKey] = useState<
+    string | undefined
+  >(() => (loadPublicPlacements ? undefined : ""));
 
   const publicPlacementOccurrences = useMemo(() => {
     if (!loadPublicPlacements) return [];
@@ -69,24 +72,26 @@ export function useBadgeChallengeInputs(
     let active = true;
     if (!publicPlacementRequests.length) {
       setPublicViewerStandings(new Map());
+      setLoadedPublicPlacementKey(publicPlacementChallengeKey);
       return () => {
         active = false;
       };
     }
     void loadChallengeViewerStandings(publicPlacementRequests)
       .then((standings) => {
-        if (active)
-          setPublicViewerStandings(
-            new Map(
-              standings.map((standing) => [
-                challengeSettlementKey(
-                  standing.challengeId,
-                  standing.occurrenceDate,
-                ),
-                standing,
-              ]),
-            ),
-          );
+        if (!active) return;
+        setPublicViewerStandings(
+          new Map(
+            standings.map((standing) => [
+              challengeSettlementKey(
+                standing.challengeId,
+                standing.occurrenceDate,
+              ),
+              standing,
+            ]),
+          ),
+        );
+        setLoadedPublicPlacementKey(publicPlacementChallengeKey);
       })
       .catch(() => undefined);
     return () => {
@@ -132,10 +137,19 @@ export function useBadgeChallengeInputs(
     ],
     [publicChallengePlacements, settledChallengeResults.placements],
   );
+  const initialLoadComplete =
+    challengeCloud.initialLoadComplete &&
+    !challengeCloud.error &&
+    settledChallengeResults.authoritativeLoadComplete &&
+    (!loadPublicPlacements ||
+      (publicCloud.initialLoadComplete &&
+        !publicCloud.error &&
+        loadedPublicPlacementKey === publicPlacementChallengeKey));
 
   return {
     challenges: challengeCloud.challenges,
     placements,
     settledOccurrenceKeys: settledChallengeResults.occurrenceKeys,
+    initialLoadComplete,
   };
 }

@@ -66,8 +66,14 @@ const socialReactionRpcMigration = read(
 const socialCheerMigration = read(
   "supabase/migrations/202608300001_social_cheers.sql",
 );
+const socialOriginMigration = read(
+  "supabase/migrations/202608300003_social_notification_origin.sql",
+);
 const challengeRankMigration = read(
   "supabase/migrations/202608270005_challenge_rank_rewards.sql",
+);
+const durablePushWorker = read(
+  "supabase/functions/challenge-notifications/index.ts",
 );
 
 assert.doesNotThrow(() => assertPushDeliveryComplete({ sent: 2 }));
@@ -194,7 +200,10 @@ assert.match(alertDomain, /challengeOccurrenceDate: event\.occurrenceDate/);
 assert.match(alertDomain, /groupId: event\.groupId/);
 assert.match(alertDomain, /unread: !event\.readAt/);
 assert.match(alerts, /latestUnread = allAlerts\.find/);
-assert.match(alerts, /setFilter\(latestUnread\?\.category \?\? "all"\)/);
+assert.match(
+  alerts,
+  /latestUnread\?\.category === "achievement"[\s\S]{0,180}unreadBadgeRef\.current \? "badges" : "all"/,
+);
 assert.match(alerts, /unreadCategories\.has\("challenge"\)/);
 assert.match(
   alerts,
@@ -858,7 +867,11 @@ assert.match(
   /const FEED_PAGE_SIZE = Platform\.OS === "web" \? 30 : 12/,
   "the native feed must mount a smaller first batch without reducing the web feed",
 );
-assert.match(recapScreen, /const feedState = useDeferredValue\(state\)/);
+assert.match(
+  recapScreen,
+  /useResponsiveRecapFeed\(\s*feedScopeKey,\s*deriveFeed,\s*feedAuthority,?\s*\)/,
+  "native feed state must use the responsive privacy-authorized cached derivation path",
+);
 assert.match(recapScreen, /visibleFeed\.slice\(0, renderLimit\)/);
 assert.match(recapScreen, /const MemoFeedCard = React\.memo/);
 assert.match(
@@ -906,7 +919,7 @@ assert.match(
 );
 assert.match(
   groupSocialClient,
-  /\.rpc\("set_group_social_reaction"[\s\S]{0,300}p_reaction:/,
+  /\.rpc\("set_group_social_reaction"[\s\S]{0,360}p_reaction:[\s\S]{0,100}p_surface:/,
   "the client must use the server-owned reaction mutation instead of a direct RLS upsert",
 );
 assert.doesNotMatch(
@@ -1003,6 +1016,31 @@ assert.match(canonicalChatPreview, /Shared an attachment/);
 assert.match(canonicalChatPreview, /localizedChatFallback/);
 assert.match(canonicalChatPreview, /hasAttachment \? " · Attachment" : ""/);
 assert.match(edge, /event\.eventType === "social_reaction"[\s\S]{0,180}socialReactions/);
+assert.match(socialOriginMigration, /source_surface in \('feed', 'leaderboard_log'\)/);
+assert.match(
+  socialOriginMigration,
+  /create or replace function public\.set_group_social_reaction\([\s\S]{0,180}p_surface text/,
+);
+assert.match(durablePushWorker, /from\("push_dispatch_events"\)/);
+assert.doesNotMatch(
+  durablePushWorker,
+  /\.eq\("category", "challenge"\)/,
+  "the server retry pass must not strand social interaction outbox rows",
+);
+assert.match(
+  socialOriginMigration,
+  /v_surface = 'leaderboard_log'[\s\S]{0,1200}'route', '\/leaderboard-detail'/,
+);
+assert.match(
+  socialOriginMigration,
+  /insert into public\.push_dispatch_events[\s\S]{0,600}'social_reaction'/,
+  "social reactions must enter the canonical closed-app push outbox",
+);
+assert.match(
+  socialOriginMigration,
+  /insert into public\.push_dispatch_events[\s\S]{0,600}'social_comment'/,
+  "social comments must enter the canonical closed-app push outbox",
+);
 assert.match(notifications, /title="Feed interactions"/);
 assert.match(groupSettings, /groupNotificationPreferences\.socialReactions/);
 assert.match(groupNotificationHook, /event\.kind === "social_reaction"[\s\S]{0,100}preferences\?\.socialReactions === false/);
@@ -1203,14 +1241,21 @@ assert.equal(
   )?.unread,
   false,
 );
-assert.match(alerts, /markGroupFeedRead\(visibleUnreadEventIds\)/);
+assert.match(alerts, /commitVisibleTabRef\.current\(filterRef\.current\)/);
 assert.match(alerts, /activityReadAtByCategory/);
-assert.match(alerts, /visibleActivityReadCursors/);
+assert.match(alerts, /activityReadCursorsForFilter/);
 assert.match(
   alerts,
-  /if \(filter === "all"\) return unreadEventIds/,
-  "the All tab must still mark every visible unread group event",
+  /if \(targetFilter === "all"\) return/,
+  "the All tab must not clear category tabs the user never opened",
 );
+assert.match(alerts, /badgeNotificationReadSignatureByScope/);
+assert.match(alerts, /hasUnreadBadges \? <View style=\{styles\.filterUnreadDot\}/);
+assert.match(
+  alerts,
+  /interactionSurface === "leaderboard_log"[\s\S]{0,550}pathname: "\/leaderboard-detail"/,
+);
+assert.match(alerts, /pathname: "\/\(tabs\)\/recapfeed"/);
 assert.match(alerts, /filter === "challenge"/);
 assert.match(
   alerts,

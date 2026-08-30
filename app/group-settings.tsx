@@ -53,11 +53,23 @@ import { formatMetricValue } from "@/src/domain/metrics";
 import type {
   GroupChallenge,
   GroupNotificationPreferences,
+  Visibility,
 } from "@/src/types";
+
+const trackerVisibilityOptions: readonly {
+  value: Visibility;
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+}[] = [
+  { value: "group", label: "Exact values", icon: "people-outline" },
+  { value: "status", label: "Goal status only", icon: "eye-outline" },
+  { value: "private", label: "Private", icon: "lock-closed-outline" },
+];
 
 export default function GroupSettings() {
   const {
     state,
+    updateMetric,
     updateGroupMetric,
     deleteGroupMetric,
     setMemberRole,
@@ -119,6 +131,7 @@ export default function GroupSettings() {
     state.group.themeColor ?? palette.primary,
   );
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [visibilityOpen, setVisibilityOpen] = useState(false);
   const [notificationMembersOpen, setNotificationMembersOpen] = useState(false);
   const [notificationTrackersOpen, setNotificationTrackersOpen] = useState(false);
   const [joiningChallengeId, setJoiningChallengeId] = useState<string>();
@@ -169,6 +182,28 @@ export default function GroupSettings() {
   const notificationMetricIds = (
     groupNotificationPreferences.metricIds ?? notifications.metricIds
   ).filter((metricId) => availableNotificationMetricIds.has(metricId));
+  const personalMetricsById = useMemo(
+    () => new Map(state.metrics.map((metric) => [metric.id, metric])),
+    [state.metrics],
+  );
+  const visibilityMetrics = useMemo(
+    () =>
+      groupMetrics
+        .map((metric) => personalMetricsById.get(metric.id))
+        .filter((metric): metric is NonNullable<typeof metric> => Boolean(metric)),
+    [groupMetrics, personalMetricsById],
+  );
+  const visibilityCounts = useMemo(
+    () =>
+      visibilityMetrics.reduce(
+        (counts, metric) => {
+          counts[metric.defaultVisibility] += 1;
+          return counts;
+        },
+        { group: 0, status: 0, private: 0 } as Record<Visibility, number>,
+      ),
+    [visibilityMetrics],
+  );
   const today = dateKey();
   const activeChallenges = useMemo(() => {
     const bySource = new Map<string, GroupChallenge>();
@@ -835,6 +870,93 @@ export default function GroupSettings() {
         ) : null}
       </Card>
 
+      <SectionHeader title="Visibility" />
+      <Card style={styles.visibilityCard}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ expanded: visibilityOpen }}
+          onPress={() => setVisibilityOpen((open) => !open)}
+          style={styles.visibilityDisclosure}
+        >
+          <View style={[styles.icon, { backgroundColor: colors.primarySoft }]}>
+            <Ionicons name="eye-outline" size={18} color={accent} />
+          </View>
+          <View style={styles.copy}>
+            <Text style={[styles.name, { color: colors.ink }]}>What can this group see?</Text>
+            <Text translate={false} style={[styles.meta, { color: colors.muted }]}>
+              {visibilityCounts.group} {t("Exact values")} · {visibilityCounts.status} {t("Goal status only")} · {visibilityCounts.private} {t("Private")}
+            </Text>
+          </View>
+          <Ionicons
+            name={visibilityOpen ? "chevron-up" : "chevron-down"}
+            size={17}
+            color={colors.muted}
+          />
+        </Pressable>
+        {visibilityOpen ? (
+          <View style={[styles.visibilityBody, { borderTopColor: colors.border }]}>
+            {visibilityMetrics.map((metric, index) => (
+              <View
+                key={metric.id}
+                style={[
+                  styles.visibilityRow,
+                  index < visibilityMetrics.length - 1 && {
+                    borderBottomColor: colors.border,
+                    borderBottomWidth: StyleSheet.hairlineWidth,
+                  },
+                ]}
+              >
+                <View style={[styles.visibilityMetricIcon, { backgroundColor: `${metric.color}18` }]}>
+                  <Ionicons
+                    name={metric.icon as keyof typeof Ionicons.glyphMap}
+                    size={15}
+                    color={metric.color}
+                  />
+                </View>
+                <Text
+                  translate={false}
+                  numberOfLines={1}
+                  style={[styles.visibilityMetricName, { color: colors.ink }]}
+                >
+                  {localizeMetricName(language, metric)}
+                </Text>
+                <View style={styles.visibilityChoices}>
+                  {trackerVisibilityOptions.map((option) => {
+                    const selected = metric.defaultVisibility === option.value;
+                    return (
+                      <Pressable
+                        key={option.value}
+                        accessibilityRole="button"
+                        accessibilityLabel={`${localizeMetricName(language, metric)}: ${t(option.label)}`}
+                        accessibilityState={{ selected }}
+                        onPress={() =>
+                          updateMetric(metric.id, {
+                            defaultVisibility: option.value,
+                          })
+                        }
+                        style={[
+                          styles.visibilityChoice,
+                          {
+                            backgroundColor: selected ? colors.primarySoft : colors.canvas,
+                            borderColor: selected ? accent : colors.border,
+                          },
+                        ]}
+                      >
+                        <Ionicons
+                          name={option.icon}
+                          size={13}
+                          color={selected ? accent : colors.muted}
+                        />
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </View>
+            ))}
+          </View>
+        ) : null}
+      </Card>
+
       <SectionHeader title="Group name" />
       <Card style={styles.groupNameCard}>
         <View style={styles.groupNameRow}>
@@ -1426,6 +1548,47 @@ const styles = StyleSheet.create({
   chip: { minHeight: 30, borderWidth: 1, borderRadius: 10, paddingHorizontal: 9, alignItems: "center", justifyContent: "center" },
   chipText: { fontSize: 8, fontWeight: "900" },
   notificationHelp: { fontSize: 8, lineHeight: 12, marginTop: 4 },
+  visibilityCard: { padding: 0, overflow: "hidden" },
+  visibilityDisclosure: {
+    minHeight: 56,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+  },
+  visibilityBody: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 11,
+  },
+  visibilityRow: {
+    minHeight: 48,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+  visibilityMetricIcon: {
+    width: 29,
+    height: 29,
+    borderRadius: 9,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  visibilityMetricName: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 9,
+    fontWeight: "900",
+  },
+  visibilityChoices: { flexDirection: "row", alignItems: "center", gap: 4 },
+  visibilityChoice: {
+    width: 29,
+    height: 29,
+    borderWidth: 1,
+    borderRadius: 9,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   groupNameCard: { gap: 5 },
   groupNameRow: { flexDirection: "row", alignItems: "center", gap: 7 },
   groupNameInput: {

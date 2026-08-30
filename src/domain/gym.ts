@@ -112,6 +112,28 @@ export function gymSessionWorkoutSample(session: GymSession) {
   };
 }
 
+/** Shared, human-readable workout context for every linked tracker entry. */
+export function gymSessionEntryNote(session: GymSession) {
+  const completedSets = completedGymSets(session.exercises);
+  const exerciseNames = [
+    ...new Set(
+      session.exercises
+        .filter((exercise) => exercise.sets.some((set) => set.completed))
+        .map((exercise) => exercise.name.trim())
+        .filter(Boolean),
+    ),
+  ];
+  const parts = [
+    `Workout session`,
+    `${completedSets} completed set${completedSets === 1 ? "" : "s"}`,
+    `${Math.round(trainingVolumeKg(session.exercises))} kg volume`,
+    `${Math.round(Math.max(0, session.durationMinutes) * 10) / 10} min`,
+    exerciseNames.length ? exerciseNames.join(", ") : undefined,
+    session.notes?.trim() || undefined,
+  ];
+  return parts.filter(Boolean).join(" · ");
+}
+
 export function completedGymSets(exercises: GymExercise[]) {
   return exercises.reduce(
     (total, exercise) =>
@@ -787,13 +809,18 @@ const METS: Record<GymIntensity, number> = {
 
 export function totalGymRestSeconds(exercises: GymExercise[]) {
   return exercises.reduce(
-    (total, exercise) =>
-      total +
-      Math.max(0, exercise.restAfterSeconds ?? 0) +
-      exercise.sets.reduce(
-        (sum, set) => sum + Math.max(0, set.restSeconds ?? 0),
-        0,
-      ),
+    (total, exercise) => {
+      const completedSets = exercise.sets.filter((set) => set.completed);
+      if (!completedSets.length) return total;
+      return (
+        total +
+        Math.max(0, exercise.restAfterSeconds ?? 0) +
+        completedSets.reduce(
+          (sum, set) => sum + Math.max(0, set.restSeconds ?? 0),
+          0,
+        )
+      );
+    },
     0,
   );
 }
@@ -805,21 +832,75 @@ export function totalGymSetWorkSeconds(exercises: GymExercise[]) {
       exercise.sets.reduce(
         (sum, set) =>
           sum +
-          Math.max(0, set.workSeconds ?? 0) +
-          Math.max(0, set.superset?.workSeconds ?? 0),
+          (set.completed
+            ? Math.max(0, set.workSeconds ?? 0) +
+              Math.max(0, set.superset?.workSeconds ?? 0)
+            : 0),
         0,
       ),
     0,
   );
 }
 
+const DEFAULT_UNTIMED_GYM_SET_SECONDS = 3 * 60;
+
+/**
+ * Derives a saved workout's duration from the work the user actually marked
+ * complete. Duration-tracked sets keep their entered minutes exactly; the
+ * conservative legacy three-minute estimate is used only for a completed set
+ * without measured time. This makes mixed cardio/strength workouts additive
+ * instead of letting a blanket `set count x 3` override recorded minutes.
+ */
+export function inferredGymSessionDurationMinutes(exercises: GymExercise[]) {
+  const workSeconds = exercises.reduce((sessionTotal, exercise) => {
+    return (
+      sessionTotal +
+      exercise.sets.reduce((exerciseTotal, set) => {
+        if (!set.completed) return exerciseTotal;
+        const measuredSeconds =
+          Math.max(0, set.workSeconds ?? 0) +
+          Math.max(0, set.superset?.workSeconds ?? 0);
+        if (measuredSeconds > 0) return exerciseTotal + measuredSeconds;
+        return (
+          exerciseTotal +
+          DEFAULT_UNTIMED_GYM_SET_SECONDS * (set.superset ? 2 : 1)
+        );
+      }, 0)
+    );
+  }, 0);
+  const totalSeconds = workSeconds + totalGymRestSeconds(exercises);
+  return Math.round((totalSeconds / 60) * 100) / 100;
+}
+
+/** Pre-duration-input automatic estimate, retained only to migrate old logs. */
+export function legacyInferredGymSessionDurationMinutes(
+  exercises: GymExercise[],
+) {
+  const completedSets = completedGymSets(exercises);
+  const restSeconds = totalGymRestSeconds(exercises);
+  const recordedMinutes =
+    (totalGymSetWorkSeconds(exercises) + restSeconds) / 60;
+  return Math.max(
+    completedSets > 0 ? 1 : 0,
+    recordedMinutes,
+    Math.round(
+      Math.max(
+        completedSets * 3,
+        completedSets * 0.75 + restSeconds / 60,
+      ),
+    ),
+  );
+}
+
 export function gymRestBreakdown(exercises: GymExercise[]) {
   const setRests = exercises.flatMap((exercise) =>
     exercise.sets
+      .filter((set) => set.completed)
       .map((set) => set.restSeconds)
       .filter((value): value is number => value !== undefined && value > 0),
   );
   const exerciseRests = exercises
+    .filter((exercise) => exercise.sets.some((set) => set.completed))
     .map((exercise) => exercise.restAfterSeconds)
     .filter((value): value is number => value !== undefined && value > 0);
   const setRestSeconds = setRests.reduce((sum, value) => sum + value, 0);
@@ -880,10 +961,16 @@ export function averageGymRestSeconds(exercises: GymExercise[]) {
     exercises.reduce(
       (total, exercise) =>
         total +
-        exercise.sets.filter((set) => (set.restSeconds ?? 0) > 0).length,
+        exercise.sets.filter(
+          (set) => set.completed && (set.restSeconds ?? 0) > 0,
+        ).length,
       0,
     ) +
-    exercises.filter((exercise) => (exercise.restAfterSeconds ?? 0) > 0)
+    exercises.filter(
+      (exercise) =>
+        exercise.sets.some((set) => set.completed) &&
+        (exercise.restAfterSeconds ?? 0) > 0,
+    )
       .length;
   return sampleCount
     ? Math.round(breakdown.totalRestSeconds / sampleCount)

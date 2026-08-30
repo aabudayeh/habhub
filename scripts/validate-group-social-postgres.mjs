@@ -6,6 +6,7 @@ const migrations = await Promise.all(
     "supabase/migrations/202608280001_durable_group_log_social_identity.sql",
     "supabase/migrations/202608300001_social_cheers.sql",
     "supabase/migrations/202608300002_group_feed_interaction_notifications.sql",
+    "supabase/migrations/202608300003_social_notification_origin.sql",
   ].map((path) => Deno.readTextFile(new URL(path, root))),
 );
 
@@ -361,6 +362,29 @@ if (
     "Replaying an unchanged reaction created a duplicate recipient event or push.",
   );
 
+await db.query(`
+  select public.set_group_social_reaction(
+    '${groupId}', 'metric_entry', '${entryId}', 'heart', 'leaderboard_log'
+  )
+`);
+if (
+  (await scalar(`
+    select interaction_surface
+      from public.group_notification_events
+     where event_type = 'social_reaction'
+       and target_id = '${entryId}'
+     order by created_at desc limit 1
+  `)) !== "leaderboard_log" ||
+  (await scalar(`
+    select data ->> 'route'
+      from public.push_dispatch_events
+     where event_type = 'social_reaction'
+       and data ->> 'entryId' = '${entryId}'
+     order by expires_at desc limit 1
+  `)) !== "/leaderboard-detail"
+)
+  throw new Error("A Leaderboard-log reaction lost its origin-aware deep link.");
+
 await db.exec(`
   insert into public.group_social_comments (
     group_id, target_type, target_id, user_id, content
@@ -386,6 +410,25 @@ if (
   )) !== "/recapfeed"
 )
   throw new Error("A feed comment push did not route back to the exact feed screen.");
+
+await db.exec(`
+  insert into public.group_social_comments (
+    group_id, target_type, target_id, user_id, content, source_surface
+  ) values (
+    '${groupId}', 'metric_entry', '${entryId}', '${viewerId}',
+    'Leaderboard detail comment', 'leaderboard_log'
+  );
+`);
+if (
+  (await scalar(`
+    select data ->> 'route'
+      from public.push_dispatch_events
+     where event_type = 'social_comment'
+       and data ->> 'entryId' = '${entryId}'
+     order by expires_at desc limit 1
+  `)) !== "/leaderboard-detail"
+)
+  throw new Error("A Leaderboard-log comment lost its origin-aware deep link.");
 
 for (const [type, id] of [
   ["photo_update", photoId],
@@ -527,5 +570,5 @@ if (
   throw new Error("An ambiguous legacy client id was guessed instead of rejected.");
 
 console.log(
-  "Group social PostgreSQL validation passed: canonical identities, comment and reaction delivery, unchanged-reaction idempotency, forged-badge and tied-leader suppression, collision rejection, and privacy fences.",
+  "Group social PostgreSQL validation passed: canonical identities, origin-aware comment and reaction delivery, unchanged-reaction idempotency, forged-badge and tied-leader suppression, collision rejection, and privacy fences.",
 );

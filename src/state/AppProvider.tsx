@@ -97,6 +97,7 @@ import { upgradeStateV21 } from "@/src/domain/stateMigration";
 import { formulaIdentifiers } from "@/src/domain/formula";
 import {
   completedGymSets,
+  gymSessionEntryNote,
   gymSessionDistanceKm,
   gymSessionWorkoutSample,
   gymSessionVisibilityForMetric,
@@ -2356,7 +2357,7 @@ function reducer(state: AppState, action: Action): AppState {
       const inferredStepActivity =
         inferStepCoverageActivityFromGymSession(session);
       const syncedValues = (completedSets > 0 ? [
-        ...(qualifiesAsWorkout ? [{ metricId: "workout", value: true }] : []),
+        { metricId: "workout", value: qualifiesAsWorkout },
         { metricId: "workout_duration", value: session.durationMinutes },
         { metricId: "workout_distance", value: distanceValue },
         { metricId: "exercise", value: calorieValue },
@@ -2367,7 +2368,7 @@ function reducer(state: AppState, action: Action): AppState {
             (item.metricId === "workout" || Number(item.value) > 0),
         );
       const synced = syncedValues
-        .map((item, index): MetricEntry => ({
+        .map((item): MetricEntry => ({
           id: `gym-sync:${session.id}:${item.metricId}`,
           metricId: item.metricId,
           userId: state.currentUserId,
@@ -2382,8 +2383,9 @@ function reducer(state: AppState, action: Action): AppState {
           source: "manual",
           label: session.name,
           stepCoverageActivityKey: inferredStepActivity?.key,
-          note: `Workout session · ${completedSets} sets${session.notes ? ` · ${session.notes}` : ""}`,
-          ...(index === 0 && (session.imageUri || session.imageStoragePath)
+          note: gymSessionEntryNote(session),
+          ...((item.metricId === "workout" || item.metricId === "exercise") &&
+            (session.imageUri || session.imageStoragePath)
             ? {
                 imageUri: session.imageUri,
                 imageStoragePath: session.imageStoragePath,

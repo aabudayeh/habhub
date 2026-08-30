@@ -11,9 +11,15 @@ import {
   completeGymWorkout,
   estimateGymActiveCalories,
   gymExerciseTrackingFields,
+  inferredGymSessionDurationMinutes,
+  legacyInferredGymSessionDurationMinutes,
+  gymSessionEntryNote,
+  gymSessionMetricValue,
   gymSessionWorkoutSample,
   gymSessionVisibilityForMetric,
   setGymExerciseCompletion,
+  totalGymSetWorkSeconds,
+  trainingVolumeKg,
 } from "../src/domain/gym.ts";
 import {
   applyBackgroundGymSession,
@@ -25,6 +31,7 @@ import {
   validBackgroundWorkoutCompletion,
 } from "../src/domain/backgroundWorkoutFinish.ts";
 import { migrateRetiredWorkoutCaloriesEntries } from "../src/domain/workoutCaloriesMigration.ts";
+import { reconcileLinkedGymWorkoutMedia } from "../src/domain/workoutMedia.ts";
 import {
   ANY_RECORDED_WORKOUT_QUALIFICATION,
   DEFAULT_WORKOUT_QUALIFICATION,
@@ -106,6 +113,99 @@ assert.equal(
   ]),
   2.4,
   "only completed set distance may reach Workout distance",
+);
+const mixedDurationExercises = [
+  {
+    ...walkingExercise,
+    sets: [
+      {
+        ...walkingExercise.sets[0],
+        id: "measured-ten-minutes",
+        workSeconds: 10 * 60,
+        distanceKm: 1.4,
+      },
+      {
+        ...walkingExercise.sets[0],
+        id: "pending-forty-minutes",
+        workSeconds: 40 * 60,
+        distanceKm: 7,
+        completed: false,
+      },
+    ],
+  },
+  {
+    id: "strength",
+    exerciseKey: "bench_press",
+    name: "Bench press",
+    sets: [
+      { id: "strength-complete", reps: 8, weightKg: 50, completed: true },
+    ],
+  },
+];
+assert.equal(
+  totalGymSetWorkSeconds(mixedDurationExercises),
+  10 * 60,
+  "planned duration inputs must not enter live or saved totals until their set is complete",
+);
+assert.equal(
+  inferredGymSessionDurationMinutes(mixedDurationExercises),
+  13,
+  "entered duration minutes must remain exact while only untimed completed sets use the three-minute fallback",
+);
+assert.equal(
+  legacyInferredGymSessionDurationMinutes(mixedDurationExercises),
+  10,
+  "legacy auto-duration detection must identify the historical max-based total so an update can replace it with the additive total",
+);
+const expandedDurationExercises = [
+  ...mixedDurationExercises,
+  {
+    ...walkingExercise,
+    id: "added-after-save",
+    sets: [
+      {
+        ...walkingExercise.sets[0],
+        id: "added-five-minutes",
+        workSeconds: 5 * 60,
+        distanceKm: 0.7,
+      },
+    ],
+  },
+];
+assert.equal(
+  inferredGymSessionDurationMinutes(expandedDurationExercises),
+  18,
+  "adding a completed timed exercise to a saved workout must refresh its duration instead of retaining the old total",
+);
+const expandedSession = {
+  id: "updated-workout",
+  userId: "user-a",
+  name: "Mixed workout",
+  localDate: "2026-08-30",
+  recordedAt: "2026-08-30T10:00:00.000Z",
+  durationMinutes: inferredGymSessionDurationMinutes(expandedDurationExercises),
+  visibility: "group",
+  exercises: expandedDurationExercises,
+};
+assert.equal(
+  gymSessionMetricValue(expandedSession, { kind: "session_duration" }),
+  18,
+  "the refreshed duration must be the value projected into Workout duration",
+);
+assert.equal(
+  completedGymDistanceKm(expandedDurationExercises),
+  2.1,
+  "newly completed exercise distance must refresh the saved workout total",
+);
+assert.equal(
+  trainingVolumeKg(expandedDurationExercises),
+  400,
+  "newly completed reps and kg must refresh the saved workout volume",
+);
+assert.match(
+  gymSessionEntryNote(expandedSession),
+  /3 completed sets · 400 kg volume · 18 min · Walking, Bench press/,
+  "every linked workout tracker entry must retain the exercise names and workout totals needed by individual logs",
 );
 const lightWalkCalories = estimateGymActiveCalories(
   { weightKg: 80, heightCm: 180 },
@@ -373,10 +473,12 @@ assert.equal(
 );
 assert.equal(
   backgroundApplied.entries.filter(
-    (entry) => entry.imageUri === "file:///workout-photo.jpg",
+    (entry) =>
+      entry.imageUri === "file:///workout-photo.jpg" &&
+      (entry.metricId === "workout" || entry.metricId === "exercise"),
   ).length,
-  1,
-  "foreground/background workout media must live on exactly one linked entry",
+  2,
+  "foreground/background workout media must independently reference both authorized linked rows",
 );
 assert.ok(
   backgroundApplied.entries.some(
@@ -395,6 +497,64 @@ assert.equal(
   applyBackgroundGymSession(backgroundApplied, backgroundSession),
   backgroundApplied,
   "replayed/retried Finish receipts must be idempotent",
+);
+const shortWorkoutSession = {
+  ...backgroundSession,
+  id: "short-session",
+  name: "Short walk",
+  durationMinutes: 5,
+  distanceKm: 0.4,
+  calories: 24,
+  imageUri: "file:///short-workout.jpg",
+  exercises: [
+    {
+      ...walkingExercise,
+      sets: [
+        {
+          ...walkingExercise.sets[0],
+          id: "short-walk-set",
+          workSeconds: 5 * 60,
+          distanceKm: 0.4,
+        },
+      ],
+    },
+  ],
+};
+assert.equal(
+  workoutQualifies(
+    gymSessionWorkoutSample(shortWorkoutSession),
+    DEFAULT_WORKOUT_QUALIFICATION,
+  ),
+  false,
+  "the regression fixture must remain below every default Workout threshold",
+);
+const shortWorkoutApplied = applyBackgroundGymSession(
+  backgroundState,
+  shortWorkoutSession,
+);
+for (const [metricId, expectedValue] of [
+  ["workout", false],
+  ["workout_duration", 5],
+  ["workout_distance", 0.4],
+  ["exercise", 24],
+]) {
+  assert.equal(
+    shortWorkoutApplied.entries.find(
+      (entry) => entry.id === `gym-sync:short-session:${metricId}`,
+    )?.value,
+    expectedValue,
+    `a sub-threshold saved workout must still publish its ${metricId} individual log without incorrectly completing the Workout goal`,
+  );
+}
+const shortActiveEnergyEntry = shortWorkoutApplied.entries.find(
+  (entry) => entry.id === "gym-sync:short-session:exercise",
+);
+assert.equal(shortActiveEnergyEntry?.imageUri, "file:///short-workout.jpg");
+assert.match(shortActiveEnergyEntry?.note ?? "", /Short|Walking|1 completed set/);
+assert.equal(
+  shortWorkoutApplied.entries.filter((entry) => entry.imageUri).length,
+  2,
+  "Workout and Active energy must each carry the shared photo reference even for a sub-threshold workout",
 );
 const completionReceipt = {
   ownerId: "user-a",
@@ -1072,6 +1232,10 @@ const seed = fs.readFileSync("src/data/seed.ts", "utf8");
 const catalog = fs.readFileSync("src/domain/trackerCatalog.ts", "utf8");
 const onboarding = fs.readFileSync("app/onboarding.tsx", "utf8");
 const provider = fs.readFileSync("src/state/AppProvider.tsx", "utf8");
+const cloudProvider = fs.readFileSync(
+  "src/cloud/CloudSyncProvider.tsx",
+  "utf8",
+);
 const migration = fs.readFileSync("src/domain/stateMigration.ts", "utf8");
 const editor = fs.readFileSync("app/metric-editor.tsx", "utf8");
 const health = fs.readFileSync("src/domain/health.ts", "utf8");
@@ -1086,6 +1250,10 @@ const workoutTimerPresence = fs.readFileSync(
   "utf8",
 );
 const metricDetail = fs.readFileSync("app/metric-detail.tsx", "utf8");
+const leaderboardDetail = fs.readFileSync(
+  "app/leaderboard-detail.tsx",
+  "utf8",
+);
 const types = fs.readFileSync("src/types.ts", "utf8");
 const workoutNotifications = fs.readFileSync(
   "src/notifications/workoutTimer.ts",
@@ -1210,14 +1378,19 @@ const workoutTemplateOptionsAt = gymScreen.search(/>\s*Template options\s*</);
 const workoutSaveAt = gymScreen.indexOf('id="workout-save"');
 assert.ok(
   workoutPhotoEditorAt >= 0 &&
-    workoutPhotoEditorAt < workoutTemplateOptionsAt &&
-    workoutTemplateOptionsAt < workoutSaveAt,
-  "the workout-photo action must stay visible immediately above Template options in the live workout",
+    workoutPhotoEditorAt < workoutSaveAt &&
+    workoutSaveAt < workoutTemplateOptionsAt,
+  "the live workout actions must remain ordered photo, Save or Update workout, then Template options",
 );
 assert.match(
   gymScreen,
   /templateOptionsMenu: \{ marginTop: (?:8|9|10|11|12) \}/,
-  "the photo and Template options cards must retain a visible standard gap",
+  "Template options must retain a standard gap below Save or Update workout",
+);
+assert.match(
+  gymScreen,
+  /bottomActions: \{[\s\S]{0,120}marginTop: (?:8|9|10|11|12)/,
+  "Save or Update workout must retain a standard gap below the photo card",
 );
 assert.match(
   gymScreen,
@@ -1225,7 +1398,7 @@ assert.match(
   "the workout photo must persist with the canonical saved workout projection",
 );
 const workoutDetailImageSourceAt = metricDetail.indexOf(
-  "const workoutImageUri = coverageEntry?.imageUri ?? session.imageUri;",
+  "const workoutImageUri =",
 );
 const workoutDetailImageAt = metricDetail.indexOf(
   "uri={workoutImageUri}",
@@ -1234,6 +1407,31 @@ const workoutDetailImageAt = metricDetail.indexOf(
 assert.ok(
   workoutDetailImageSourceAt >= 0 && workoutDetailImageAt > workoutDetailImageSourceAt,
   "saved workout cards must render their canonical attached image with the normal session details",
+);
+assert.match(
+  metricDetail,
+  /if \(entry\.imageUri \|\| entry\.imageStoragePath\)[\s\S]{0,100}gymImageEntryByOwnerAndSession\.set\(gymKey, entry\)/,
+  "linked workout images must be indexed independently of their metric",
+);
+assert.match(
+  metricDetail,
+  /const workoutImageUri =[\s\S]{0,240}gymImageEntryByOwnerAndSession\.get/,
+  "Workout details must resolve a photo carried by its linked Active energy entry",
+);
+assert.match(
+  leaderboardDetail,
+  /const sharedImageUri =[\s\S]{0,180}entry\.imageUri[\s\S]{0,180}workoutBreakdown\.find/,
+  "a shared Workout row must resolve the one image carried by its authorized linked detail row",
+);
+assert.match(
+  leaderboardDetail,
+  /stageChatShareImage\([\s\S]{0,220}sharedImageUri/,
+  "the linked workout image must follow the Workout attachment into Chat",
+);
+assert.match(
+  leaderboardDetail,
+  /\{sharedImageUri \? \([\s\S]{0,120}uri=\{sharedImageUri\}/,
+  "the linked workout image must render in leaderboard details",
 );
 assert.match(
   workoutTimerPresence,
@@ -1330,6 +1528,90 @@ assert.match(
   "foreground workout saves must project completed distance",
 );
 assert.match(
+  provider,
+  /\{ metricId: "workout", value: qualifiesAsWorkout \}[\s\S]{0,180}\{ metricId: "workout_duration", value: session\.durationMinutes \}[\s\S]{0,180}\{ metricId: "workout_distance", value: distanceValue \}[\s\S]{0,180}\{ metricId: "exercise", value: calorieValue \}/,
+  "foreground saves must publish detailed linked logs even when qualification leaves the Workout value false",
+);
+assert.match(
+  backgroundFinish,
+  /\{ metricId: "workout", value: qualifiesAsWorkout \}[\s\S]{0,180}\{ metricId: "workout_duration", value: session\.durationMinutes \}[\s\S]{0,180}\{ metricId: "workout_distance", value: distanceValue \}[\s\S]{0,180}\{ metricId: "exercise", value: calorieValue \}/,
+  "background Finish must retain the same sub-threshold individual logs",
+);
+for (const workoutProjection of [provider, backgroundFinish]) {
+  assert.match(
+    workoutProjection,
+    /note: gymSessionEntryNote\(session\)/,
+    "every generated workout metric entry must retain the shared workout details",
+  );
+  assert.match(
+    workoutProjection,
+    /item\.metricId === "workout" \|\| item\.metricId === "exercise"[\s\S]{0,180}imageUri/,
+    "Workout and Active energy must independently carry the same workout photo",
+  );
+}
+assert.match(
+  cloudProvider,
+  /reconcileLinkedGymWorkoutMedia\([\s\S]{0,120}state\.entries,[\s\S]{0,60}userId/,
+  "cloud upload must repair linked historical Workout and Active energy media metadata",
+);
+assert.match(
+  cloudProvider,
+  /uploadedEntryMediaByUri[\s\S]{0,700}uploadedEntryMediaByUri\.get\(uri\)[\s\S]{0,300}uploadedEntryMediaByUri\.set\(uri, upload\)/,
+  "linked workout rows must share one physical media upload",
+);
+assert.match(
+  cloudProvider,
+  /isLinkedGymWorkoutMedia[\s\S]{0,500}imageStoragePath: source\.imageStoragePath/,
+  "uploaded media metadata must merge back into both linked local rows",
+);
+const independentlyVisibleWorkoutMedia = reconcileLinkedGymWorkoutMedia(
+  [
+    {
+      id: "gym-sync:privacy-session:workout",
+      metricId: "workout",
+      userId: "owner",
+      value: true,
+      localDate: "2026-08-30",
+      recordedAt: "2026-08-30T10:00:00.000Z",
+      visibility: "group",
+      source: "manual",
+      imageUri: "file:///workout.jpg",
+      imageStoragePath: "owner/entry/workout.jpg",
+    },
+    {
+      id: "gym-sync:privacy-session:exercise",
+      metricId: "exercise",
+      userId: "owner",
+      value: 120,
+      localDate: "2026-08-30",
+      recordedAt: "2026-08-30T10:00:00.000Z",
+      visibility: "private",
+      source: "manual",
+    },
+  ],
+  "owner",
+);
+assert.deepEqual(
+  independentlyVisibleWorkoutMedia.map((entry) => ({
+    metricId: entry.metricId,
+    visibility: entry.visibility,
+    imageStoragePath: entry.imageStoragePath,
+  })),
+  [
+    {
+      metricId: "workout",
+      visibility: "group",
+      imageStoragePath: "owner/entry/workout.jpg",
+    },
+    {
+      metricId: "exercise",
+      visibility: "private",
+      imageStoragePath: "owner/entry/workout.jpg",
+    },
+  ],
+  "linked rows must share only media metadata while retaining independent tracker privacy",
+);
+assert.match(
   backgroundFinish,
   /applyBackgroundGymSession[\s\S]{0,1500}\{ metricId: "workout_distance", value: distanceValue \}/,
   "background Finish must project the same completed distance",
@@ -1404,6 +1686,16 @@ assert.match(
 );
 assert.match(
   gymScreen,
+  /const completedExerciseCount = exercises\.filter\([\s\S]{0,180}exercise\.sets\.every\(\(set\) => set\.completed\)/,
+  "the live summary must count fully completed exercises rather than infer them from set totals",
+);
+assert.match(
+  gymScreen,
+  /t\(`\$\{completedExerciseCount\} of \$\{exercises\.length\} exercises · \$\{completedSets\} sets/,
+  "the live workout header must compactly show X of Y exercises, including zero counts",
+);
+assert.match(
+  gymScreen,
   /loggedSessionsForDate\.reduce\(/,
   "Logged Today totals must exclude incomplete saved plans",
 );
@@ -1431,6 +1723,16 @@ assert.match(
   gymScreen,
   /label=\{selectedSession \? "Update workout" : "Save workout"\}/,
   "The primary action must distinguish updating a logged workout from saving a new one",
+);
+assert.match(
+  gymScreen,
+  /const exerciseDerivedDuration =[\s\S]{0,80}inferredGymSessionDurationMinutes\(exercises\)[\s\S]{0,700}legacyInferredGymSessionDurationMinutes\(selectedSession\.exercises\)[\s\S]{0,500}selectedSession\.durationMinutes -[\s\S]{0,100}selectedSessionExerciseDuration[\s\S]{0,600}durationManual && Number\.isFinite\(typedDuration\)/,
+  "live workout minutes must follow completed exercise inputs unless the user explicitly overrides them",
+);
+assert.match(
+  gymScreen,
+  /durationMinutes: preciseDuration,[\s\S]{0,80}durationManual,[\s\S]{0,180}distanceKm: completedGymDistanceKm\(sessionExercises\)/,
+  "updated workout sessions must persist recalculated duration and distance alongside all edited sets",
 );
 assert.match(
   gymScreen,

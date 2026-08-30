@@ -657,6 +657,8 @@ export type GroupNotificationEvent = {
     | "group_todo";
   targetId?: string;
   reaction?: "heart" | "thumbs_up" | "thumbs_down" | "cheer";
+  /** Return a social interaction to the UI surface where it was made. */
+  interactionSurface?: "feed" | "leaderboard_log";
   createdAt: string;
   readAt?: string;
 };
@@ -925,6 +927,8 @@ export type GymSession = {
   /** Seconds removed from every guided set for phone-placement time. */
   setStartDelaySeconds?: number;
   durationMinutes: number;
+  /** True only when the user overrode exercise-derived workout minutes. */
+  durationManual?: boolean;
   /** Sum of completed exercise-set distances in this saved session. */
   distanceKm?: number;
   calories?: number;
@@ -1349,6 +1353,8 @@ export type NotificationSettings = {
   chatReadAtByConversation?: Record<string, string>;
   /** Private read cursors for app-owned Today/Leaderboard activity cards. */
   activityReadAtByCategory?: Record<string, string>;
+  /** Compact earned-badge set acknowledged after leaving the cabinet tab. */
+  badgeNotificationReadSignatureByScope?: Record<string, string>;
   missedGoalNudges?: boolean;
   streakAlerts?: boolean;
   /** Private on-device estimates derived from the user's own period-start history. */

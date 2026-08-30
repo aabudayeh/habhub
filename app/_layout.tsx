@@ -40,6 +40,7 @@ import {
   TutorialCloudSyncBoundary,
   useCloudSyncStatus,
 } from "@/src/cloud/CloudSyncProvider";
+import { useBadgeChallengeInputs } from "@/src/cloud/useBadgeChallengeInputs";
 import {
   HealthSyncProvider,
   TutorialHealthSyncBoundary,
@@ -71,6 +72,7 @@ import {
   syncProductivityNotifications,
   refreshPushTokenRegistration,
   recoverPushRegistrationOnForeground,
+  syncChallengeBadgeAwardNotifications,
   updatePushPreferences,
 } from "@/src/notifications/push";
 import { subscribeLocalNotificationRefresh } from "@/src/notifications/localRefresh";
@@ -126,9 +128,18 @@ export default function RootLayout() {
 }
 
 function AppLocalizationBridge() {
-  const { state } = useApp();
+  const { state, hydrated } = useApp();
+  const auth = useAuth();
   const tutorial = useTutorial();
   const tutorialActive = Boolean(tutorial.activeSession);
+  const challengeBadgeBridgeKey =
+    hydrated &&
+    auth.status === "signedIn" &&
+    auth.user?.id === state.currentUserId &&
+    state.settings.notifications.pushEnabled &&
+    state.settings.notifications.badgesAndWinners
+      ? `${state.currentUserId}:${state.group.id}`
+      : undefined;
   return (
     <LocalizationProvider language={state.settings.language}>
       <WebDocumentMetadata darkMode={state.settings.darkMode} />
@@ -144,12 +155,43 @@ function AppLocalizationBridge() {
         <HealthSyncProvider>
           <BatteryOptimizationPrompt />
           <CloudSyncProvider>
+            {challengeBadgeBridgeKey ? (
+              <ChallengeBadgeNotificationBridge
+                key={challengeBadgeBridgeKey}
+              />
+            ) : null}
             <RootNavigator />
           </CloudSyncProvider>
         </HealthSyncProvider>
       )}
     </LocalizationProvider>
   );
+}
+
+function ChallengeBadgeNotificationBridge() {
+  const { state } = useApp();
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const anchor = dateKey();
+  const inputs = useBadgeChallengeInputs(
+    state.group.id,
+    state.currentUserId,
+    anchor,
+  );
+  useEffect(() => {
+    if (!inputs.initialLoadComplete) return;
+    void syncChallengeBadgeAwardNotifications(stateRef.current, dateKey(), {
+      challenges: inputs.challenges,
+      placements: inputs.placements,
+      settledOccurrenceKeys: inputs.settledOccurrenceKeys,
+    }).catch(() => undefined);
+  }, [
+    inputs.challenges,
+    inputs.initialLoadComplete,
+    inputs.placements,
+    inputs.settledOccurrenceKeys,
+  ]);
+  return null;
 }
 
 function RootNavigator() {
@@ -718,6 +760,7 @@ function RootNavigator() {
           pushEnabled: state.settings.notifications.pushEnabled,
           groupMetricActivity:
             state.settings.notifications.groupMetricActivity,
+          socialReactions: state.settings.notifications.socialReactions,
           leadChanges: state.settings.notifications.leadChanges,
           metricIds: state.settings.notifications.metricIds,
           chatMessages: state.settings.notifications.chatMessages,
@@ -725,6 +768,8 @@ function RootNavigator() {
           challenges: state.settings.notifications.challenges,
           badgesAndWinners:
             state.settings.notifications.badgesAndWinners,
+          reminders: state.settings.notifications.reminders,
+          streakAlerts: state.settings.notifications.streakAlerts,
           quietHoursEnabled:
             state.settings.notifications.quietHoursEnabled,
           quietHoursStart: state.settings.notifications.quietHoursStart,
@@ -741,12 +786,15 @@ function RootNavigator() {
       state.settings.language,
       state.settings.notifications.pushEnabled,
       state.settings.notifications.groupMetricActivity,
+      state.settings.notifications.socialReactions,
       state.settings.notifications.leadChanges,
       state.settings.notifications.metricIds,
       state.settings.notifications.chatMessages,
       state.settings.notifications.groupMembership,
       state.settings.notifications.challenges,
       state.settings.notifications.badgesAndWinners,
+      state.settings.notifications.reminders,
+      state.settings.notifications.streakAlerts,
       state.settings.notifications.quietHoursEnabled,
       state.settings.notifications.quietHoursStart,
       state.settings.notifications.quietHoursEnd,

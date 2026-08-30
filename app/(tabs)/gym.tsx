@@ -62,13 +62,14 @@ import {
   exerciseTrend,
   formatGymDuration,
   gymExerciseTrackingFields,
+  inferredGymSessionDurationMinutes,
+  legacyInferredGymSessionDurationMinutes,
   gymSessionClockBounds,
   gymSessionTimeBreakdown,
   gymRecap,
   muscleGroupStats,
   recommendedRestSeconds,
   setGymExerciseCompletion,
-  totalGymRestSeconds,
   totalGymSetWorkSeconds,
   trainingVolumeKg,
   workoutTrackingModeForFields,
@@ -205,6 +206,7 @@ type StoredWorkoutDraft = {
   sessionId: string;
   sessionName: string;
   duration: string;
+  durationManual?: boolean;
   calories: string;
   calorieCalculationMode: GymCalorieCalculationMode;
   intensity: GymIntensity;
@@ -590,6 +592,7 @@ function GymScreen() {
   const [sessionId, setSessionId] = useState(() => uniqueId("gym"));
   const [sessionName, setSessionName] = useState("Workout");
   const [duration, setDuration] = useState("");
+  const [durationManual, setDurationManual] = useState(false);
   const [calories, setCalories] = useState("");
   const [calorieCalculationMode, setCalorieCalculationMode] =
     useState<GymCalorieCalculationMode>("session_met");
@@ -1403,6 +1406,11 @@ function GymScreen() {
     [sessions],
   );
   const completedSets = completedGymSets(exercises);
+  const completedExerciseCount = exercises.filter(
+    (exercise) =>
+      exercise.sets.length > 0 &&
+      exercise.sets.every((set) => set.completed),
+  ).length;
   const plannedSetCount = exercises.reduce(
     (total, exercise) => total + exercise.sets.length,
     0,
@@ -1418,21 +1426,40 @@ function GymScreen() {
       ? "Workout in progress"
       : "Exercises to complete";
   const volume = trainingVolumeKg(exercises);
-  const loggedRestSeconds = totalGymRestSeconds(exercises);
-  const recordedWorkoutMinutes =
-    (totalGymSetWorkSeconds(exercises) + loggedRestSeconds) / 60;
+  const exerciseDerivedDuration =
+    inferredGymSessionDurationMinutes(exercises);
+  const selectedSessionExerciseDuration = selectedSession
+    ? inferredGymSessionDurationMinutes(selectedSession.exercises)
+    : 0;
+  const selectedSessionUsedLegacyAutoDuration = Boolean(
+    selectedSession &&
+      selectedSession.durationManual === undefined &&
+      Math.abs(
+        selectedSession.durationMinutes -
+          legacyInferredGymSessionDurationMinutes(selectedSession.exercises),
+      ) < 0.02,
+  );
+  const savedDurationAdjustment =
+    selectedSession &&
+    !durationManual &&
+    !selectedSessionUsedLegacyAutoDuration
+      ? selectedSession.durationMinutes -
+        selectedSessionExerciseDuration
+      : 0;
+  const automaticDuration =
+    Math.round(
+      Math.max(0, exerciseDerivedDuration + savedDurationAdjustment) * 100,
+    ) / 100;
+  const typedDuration = duration.trim() ? Number(duration) : Number.NaN;
   const inferredDuration =
-    Number(duration) ||
-    Math.max(
-      completedSets > 0 ? 1 : 0,
-      recordedWorkoutMinutes,
-      Math.round(
-        Math.max(
-          completedSets * 3,
-          completedSets * 0.75 + loggedRestSeconds / 60,
-        ),
-      ),
-    );
+    durationManual && Number.isFinite(typedDuration)
+      ? Math.max(0, typedDuration)
+      : automaticDuration;
+  const durationInputValue = durationManual
+    ? duration
+    : automaticDuration > 0
+      ? String(Math.round(automaticDuration * 10) / 10)
+      : "";
   const typedCalories = calories.trim() ? Number(calories) : Number.NaN;
   const estimatedCalories = Number.isFinite(typedCalories)
     ? Math.max(0, typedCalories)
@@ -1597,7 +1624,13 @@ function GymScreen() {
     setWorkoutTimer(null);
     setSessionId(session.id);
     setSessionName(session.name);
-    setDuration(session.durationMinutes ? String(session.durationMinutes) : "");
+    const storedDurationIsManual = session.durationManual === true;
+    setDuration(
+      storedDurationIsManual && session.durationMinutes
+        ? String(session.durationMinutes)
+        : "",
+    );
+    setDurationManual(storedDurationIsManual);
     const storedCaloriesAreManual =
       session.caloriesManual ?? (session.calorieCalculationMode === undefined);
     setCalories(
@@ -1633,6 +1666,7 @@ function GymScreen() {
     setWorkoutTimer(null);
     setSessionId(uniqueId("gym"));
     setDuration("");
+    setDurationManual(false);
     setCalories("");
     setCalorieCalculationMode("session_met");
     setIntensity("moderate");
@@ -1789,6 +1823,7 @@ function GymScreen() {
         setSessionId(draft.sessionId);
         setSessionName(draft.sessionName);
         setDuration(draft.duration);
+        setDurationManual(draft.durationManual === true);
         setCalories(draft.calories);
         setCalorieCalculationMode(draft.calorieCalculationMode);
         setIntensity(draft.intensity);
@@ -1875,6 +1910,7 @@ function GymScreen() {
         sessionId,
         sessionName,
         duration,
+        durationManual,
         calories,
         calorieCalculationMode,
         intensity,
@@ -1913,6 +1949,7 @@ function GymScreen() {
     calorieCalculationMode,
     calories,
     duration,
+    durationManual,
     exercises,
     intensity,
     localDate,
@@ -2035,6 +2072,7 @@ function GymScreen() {
       void configureWorkoutTimerNotification().catch(() => undefined);
     const now = Date.now();
     setDuration("");
+    setDurationManual(false);
     setTimerNow(now);
     setWorkoutTimer({
       mode: configuredTimerMode,
@@ -2550,6 +2588,7 @@ function GymScreen() {
       pausedSeconds: timing?.pausedSeconds ?? selectedSession?.pausedSeconds,
       setStartDelaySeconds,
       durationMinutes: preciseDuration,
+      durationManual,
       distanceKm: completedGymDistanceKm(sessionExercises),
       calories: sessionCompletedSets ? sessionCalories : undefined,
       calorieCalculationMode,
@@ -2565,7 +2604,9 @@ function GymScreen() {
     sessionImageDirty.current = false;
     setExercises(sessionExercises);
     setDuration(
-      preciseDuration ? String(Math.round(preciseDuration * 10) / 10) : "",
+      durationManual && preciseDuration
+        ? String(Math.round(preciseDuration * 10) / 10)
+        : "",
     );
     setWorkoutTimer(null);
     Alert.alert(
@@ -2695,19 +2736,9 @@ function GymScreen() {
       return;
     }
     const sessionDuration =
-      Number(duration) ||
-      Math.max(
-        completedSets > 0 ? 1 : 0,
-        (totalGymSetWorkSeconds(exercises) +
-          totalGymRestSeconds(exercises)) /
-          60,
-        Math.round(
-          Math.max(
-            completedSets * 3,
-            completedSets * 0.75 + totalGymRestSeconds(exercises) / 60,
-          ),
-        ),
-      );
+      durationManual && Number.isFinite(typedDuration)
+        ? Math.max(0, typedDuration)
+        : inferredGymSessionDurationMinutes(exercises);
     persistSession(exercises, sessionDuration);
   }
 
@@ -3904,10 +3935,13 @@ function GymScreen() {
                 <View style={styles.field}>
                   <Text style={[styles.label, { color: colors.muted }]}>Minutes</Text>
                   <TextInput
-                    value={duration}
-                    onChangeText={setDuration}
+                    value={durationInputValue}
+                    onChangeText={(value) => {
+                      setDuration(value);
+                      setDurationManual(Boolean(value.trim()));
+                    }}
                     keyboardType="number-pad"
-                    placeholder={completedSets ? String(completedSets * 3) : "0"}
+                    placeholder="0"
                     placeholderTextColor={colors.faint}
                     style={[styles.input, { color: colors.ink, borderColor: colors.border }]}
                   />
@@ -4135,7 +4169,7 @@ function GymScreen() {
                 ) : (
                   <View style={styles.summaryActions}>
                     <Text style={[styles.summary, { color: accent }]}>
-                      {completedSets} sets · {Math.round(volume).toLocaleString(locale)} kg
+                      {t(`${completedExerciseCount} of ${exercises.length} exercises · ${completedSets} sets · ${Math.round(volume).toLocaleString(locale)} kg`)}
                     </Text>
                     {plannedSetCount > 0 &&
                     !allWorkoutSetsComplete &&
@@ -4774,6 +4808,18 @@ function GymScreen() {
                     </Pressable>
                   ) : null}
                 </View>
+                <TutorialTarget id="workout-save">
+                <View style={styles.bottomActions}>
+                  <View style={styles.primaryActionCell}>
+                    <Button
+                      label={selectedSession ? "Update workout" : "Save workout"}
+                      icon="checkmark"
+                      size="small"
+                      onPress={saveDay}
+                    />
+                  </View>
+                </View>
+                </TutorialTarget>
                 <View
                   style={[
                     styles.templateMenu,
@@ -4866,18 +4912,6 @@ function GymScreen() {
                     </View>
                   ) : null}
                 </View>
-                <TutorialTarget id="workout-save">
-                <View style={styles.bottomActions}>
-                  <View style={styles.primaryActionCell}>
-                    <Button
-                      label={selectedSession ? "Update workout" : "Save workout"}
-                      icon="checkmark"
-                      size="small"
-                      onPress={saveDay}
-                    />
-                  </View>
-                </View>
-                </TutorialTarget>
               </>
             ) : null}
           </>
@@ -6189,7 +6223,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 8,
-    marginVertical: 4,
+    marginTop: 10,
   },
   actionCell: { width: "48%", flexGrow: 1 },
   primaryActionCell: { flex: 1 },

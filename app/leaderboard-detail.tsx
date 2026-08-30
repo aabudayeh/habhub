@@ -253,7 +253,11 @@ export default function LeaderboardDetail() {
         }),
     [visibleEntries],
   );
-  const social = useGroupSocialEngagement(state.group.id, socialTargets);
+  const social = useGroupSocialEngagement(
+    state.group.id,
+    socialTargets,
+    "leaderboard_log",
+  );
   const available = useMemo(
     () =>
       (state.group.metricConfiguration ?? []).filter(
@@ -354,7 +358,7 @@ export default function LeaderboardDetail() {
     );
     setOpenLogs((current) => ({ ...current, [entry.userId]: true }));
     setHighlightedEntryId(entry.id);
-    const timer = setTimeout(() => setHighlightedEntryId(undefined), 4_000);
+    const timer = setTimeout(() => setHighlightedEntryId(undefined), 5_000);
     return () => clearTimeout(timer);
   }, [params.entryId, params.logFocusAt, visibleEntries]);
 
@@ -1017,6 +1021,12 @@ function LogRow({
   const reactions = targetKey
     ? social.reactionsByTarget.get(targetKey) ?? []
     : [];
+  // Workout photos live on one linked detail row so a single upload can serve
+  // Workout and Active energy without duplicating the image in cloud storage.
+  // Reuse that authorized sibling for both this row and its Chat attachment.
+  const sharedImageUri =
+    entry.imageUri ??
+    workoutBreakdown.find((detail) => detail.imageUri?.trim())?.imageUri;
   const react = (reaction: GroupSocialReactionKind) => {
     if (!socialTarget) return;
     void social.react(socialTarget, reaction).catch((reason) =>
@@ -1040,7 +1050,7 @@ function LogRow({
       state.currentUserId,
       state.group.id,
       attachment,
-      entry.imageUri,
+      sharedImageUri,
     );
     router.navigate({
       pathname: "/(tabs)/chat",
@@ -1227,9 +1237,9 @@ function LogRow({
           </View>
         ) : null}
       </View>
-      {entry.imageUri ? (
+      {sharedImageUri ? (
         <ExpandableImage
-          uri={entry.imageUri}
+          uri={sharedImageUri}
           thumbnailStyle={styles.logImage}
         />
       ) : null}

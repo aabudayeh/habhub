@@ -3519,10 +3519,16 @@ export async function pushCloudWorkspace(
     ...statusDates,
     ...explicitlyDeletedLocalDates,
   ];
-  // The fast checkpoint above already published and stamped the current
-  // leaderboard window. Reuse it for routine saves; commit a second version
-  // only after every explicit correction/backfill slice is durable.
-  const activityCommit = supplementalDateBatches.length > 0
+  // The fast checkpoint above deliberately makes compact totals available
+  // before slower item-detail reconciliation. A newly inserted/updated raw
+  // meal or workout marks another activity change *after* that checkpoint.
+  // Always consume that marker once the detail row is durable, otherwise a
+  // peer can refresh from the early status broadcast, see only a daily total,
+  // and never receive a second invalidation for the individual log. The
+  // revision-checked RPC is a cheap no-op when an upsert affected only a
+  // private row or a trigger found no material shared change.
+  const activityCommit =
+    supplementalDateBatches.length > 0 || entriesToUpsert.length > 0
     ? await commitActivity(activityCommitDates)
     : fastRecentCheckpoint;
   const completedAudit = historicalSummaryAuditByGroup.get(auditKey);

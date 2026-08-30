@@ -46,6 +46,20 @@ export const MAX_PENDING_LOCAL_NOTIFICATIONS = 64;
 
 export const WEB_REMINDER_LATE_GRACE_MS = 4 * 60 * 1000;
 
+/** A late-day nudge that remains useful for midnight-style and custom days. */
+export function streakProtectionReminderTime(dayEndTime?: string) {
+  const match = /^(\d{2}):(\d{2})$/.exec(dayEndTime ?? "00:00");
+  if (!match) return "20:00";
+  const endMinutes = Number(match[1]) * 60 + Number(match[2]);
+  // Midnight/early-morning day boundaries describe sleep accounting, not a
+  // useful time to remind somebody to take a walk or finish a tracker.
+  if (endMinutes < 7 * 60) return "20:00";
+  const reminderMinutes = Math.max(12 * 60, endMinutes - 2 * 60);
+  return `${String(Math.floor(reminderMinutes / 60)).padStart(2, "0")}:${String(
+    reminderMinutes % 60,
+  ).padStart(2, "0")}`;
+}
+
 /** Keep just-due PWA reminders publishable across a short suspend/retry. */
 export function webReminderTriggerCanStillPublish(
   triggerAt: number,

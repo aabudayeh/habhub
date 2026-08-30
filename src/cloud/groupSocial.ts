@@ -18,6 +18,10 @@ export type GroupSocialReactionKind =
   | "thumbs_down"
   | "cheer";
 
+/** Screen where an interaction was made. The server stores this only to route
+ * the recipient back to the same representation; it never affects access. */
+export type GroupSocialInteractionSurface = "feed" | "leaderboard_log";
+
 export type GroupSocialReaction = {
   groupId: string;
   targetType: GroupSocialTargetType;
@@ -305,6 +309,7 @@ export async function saveGroupSocialReaction(input: {
   target: GroupSocialTarget;
   userId: string;
   reaction?: GroupSocialReactionKind;
+  surface: GroupSocialInteractionSurface;
 }) {
   if (!supabase) throw new Error("Sign in to react to a shared item.");
   const { data, error } = await supabase.rpc("set_group_social_reaction", {
@@ -312,6 +317,7 @@ export async function saveGroupSocialReaction(input: {
     p_target_type: input.target.type,
     p_target_id: input.target.id,
     p_reaction: input.reaction ?? null,
+    p_surface: input.surface,
   });
   if (error) throw cloudError(error);
   const row = Array.isArray(data) ? data[0] : data;
@@ -324,6 +330,7 @@ export async function addGroupSocialComment(input: {
   target: GroupSocialTarget;
   userId: string;
   content: string;
+  surface: GroupSocialInteractionSurface;
 }) {
   if (!supabase) throw new Error("Sign in to comment on a shared item.");
   const content = input.content.trim();
@@ -336,6 +343,7 @@ export async function addGroupSocialComment(input: {
       target_id: input.target.id,
       user_id: input.userId,
       content,
+      source_surface: input.surface,
     })
     .select(
       "id, group_id, target_type, target_id, user_id, content, created_at, updated_at",

@@ -16,6 +16,7 @@ import {
   notificationTitle,
   planLocalNotificationReconciliation,
   quietHoursAdjustedDateTime,
+  streakProtectionReminderTime,
   WEB_REMINDER_LATE_GRACE_MS,
   webReminderTriggerCanStillPublish,
   workoutActionMatchesActiveGeneration,
@@ -266,6 +267,9 @@ const workoutSignatureInput = {
   body: "1:00 elapsed · Finish set",
   phase: "work",
 };
+assert.equal(streakProtectionReminderTime("00:00"), "20:00");
+assert.equal(streakProtectionReminderTime("23:00"), "21:00");
+assert.equal(streakProtectionReminderTime("06:30"), "20:00");
 
 assert.equal(
   webReminderTriggerCanStillPublish(1_000_000 - WEB_REMINDER_LATE_GRACE_MS, 1_000_000),
@@ -559,6 +563,18 @@ const healthBackgroundSource = fs.readFileSync(
   "utf8",
 );
 const layoutSource = fs.readFileSync("app/_layout.tsx", "utf8");
+const badgeChallengeInputsSource = fs.readFileSync(
+  "src/cloud/useBadgeChallengeInputs.ts",
+  "utf8",
+);
+const settledChallengeResultsSource = fs.readFileSync(
+  "src/cloud/useSettledChallengeResults.ts",
+  "utf8",
+);
+const publicChallengesSource = fs.readFileSync(
+  "src/cloud/usePublicChallenges.ts",
+  "utf8",
+);
 const authSource = fs.readFileSync("src/auth/AuthProvider.tsx", "utf8");
 const settingsSource = fs.readFileSync("app/notifications.tsx", "utf8");
 const metricEditorSource = fs.readFileSync("app/metric-editor.tsx", "utf8");
@@ -624,6 +640,53 @@ assert.match(
   /reconcileLocalNotifications\([\s\S]{0,80}GOAL_IDS,[\s\S]{0,160}LOCAL_NOTIFICATION_BUDGETS\.goals/,
 );
 assert.match(source, /notificationKind: 'goal-reminder'/);
+assert.match(source, /notificationKind: 'streak-guard'/);
+assert.match(source, /streakProtectionReminderTime\(state\.settings\.dayEndTime\)/);
+assert.match(source, /metricStreakStats\([\s\S]{0,180}previousDate/);
+assert.match(source, /notificationKind: 'habhub-update'/);
+assert.match(source, /notificationKind: 'badge-award'/);
+assert.match(source, /buildBadges\(previousState[\s\S]{0,800}buildBadges\(nextState/);
+assert.match(source, /badge\.category !== 'competition'/);
+assert.doesNotMatch(
+  source,
+  /buildBadges\((?:previousState|nextState), localDate, \[\]/,
+  "state-only logs must not pretend an empty challenge list is authoritative",
+);
+assert.match(
+  source,
+  /buildBadges\([\s\S]{0,180}inputs\.challenges,[\s\S]{0,120}inputs\.placements,[\s\S]{0,100}inputs\.settledOccurrenceKeys/,
+  "challenge badge awards must use the immutable settlement inputs",
+);
+assert.match(source, /CHALLENGE_BADGE_OBSERVATIONS/);
+assert.match(source, /Establish an authoritative baseline after this release/);
+assert.match(source, /pendingChallengeBadgeAwards/);
+assert.match(source, /syncChallengeBadgeAwardNotifications/);
+assert.match(source, /const pendingBadgeAwards = new Map/);
+assert.match(source, /InteractionManager\.runAfterInteractions\(finish\)/);
+assert.match(source, /setTimeout\(finish, deadlineMs\)/);
+assert.match(
+  layoutSource,
+  /ChallengeBadgeNotificationBridge[\s\S]{0,900}useBadgeChallengeInputs\([\s\S]{0,900}syncChallengeBadgeAwardNotifications/,
+  "the root bridge must observe authoritative result refreshes without waiting for the badge screen",
+);
+assert.match(
+  badgeChallengeInputsSource,
+  /settledChallengeResults\.authoritativeLoadComplete/,
+);
+assert.match(
+  badgeChallengeInputsSource,
+  /loadedPublicPlacementKey === publicPlacementChallengeKey/,
+);
+assert.match(
+  settledChallengeResultsSource,
+  /authoritativeLoadComplete: authoritativelyLoadedGroupId === groupId/,
+);
+assert.match(publicChallengesSource, /initialLoadComplete/);
+assert.match(
+  source,
+  /previousState: pending\?\.previousState \?\? candidate\.previousState[\s\S]{0,100}nextState: candidate\.nextState/,
+  "rapid logs must preserve the pre-burst baseline while the newest badge state wins",
+);
 assert.match(source, /scheduledSemantics\.has\(semanticKey\)/);
 assert.match(source, /for \(let offset = 0; offset < 367; offset \+= 1\)/);
 assert.match(
@@ -1493,6 +1556,8 @@ assert.match(
 );
 assert.match(layoutSource, /document\.hidden \|\| !navigator\.onLine/);
 assert.match(webScheduleSource, /planWebReminderSchedule/);
+assert.match(webScheduleSource, /"streak-guard-v1"/);
+assert.match(webScheduleSource, /notificationKind: "streak-guard"/);
 assert.match(webScheduleSource, /notificationTitle\(\s*reminder\.label/);
 assert.doesNotMatch(
   webScheduleSource,

@@ -139,8 +139,8 @@ assert.match(
 );
 assert.match(
   cloud,
-  /for \(const localDates of supplementalDateBatches\)[\s\S]{0,500}await yieldMaintenance\(\)[\s\S]{0,420}supplementalDateBatches\.length > 0[\s\S]{0,100}await commitActivity/,
-  "historical slices must finish before their one durable activity acknowledgement",
+  /for \(const localDates of supplementalDateBatches\)[\s\S]{0,500}await yieldMaintenance\(\)[\s\S]{0,1200}supplementalDateBatches\.length > 0\s*\|\|\s*entriesToUpsert\.length > 0[\s\S]{0,120}await commitActivity/,
+  "historical slices and exact detail rows must finish before their one durable activity acknowledgement",
 );
 assert.match(
   backgroundHealth,

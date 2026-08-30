@@ -3,6 +3,7 @@ import {
   completedGymDistanceKm,
   completedGymSets,
   estimateGymActiveCalories,
+  gymSessionEntryNote,
   gymSessionDistanceKm,
   gymSessionWorkoutSample,
   gymSessionVisibilityForMetric,
@@ -62,6 +63,7 @@ export type StoredWorkoutDraft = {
   sessionId: string;
   sessionName: string;
   duration: string;
+  durationManual?: boolean;
   calories: string;
   calorieCalculationMode: GymCalorieCalculationMode;
   intensity: GymIntensity;
@@ -125,6 +127,8 @@ export function parseStoredWorkoutDraft(
       !draft.sessionId ||
       typeof draft.sessionName !== "string" ||
       typeof draft.duration !== "string" ||
+      (draft.durationManual !== undefined &&
+        typeof draft.durationManual !== "boolean") ||
       typeof draft.calories !== "string" ||
       !["session_met", "set_aware"].includes(
         draft.calorieCalculationMode ?? "",
@@ -457,6 +461,7 @@ export function finishStoredWorkoutDraft(
       : existingSession?.pausedSeconds,
     setStartDelaySeconds: draft.setStartDelaySeconds,
     durationMinutes: preciseDuration,
+    durationManual: draft.durationManual === true,
     distanceKm: completedGymDistanceKm(exercises),
     calories: completedSets ? sessionCalories : undefined,
     calorieCalculationMode: draft.calorieCalculationMode,
@@ -510,7 +515,7 @@ export function applyBackgroundGymSession(
   );
   const syncedValues = (completedSets > 0
     ? [
-        ...(qualifiesAsWorkout ? [{ metricId: "workout", value: true }] : []),
+        { metricId: "workout", value: qualifiesAsWorkout },
         { metricId: "workout_duration", value: session.durationMinutes },
         { metricId: "workout_distance", value: distanceValue },
         { metricId: "exercise", value: calorieValue },
@@ -523,7 +528,7 @@ export function applyBackgroundGymSession(
     );
   const synced = syncedValues
     .map(
-      (item, index): MetricEntry => ({
+      (item): MetricEntry => ({
         id: `gym-sync:${session.id}:${item.metricId}`,
         metricId: item.metricId,
         userId: state.currentUserId,
@@ -538,8 +543,9 @@ export function applyBackgroundGymSession(
         source: "manual",
         label: session.name,
         stepCoverageActivityKey: inferredStepActivity?.key,
-        note: `Workout session · ${completedSets} sets${session.notes ? ` · ${session.notes}` : ""}`,
-        ...(index === 0 && (sessionImageUri || sessionImageStoragePath)
+        note: gymSessionEntryNote(session),
+        ...((item.metricId === "workout" || item.metricId === "exercise") &&
+          (sessionImageUri || sessionImageStoragePath)
           ? {
               imageUri: sessionImageUri,
               imageStoragePath: sessionImageStoragePath,

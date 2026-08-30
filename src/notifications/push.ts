@@ -1,18 +1,25 @@
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
-import { Platform } from 'react-native';
+import { InteractionManager, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { supabase } from '@/src/lib/supabase';
 import { localeForLanguage, translateUiText } from '@/src/i18n';
-import { AppLanguage, AppState, NotificationSettings } from '@/src/types';
+import {
+  AppLanguage,
+  AppState,
+  GroupChallenge,
+  NotificationSettings,
+} from '@/src/types';
 import {
   localizeExerciseName,
   localizeMetricName,
   localizeMetricUnit,
 } from '@/src/i18n/domain';
 import { cycleForecast } from '@/src/domain/cycle';
+import { buildBadges } from '@/src/domain/badges';
+import type { ResolvedChallengePlacement } from '@/src/domain/groupChallenges';
 import { dateKey, dateWithOffsetFrom } from '@/src/domain/date';
 import { stateWithoutGoogleHealthLocalData } from '@/src/domain/googleHealthLocalPrivacy';
 import {
@@ -33,7 +40,9 @@ import {
   localNotificationIdentifier,
   notificationFallsAfterFastingTarget,
   quietHoursAdjustedDateTime,
+  streakProtectionReminderTime,
 } from '@/src/domain/notificationScheduling';
+import { isVacationDate } from '@/src/domain/vacation';
 import { automaticFastProgress } from '@/src/domain/fasting';
 import { createLatestAsyncDrain } from '@/src/domain/latestAsyncDrain';
 import { workoutCompletionCanNotify } from '@/src/domain/workoutNotifications';
@@ -783,7 +792,233 @@ const GYM_IDS = 'metric-rally-gym-notification-ids-v1';
 const GYM_ACHIEVEMENT = 'metric-rally-gym-achievement-v1';
 const PRODUCTIVITY_IDS = 'metric-rally-productivity-notification-ids-v1';
 const PROGRESS_MILESTONES = 'habhub-progress-milestones-v1';
+const BADGE_AWARD_NOTIFICATIONS = 'habhub-badge-award-notifications-v1';
+const CHALLENGE_BADGE_OBSERVATIONS =
+  'habhub-challenge-badge-observations-v1';
 const SCREEN_TIME_APP_MILESTONES = 'habhub-screen-time-app-milestones-v1';
+
+function badgeAwardIdentity(badge: ReturnType<typeof buildBadges>[number]) {
+  return `${badge.id}|${badge.earnedCount ?? ''}|${badge.anchorDate}`;
+}
+
+type PendingBadgeAward = {
+  previousState: AppState;
+  nextState: AppState;
+  localDate: string;
+};
+
+export type BadgeChallengeNotificationInputs = {
+  challenges: readonly GroupChallenge[];
+  placements: readonly ResolvedChallengePlacement[];
+  settledOccurrenceKeys?: readonly string[];
+};
+
+type PendingChallengeBadgeAward = {
+  state: AppState;
+  localDate: string;
+  inputs: BadgeChallengeNotificationInputs;
+};
+
+const pendingBadgeAwards = new Map<string, PendingBadgeAward>();
+const pendingChallengeBadgeAwards = new Map<
+  string,
+  PendingChallengeBadgeAward
+>();
+let badgeAwardDrain: Promise<void> | undefined;
+
+function afterResponsiveWork(deadlineMs = 1_200) {
+  return new Promise<void>((resolve) => {
+    let complete = false;
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    let task: { cancel: () => void } | undefined;
+    const finish = () => {
+      if (complete) return;
+      complete = true;
+      if (deadline) clearTimeout(deadline);
+      task?.cancel();
+      resolve();
+    };
+    task = InteractionManager.runAfterInteractions(finish);
+    deadline = setTimeout(finish, deadlineMs);
+  });
+}
+
+async function deliverNewBadgeAwards({
+  previousState,
+  nextState,
+  localDate,
+}: PendingBadgeAward) {
+  const previousEarned = new Set(
+    buildBadges(previousState, localDate)
+      .filter(
+        (badge) =>
+          badge.status === 'earned' &&
+          badge.category !== 'competition' &&
+          badge.memberId === previousState.currentUserId,
+      )
+      .map(badgeAwardIdentity),
+  );
+  const newlyEarned = buildBadges(nextState, localDate).filter(
+    (badge) =>
+      badge.status === 'earned' &&
+      // Challenge/podium awards depend on immutable server settlements that
+      // are intentionally not part of AppState. The authoritative bridge
+      // below supplies those inputs instead of guessing from local logs.
+      badge.category !== 'competition' &&
+      badge.memberId === nextState.currentUserId &&
+      !previousEarned.has(badgeAwardIdentity(badge)),
+  );
+  await deliverBadgeAwardBatch(nextState, newlyEarned);
+}
+
+async function deliverBadgeAwardBatch(
+  state: AppState,
+  badges: ReturnType<typeof buildBadges>,
+) {
+  let storedBadgeIds: string[] = [];
+  try {
+    const stored = JSON.parse(
+      (await AsyncStorage.getItem(BADGE_AWARD_NOTIFICATIONS)) ?? '{}',
+    ) as { userId?: string; badgeIds?: string[] };
+    if (stored.userId === state.currentUserId)
+      storedBadgeIds = stored.badgeIds ?? [];
+  } catch {
+    storedBadgeIds = [];
+  }
+  const deliveredBadgeIds = new Set(storedBadgeIds);
+  for (const badge of badges.slice(0, 3)) {
+    const awardId = badgeAwardIdentity(badge);
+    if (deliveredBadgeIds.has(awardId)) continue;
+    await deliverImmediatePersonalNotification(state, {
+      ...localizedContent(
+        state,
+        `${badge.title} earned`,
+        badge.description || badge.caption,
+      ),
+      data: {
+        route: '/badges',
+        highlight: badge.id,
+        notificationKind: 'badge-award',
+      },
+    }, `badge:${state.currentUserId}:${awardId}`);
+    deliveredBadgeIds.add(awardId);
+  }
+  await AsyncStorage.setItem(
+    BADGE_AWARD_NOTIFICATIONS,
+    JSON.stringify({
+      userId: state.currentUserId,
+      badgeIds: [...deliveredBadgeIds].slice(-400),
+    }),
+  );
+}
+
+async function deliverAuthoritativeChallengeBadgeAwards({
+  state,
+  localDate,
+  inputs,
+}: PendingChallengeBadgeAward) {
+  const earnedBadges = buildBadges(
+    state,
+    localDate,
+    inputs.challenges,
+    localDate,
+    inputs.placements,
+    inputs.settledOccurrenceKeys,
+  ).filter(
+    (badge) =>
+      badge.status === 'earned' &&
+      badge.category === 'competition' &&
+      badge.memberId === state.currentUserId,
+  );
+  const currentIds = earnedBadges.map(badgeAwardIdentity);
+  let observedIds: string[] | undefined;
+  try {
+    const stored = JSON.parse(
+      (await AsyncStorage.getItem(CHALLENGE_BADGE_OBSERVATIONS)) ?? '{}',
+    ) as { userId?: string; badgeIds?: string[] };
+    if (stored.userId === state.currentUserId)
+      observedIds = stored.badgeIds ?? [];
+  } catch {
+    observedIds = undefined;
+  }
+
+  // Establish an authoritative baseline after this release. Existing settled
+  // history must not produce a burst of old award notifications. The durable
+  // challenge-result outbox already announced those completed occurrences.
+  if (observedIds !== undefined) {
+    const observed = new Set(observedIds);
+    const newlyEarned = earnedBadges.filter(
+      (badge) => !observed.has(badgeAwardIdentity(badge)),
+    );
+    const settings = state.settings.notifications;
+    const canNotify =
+      newlyEarned.length > 0 &&
+      settings.pushEnabled &&
+      settings.badgesAndWinners &&
+      !isQuietNow(settings);
+    if (canNotify) {
+      if (Platform.OS === 'web') {
+        if (await webPushPermissionGranted())
+          await deliverBadgeAwardBatch(state, newlyEarned);
+      } else {
+        const permission = await Notifications.getPermissionsAsync();
+        if (permission.granted) {
+          await ensureLocalNotificationChannels(state.settings.language);
+          await deliverBadgeAwardBatch(state, newlyEarned);
+        }
+      }
+    }
+  }
+  await AsyncStorage.setItem(
+    CHALLENGE_BADGE_OBSERVATIONS,
+    JSON.stringify({ userId: state.currentUserId, badgeIds: currentIds }),
+  );
+}
+
+function ensureBadgeAwardDrain() {
+  if (badgeAwardDrain) return badgeAwardDrain;
+  badgeAwardDrain = (async () => {
+    while (pendingBadgeAwards.size || pendingChallengeBadgeAwards.size) {
+      await afterResponsiveWork();
+      const personalBatch = [...pendingBadgeAwards.values()];
+      const challengeBatch = [...pendingChallengeBadgeAwards.values()];
+      pendingBadgeAwards.clear();
+      pendingChallengeBadgeAwards.clear();
+      for (const item of personalBatch) await deliverNewBadgeAwards(item);
+      for (const item of challengeBatch)
+        await deliverAuthoritativeChallengeBadgeAwards(item);
+    }
+  })().finally(() => {
+    badgeAwardDrain = undefined;
+  });
+  return badgeAwardDrain;
+}
+
+function scheduleBadgeAwardNotifications(candidate: PendingBadgeAward) {
+  const key = `${candidate.nextState.currentUserId}:${candidate.localDate}`;
+  const pending = pendingBadgeAwards.get(key);
+  pendingBadgeAwards.set(key, {
+    previousState: pending?.previousState ?? candidate.previousState,
+    nextState: candidate.nextState,
+    localDate: candidate.localDate,
+  });
+  return ensureBadgeAwardDrain();
+}
+
+/**
+ * Observe challenge/podium awards only after the challenge hooks have loaded
+ * their immutable settlement snapshots. Rapid realtime refreshes coalesce and
+ * never execute badge derivation on the interaction path.
+ */
+export function syncChallengeBadgeAwardNotifications(
+  state: AppState,
+  localDate: string,
+  inputs: BadgeChallengeNotificationInputs,
+) {
+  const key = `${state.currentUserId}:${state.group.id}:${localDate}`;
+  pendingChallengeBadgeAwards.set(key, { state, localDate, inputs });
+  return ensureBadgeAwardDrain();
+}
 
 const legacyGoalCleanupByUser = new Map<string, Promise<void>>();
 
@@ -1101,7 +1336,9 @@ export async function notifyProgressMilestones(
   const settings = nextState.settings.notifications;
   if (
     !settings.pushEnabled ||
-    (!settings.reminders && settings.streakAlerts === false) ||
+    (!settings.reminders &&
+      settings.streakAlerts === false &&
+      !settings.badgesAndWinners) ||
     isQuietNow(settings)
   ) return;
   if (Platform.OS === 'web') {
@@ -1226,6 +1463,44 @@ export async function notifyProgressMilestones(
       firedSet.add(key);
     }
   }
+
+  // App-authored HabHub updates are private state rather than chat rows. Show
+  // the same update as an OS/PWA notification when it is created; shared
+  // tracker activity for other members is independently delivered by the
+  // canonical server outbox and therefore remains available if this device is
+  // offline or closed.
+  if (settings.reminders) {
+    const previousMessageIds = new Set(
+      previousState.messages.map((message) => message.id),
+    );
+    const newSystemMessages = nextState.messages.filter(
+      (message) =>
+        message.senderId === 'system' &&
+        !previousMessageIds.has(message.id),
+    );
+    for (const message of newSystemMessages.slice(-3)) {
+      const systemKey = `${todayPrefix}system:${message.id}`;
+      if (firedSet.has(systemKey)) continue;
+      await deliverImmediatePersonalNotification(nextState, {
+        ...localizedContent(nextState, 'HabHub update', message.text),
+        data: {
+          route: '/alerts',
+          scope: message.conversationId?.startsWith('group:')
+            ? 'group'
+            : 'personal',
+          notificationKind: 'habhub-update',
+        },
+      }, `progress:${systemKey}`);
+      firedSet.add(systemKey);
+    }
+  }
+
+  if (settings.badgesAndWinners)
+    await scheduleBadgeAwardNotifications({
+      previousState,
+      nextState,
+      localDate,
+    });
   await AsyncStorage.setItem(PROGRESS_MILESTONES, JSON.stringify([...firedSet]));
 }
 
@@ -1233,7 +1508,10 @@ async function syncGoalNotificationsNow(state: AppState) {
   if (Platform.OS === 'web') return;
   await ensureLegacyGoalReminderCleanup(state);
   const settings = state.settings.notifications;
-  if (!settings.pushEnabled || !settings.reminders) {
+  if (
+    !settings.pushEnabled ||
+    (!settings.reminders && settings.streakAlerts === false)
+  ) {
     await reconcileLocalNotifications(GOAL_IDS, [], state.currentUserId);
     return;
   }
@@ -1371,6 +1649,64 @@ async function syncGoalNotificationsNow(state: AppState) {
       }
     }
     if (plans.length >= LOCAL_NOTIFICATION_BUDGETS.goals) break;
+  }
+  if (settings.streakAlerts !== false) {
+    const guardTime = streakProtectionReminderTime(state.settings.dayEndTime);
+    const guardCandidates = [today, dateWithOffsetFrom(today, 1)];
+    for (const localDate of guardCandidates) {
+      const previousDate = dateWithOffsetFrom(localDate, -1);
+      for (const metric of state.metrics) {
+        if (
+          metric.goalEnabled === false ||
+          metric.activeFrom > localDate ||
+          !isMetricTrackedOnDate(state, metric, localDate) ||
+          isVacationDate(state, state.currentUserId, localDate) ||
+          scheduledGoalReached(state, metric, state.currentUserId, localDate)
+        )
+          continue;
+        // Only tomorrow's reminder can be known safely when today's goal is
+        // already complete. We never speculate a streak through a missing day.
+        if (
+          localDate > today &&
+          !scheduledGoalReached(state, metric, state.currentUserId, previousDate)
+        )
+          continue;
+        const activeStreak = metricStreakStats(
+          state,
+          metric,
+          state.currentUserId,
+          previousDate,
+        ).current;
+        if (activeStreak < 2) continue;
+        const effective = reminderTriggerDate(state, localDate, guardTime);
+        if (effective.date <= now) continue;
+        const metricName = localizeMetricName(state.settings.language, metric);
+        const identifier = localNotificationIdentifier({
+          kind: 'streak-guard',
+          localDate,
+          sourceId: metric.id,
+          time: effective.time,
+          userId: state.currentUserId,
+        });
+        plans.push(dateLocalNotificationPlan({
+          identifier,
+          date: effective.date,
+          content: {
+            ...localizedContent(
+              state,
+              `Protect your ${metricName} streak`,
+              `${activeStreak} days strong. Finish today's ${metricName.toLowerCase()} goal to keep it going.`,
+            ),
+            data: {
+              route: '/metric-detail',
+              metric: metric.id,
+              date: localDate,
+              notificationKind: 'streak-guard',
+            },
+          },
+        }));
+      }
+    }
   }
   await reconcileLocalNotifications(
     GOAL_IDS,

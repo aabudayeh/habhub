@@ -15,6 +15,7 @@ import {
   withoutSharedWorkoutParentDetails,
 } from "../src/domain/sharedLeaderboardLogs.ts";
 import { accountOwnedCollections } from "../src/domain/accountCollections.ts";
+import { cloudEntryNeedsItemDetail } from "../src/domain/cloudMaintenance.ts";
 import { scopeCachedGroupActivity } from "../src/domain/groupActivityCacheScope.ts";
 import { memberDisplayName } from "../src/domain/members.ts";
 import {
@@ -260,13 +261,17 @@ const compactedImportedDetailFence = cloud.slice(
   cloud.indexOf("const compactedImportedDetailFences"),
   cloud.indexOf("const oldEntries:", cloud.indexOf("const compactedImportedDetailFences")),
 );
+const detailedEntryProjection = cloud.slice(
+  cloud.indexOf("const detailedOwnedEntries"),
+  cloud.indexOf("const rawOwnedEntries"),
+);
 assert.ok(
   passiveWalkingLeadFunction.startsWith("create or replace function"),
   "the passive walking migration must replace the lead-event RPC",
 );
 
 assert.match(cloud, /remoteStatusCount < expectedStatusCount/);
-assert.match(provider, /const SHARED_ENTRY_DETAIL_PROJECTION_VERSION = 3/);
+assert.match(provider, /const SHARED_ENTRY_DETAIL_PROJECTION_VERSION = 4/);
 assert.match(
   provider,
   /sharedEntryDetailProjectionVersion:\s*SHARED_ENTRY_DETAIL_PROJECTION_VERSION/,
@@ -956,6 +961,54 @@ const legacyExerciseDuplicate = {
   ...legacyExercise,
   id: "legacy-copy-without-source-record-id",
 };
+assert.equal(
+  cloudEntryNeedsItemDetail(legacyWorkout, "workout"),
+  true,
+  "a saved manual gym workout must always enter the bounded detail repair projection",
+);
+assert.equal(
+  cloudEntryNeedsItemDetail(
+    {
+      ...legacyWorkout,
+      source: "imported",
+      sourceOrigin: "Samsung Health",
+      imageStoragePath: "peer/workouts/evening-gym.jpg",
+    },
+    "workout",
+  ),
+  true,
+  "an imported workout image must survive item-detail compaction and repair",
+);
+assert.equal(
+  cloudEntryNeedsItemDetail(
+    {
+      ...legacyWorkout,
+      source: "imported",
+      sourceOrigin: "Samsung Health",
+      imageStoragePath: undefined,
+      note: "Intervals with the club",
+    },
+    "workout",
+  ),
+  true,
+  "an imported workout label/note must survive item-detail compaction and repair",
+);
+const repairedWorkoutCloudId = "fa698923-9e08-4678-b568-fbad1f844925";
+assert.deepEqual(
+  metricEntrySocialTarget({
+    ...legacyWorkout,
+    cloudId: repairedWorkoutCloudId,
+  }),
+  {
+    type: "metric_entry",
+    id: repairedWorkoutCloudId,
+    ownerUserId: legacyWorkout.userId,
+    cloudPublished: true,
+    clientGeneratedId: legacyWorkout.id,
+    localDate: legacyWorkout.localDate,
+  },
+  "a repaired workout row must use its canonical relational UUID for reactions",
+);
 assert.deepEqual(
   sharedWorkoutBreakdownEntries(legacyWorkout, [
     legacyWorkout,
@@ -1802,6 +1855,11 @@ assert.match(
   /mustPersistBeforeSettle =[\s\S]{0,180}deletedEntryKeys\.size > 0[\s\S]{0,120}activity\.privacyFences/,
   "tombstone and privacy-fence responses must become durable before their refresh settles",
 );
+assert.match(
+  provider,
+  /mustPersistBeforeSettle =[\s\S]{0,100}queuedForce[\s\S]{0,800}await persistAuthorizedActivity\(\)/,
+  "a user-opened detail refresh must persist its authorized peer logs before reporting success",
+);
 assert.doesNotMatch(
   cachedGroupActivityBlock,
   /cacheSinceDate|entry\.localDate >=/,
@@ -1841,6 +1899,26 @@ assert.match(
   cloud,
   /account_revision[\s\S]{0,4500}const needsPostFenceRepair = Boolean\([\s\S]{0,500}publishRevision > fenceRevision[\s\S]{0,180}remoteRevision <= fenceRevision[\s\S]{0,220}needsPostFenceRepair/,
   "still-shared item rows at or below a privacy fence must be republished only with a newer account revision",
+);
+assert.match(
+  cloud,
+  /const detailedOwnedEntries = ownedEntries\.filter[\s\S]{0,900}cloudEntryNeedsItemDetail/,
+  "the projection-version repair must select item-level meal and workout rows",
+);
+assert.doesNotMatch(
+  detailedEntryProjection,
+  /workoutQualif|goalEligible|goal_reached|goalReached/,
+  "shared workout detail publication must not depend on whether the session completes the workout goal",
+);
+assert.match(
+  cloud,
+  /const candidateIds =[\s\S]{0,500}for \(const ids of batches\(candidateIds, 250\)\)/,
+  "the projection-version repair must query detailed history in bounded batches",
+);
+assert.match(
+  cloud,
+  /supplementalDateBatches\.length > 0 \|\| entriesToUpsert\.length > 0[\s\S]{0,100}await commitActivity\(activityCommitDates\)/,
+  "a detailed meal/workout upsert after the fast status checkpoint must publish a second activity version for peers",
 );
 assert.match(
   explicitProjectionMigration,

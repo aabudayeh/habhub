@@ -7,13 +7,16 @@ import {
   notificationFallsAfterFastingTarget,
   notificationTitle,
   quietHoursAdjustedDateTime,
+  streakProtectionReminderTime,
   WEB_REMINDER_LATE_GRACE_MS,
   webReminderTriggerCanStillPublish,
 } from "@/src/domain/notificationScheduling";
 import {
   isMetricTrackedOnDate,
+  metricStreakStats,
   scheduledGoalReached,
 } from "@/src/domain/metrics";
+import { isVacationDate } from "@/src/domain/vacation";
 import {
   scheduleAppliesOnDate,
   todoReminderAppliesOnDate,
@@ -123,13 +126,18 @@ function nearestUnique(
 }
 
 function trackerPlans(state: AppState, now: Date) {
-  if (!state.settings.notifications.reminders) return [];
+  if (
+    !state.settings.notifications.reminders &&
+    state.settings.notifications.streakAlerts === false
+  )
+    return [];
   const plans: WebReminderPlan[] = [];
   const today = dateKey(now);
   const metrics = state.metrics.filter(
     (metric) =>
-      metric.reminders?.some((reminder) => reminder.enabled) ||
-      metric.reminder?.enabled,
+      state.settings.notifications.reminders &&
+      (metric.reminders?.some((reminder) => reminder.enabled) ||
+        metric.reminder?.enabled),
   );
   const fastingByMetric = new Map(
     state.metrics
@@ -236,6 +244,57 @@ function trackerPlans(state: AppState, now: Date) {
       }
     }
     if (plans.length >= CATEGORY_LIMITS.tracker) break;
+  }
+  if (state.settings.notifications.streakAlerts !== false) {
+    const guardTime = streakProtectionReminderTime(state.settings.dayEndTime);
+    for (const localDate of [today, dateWithOffsetFrom(today, 1)]) {
+      const previousDate = dateWithOffsetFrom(localDate, -1);
+      for (const metric of state.metrics) {
+        if (
+          metric.goalEnabled === false ||
+          metric.activeFrom > localDate ||
+          !isMetricTrackedOnDate(state, metric, localDate) ||
+          isVacationDate(state, state.currentUserId, localDate) ||
+          scheduledGoalReached(state, metric, state.currentUserId, localDate)
+        )
+          continue;
+        if (
+          localDate > today &&
+          !scheduledGoalReached(state, metric, state.currentUserId, previousDate)
+        )
+          continue;
+        const activeStreak = metricStreakStats(
+          state,
+          metric,
+          state.currentUserId,
+          previousDate,
+        ).current;
+        if (activeStreak < 2) continue;
+        const trigger = triggerFor(state, localDate, guardTime);
+        if (!trigger || !triggerCanStillPublish(trigger.date, now)) continue;
+        const metricName = localizeMetricName(state.settings.language, metric);
+        plans.push(
+          plan(state, {
+            scheduleKey: scheduleKey([
+              "streak-guard-v1",
+              metric.id,
+              localDate,
+              trigger.time,
+            ]),
+            category: "tracker",
+            at: trigger.date,
+            title: `Protect your ${metricName} streak`,
+            body: `${activeStreak} days strong. Finish today's ${metricName.toLowerCase()} goal to keep it going.`,
+            data: {
+              route: `/metric-detail?metric=${encodeURIComponent(metric.id)}&date=${localDate}`,
+              metric: metric.id,
+              date: localDate,
+              notificationKind: "streak-guard",
+            },
+          }),
+        );
+      }
+    }
   }
   return nearestUnique(plans, CATEGORY_LIMITS.tracker);
 }

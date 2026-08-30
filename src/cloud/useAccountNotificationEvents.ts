@@ -72,19 +72,10 @@ export function useAccountNotificationEvents() {
   const markRead = useCallback(async (eventIds: string[]) => {
     const idSet = new Set(eventIds);
     if (!idSet.size) return;
-    const byGroup = new Map<string, string[]>();
-    for (const event of events) {
-      if (!idSet.has(event.id)) continue;
-      const ids = byGroup.get(event.groupId) ?? [];
-      ids.push(event.id);
-      byGroup.set(event.groupId, ids);
-    }
-    await Promise.all(
-      [...byGroup].map(([groupId, ids]) =>
-        markGroupNotificationEventsRead(groupId, ids),
-      ),
-    );
     const readAt = new Date().toISOString();
+    // The category dot should clear as soon as the user leaves the tab they
+    // actually viewed. Keep the network write durable, but do not make the UI
+    // wait on a round trip before acknowledging that deliberate boundary.
     setEvents((current) =>
       current.map((event) =>
         idSet.has(event.id) && !event.readAt
@@ -92,6 +83,31 @@ export function useAccountNotificationEvents() {
           : event,
       ),
     );
+    const byGroup = new Map<string, string[]>();
+    for (const event of events) {
+      if (!idSet.has(event.id)) continue;
+      const ids = byGroup.get(event.groupId) ?? [];
+      ids.push(event.id);
+      byGroup.set(event.groupId, ids);
+    }
+    try {
+      await Promise.all(
+        [...byGroup].map(([groupId, ids]) =>
+          markGroupNotificationEventsRead(groupId, ids),
+        ),
+      );
+    } catch (reason) {
+      // Restore only this optimistic acknowledgement. A concurrent realtime
+      // refresh that supplied a different server read timestamp remains read.
+      setEvents((current) =>
+        current.map((event) =>
+          idSet.has(event.id) && event.readAt === readAt
+            ? { ...event, readAt: undefined }
+            : event,
+        ),
+      );
+      throw reason;
+    }
   }, [events]);
 
   const unreadCount = useMemo(

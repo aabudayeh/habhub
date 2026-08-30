@@ -5,6 +5,7 @@ import {
   addGroupSocialComment,
   deleteGroupSocialComment,
   GroupSocialComment,
+  GroupSocialInteractionSurface,
   GroupSocialReaction,
   GroupSocialReactionKind,
   GroupSocialTarget,
@@ -53,6 +54,7 @@ function reactionPersistedTargetKey(
 export function useGroupSocialEngagement(
   groupId: string,
   targets: readonly GroupSocialTarget[],
+  interactionSurface: GroupSocialInteractionSurface = "feed",
 ) {
   const { state } = useApp();
   const cloud = useCloudSyncActions();
@@ -311,6 +313,7 @@ export function useGroupSocialEngagement(
             target: resolvedTarget,
             userId: state.currentUserId,
             reaction: nextReaction,
+            surface: interactionSurface,
           });
           confirmSocialReactionBurst(
             confirmedReactionByMutationRef.current,
@@ -330,6 +333,7 @@ export function useGroupSocialEngagement(
               target: resolvedTarget,
               userId: state.currentUserId,
               reaction: nextReaction,
+              surface: interactionSurface,
             });
             confirmSocialReactionBurst(
               confirmedReactionByMutationRef.current,
@@ -384,6 +388,7 @@ export function useGroupSocialEngagement(
       cloudEnabled,
       groupId,
       mutationTarget,
+      interactionSurface,
       state.currentUserId,
     ],
   );
@@ -434,6 +439,7 @@ export function useGroupSocialEngagement(
             target: resolvedTarget,
             userId: state.currentUserId,
             content,
+            surface: interactionSurface,
           });
         } catch (reason) {
           if (
@@ -447,6 +453,7 @@ export function useGroupSocialEngagement(
               target: resolvedTarget,
               userId: state.currentUserId,
               content,
+              surface: interactionSurface,
             });
           } else throw reason;
         }
@@ -468,7 +475,7 @@ export function useGroupSocialEngagement(
         throw reason;
       }
     },
-    [cloudEnabled, groupId, mutationTarget, state.currentUserId],
+    [cloudEnabled, groupId, interactionSurface, mutationTarget, state.currentUserId],
   );
 
   const removeComment = useCallback(

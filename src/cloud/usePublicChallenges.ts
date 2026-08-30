@@ -11,6 +11,7 @@ export function usePublicChallenges(enabled = true) {
   const [challenges, setChallenges] = useState<GroupChallenge[]>([]);
   const [joinedChallenges, setJoinedChallenges] = useState<GroupChallenge[]>([]);
   const [loading, setLoading] = useState(false);
+  const [initialLoadComplete, setInitialLoadComplete] = useState(!enabled);
   const [error, setError] = useState<string>();
   const requestRef = useRef<Promise<void> | null>(null);
 
@@ -23,6 +24,7 @@ export function usePublicChallenges(enabled = true) {
         setChallenges(publicRows);
         setJoinedChallenges(joinedRows);
         setError(undefined);
+        setInitialLoadComplete(true);
       })
       .catch((reason) => {
         setError(reason instanceof Error ? reason.message : String(reason));
@@ -36,7 +38,11 @@ export function usePublicChallenges(enabled = true) {
   }, []);
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled) {
+      setInitialLoadComplete(true);
+      return;
+    }
+    setInitialLoadComplete(false);
     void refresh();
   }, [enabled, refresh]);
 
@@ -48,5 +54,13 @@ export function usePublicChallenges(enabled = true) {
     [refresh],
   );
 
-  return { challenges, joinedChallenges, loading, error, refresh, join };
+  return {
+    challenges,
+    joinedChallenges,
+    loading,
+    initialLoadComplete,
+    error,
+    refresh,
+    join,
+  };
 }

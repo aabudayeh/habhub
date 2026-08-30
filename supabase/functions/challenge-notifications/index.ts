@@ -61,13 +61,13 @@ Deno.serve(async (request) => {
     p_limit: limit,
   });
   if (staged.error) return json({ error: staged.error.message }, 500);
-  // Always drain the durable outbox, not only rows inserted by this staging
-  // call. A provider/network failure therefore remains retryable on the next
-  // hourly run even though the canonical event key was already committed.
+  // Always drain the shared durable outbox, not only rows inserted by this
+  // challenge staging call. Social interactions dispatch immediately from the
+  // actor's client, while this bounded hourly pass guarantees a transient
+  // provider/network failure remains retryable even if that client closes.
   const pending = await admin
     .from("push_dispatch_events")
     .select("event_key")
-    .eq("category", "challenge")
     .is("dispatched_at", null)
     .gt("expires_at", new Date().toISOString())
     .order("created_at", { ascending: true })

@@ -567,6 +567,7 @@ export default function TrackerDetail() {
   // repeatedly scanning a potentially large health history.
   const stepCoverageEntryByOwnerAndId = new Map<string, MetricEntry>();
   const stepCoverageEntryByOwnerAndGymSession = new Map<string, MetricEntry>();
+  const gymImageEntryByOwnerAndSession = new Map<string, MetricEntry>();
   const stepCoverageWorkoutSessionIds = new Set<string>();
   const stepCoverageActiveEnergyMetricIds = new Set(
     state.metrics
@@ -609,6 +610,8 @@ export default function TrackerDetail() {
       const gymSessionId = stepCoverageGymSessionId(entry.id);
       if (gymSessionId) {
         const gymKey = `${entry.userId}\u0000${gymSessionId}`;
+        if (entry.imageUri || entry.imageStoragePath)
+          gymImageEntryByOwnerAndSession.set(gymKey, entry);
         const indexed = stepCoverageEntryByOwnerAndGymSession.get(gymKey);
         if (!indexed || entry.metricId === "workout")
           stepCoverageEntryByOwnerAndGymSession.set(gymKey, entry);
@@ -2514,7 +2517,12 @@ export default function TrackerDetail() {
             gymSourceSessions[index - 1].localDate !== session.localDate;
           const collapsed = collapsedEntryDates.has(session.localDate);
           const coverageEntry = stepCoverageEntryForGymSession(session);
-          const workoutImageUri = coverageEntry?.imageUri ?? session.imageUri;
+          const workoutImageUri =
+            gymImageEntryByOwnerAndSession.get(
+              `${session.userId}\u0000${session.id}`,
+            )?.imageUri ??
+            coverageEntry?.imageUri ??
+            session.imageUri;
           return (
             <React.Fragment key={`gym:${session.id}`}>
             {dates.length > 1 && firstOnDate ? (

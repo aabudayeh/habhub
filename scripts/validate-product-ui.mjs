@@ -13,6 +13,7 @@ const today = read("app", "(tabs)", "index.tsx");
 const ui = read("src", "components", "ui.tsx");
 const status = read("app", "(tabs)", "status.tsx");
 const metricEditor = read("app", "metric-editor.tsx");
+const groupSettings = read("app", "group-settings.tsx");
 
 const seededToday = seed.indexOf('"index"');
 const seededStatus = seed.indexOf('"status"');
@@ -90,6 +91,28 @@ assert.match(
   metricEditor,
   /function markSavedAndLeave[\s\S]{0,220}initialDraftSignature\.current = draftSignature[\s\S]{0,120}dirtyRef\.current = false/,
   "A successful tracker save must mark the current draft clean before leaving",
+);
+
+assert.match(
+  groupSettings,
+  /<SectionHeader title="Visibility" \/>[\s\S]{0,900}accessibilityState=\{\{ expanded: visibilityOpen \}\}/,
+  "Group settings must keep each member's tracker visibility compact and collapsible",
+);
+for (const visibility of ["group", "status", "private"])
+  assert.match(
+    groupSettings,
+    new RegExp(`value: "${visibility}"`),
+    `Group settings must expose the ${visibility} tracker privacy choice`,
+  );
+assert.match(
+  groupSettings,
+  /updateMetric\(metric\.id, \{[\s\S]{0,120}defaultVisibility: option\.value/,
+  "Group settings visibility must reuse the authoritative personal tracker privacy action",
+);
+assert.match(
+  groupSettings,
+  /const visibilityMetrics = useMemo\([\s\S]{0,180}groupMetrics[\s\S]{0,180}personalMetricsById\.get\(metric\.id\)/,
+  "Group settings visibility must include every configured tracker, including calculated trackers",
 );
 
 console.log("Product navigation and compact UI validation passed.");

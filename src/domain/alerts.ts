@@ -43,6 +43,7 @@ export type PaceAlert = {
   localDate?: string;
   todoId?: string;
   targetType?: GroupNotificationEvent["targetType"];
+  interactionSurface?: GroupNotificationEvent["interactionSurface"];
 };
 export function buildAlerts(
   state: AppState,
@@ -228,6 +229,7 @@ export function buildAlerts(
       const systemUpdate = message.senderId === "system";
       const systemCategory: AlertCategory = groupConversation ? "lead" : "today";
       const systemReadCursorKey = `${state.group.id}:${systemCategory}`;
+      const messageReadCursorKey = `${state.group.id}:message-notifications`;
       const sharedMessage = chatSharePreview(message.text);
       const visibleMessageText = sharedMessage.text;
       const hasAttachment = Boolean(
@@ -250,6 +252,12 @@ export function buildAlerts(
               `group:${state.group.id}`
             ]
           : undefined);
+      const messageNotificationReadAt =
+        notifications.activityReadAtByCategory?.[messageReadCursorKey];
+      const effectiveMessageReadAt = [readAt, messageNotificationReadAt]
+        .filter((value): value is string => Boolean(value))
+        .sort()
+        .at(-1);
       return {
         id: `message-${message.id}`,
         // App-generated goal/member updates are activity, not chat. Keep a
@@ -290,8 +298,10 @@ export function buildAlerts(
               (notifications.activityReadAtByCategory?.[
                 systemReadCursorKey
               ] ?? "")
-            : !readAt || message.createdAt > readAt),
-        readCursorKey: systemUpdate ? systemReadCursorKey : undefined,
+            : message.createdAt > (effectiveMessageReadAt ?? "")),
+        readCursorKey: systemUpdate
+          ? systemReadCursorKey
+          : messageReadCursorKey,
       };
     });
   const groupEventsEnabled = groupPreferences?.enabled !== false;
@@ -344,6 +354,13 @@ export function buildAlerts(
     const socialReaction = event.kind === "social_reaction";
     const socialComment = event.kind === "social_comment";
     const socialInteraction = socialReaction || socialComment;
+    const socialEntry =
+      event.targetType === "metric_entry" && event.targetId
+        ? state.entries.find(
+            (entry) =>
+              entry.id === event.targetId || entry.cloudId === event.targetId,
+          )
+        : undefined;
     return {
       id: `group-notification-${event.id}`,
       category: socialInteraction ? "lead" : "challenge",
@@ -411,9 +428,11 @@ export function buildAlerts(
       challengeId: event.challengeId,
       challengeOccurrenceDate: event.occurrenceDate,
       groupId: event.groupId,
+      metricId: socialEntry?.metricId,
       entryId: event.targetId,
       localDate: event.occurrenceDate,
       targetType: event.targetType,
+      interactionSurface: event.interactionSurface,
     };
     });
   return [

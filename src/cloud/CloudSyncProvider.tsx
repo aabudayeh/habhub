@@ -166,6 +166,10 @@ import {
   waitForResponsiveTurn,
 } from "@/src/lib/responsiveWork";
 import { subscribeUserInteraction } from "@/src/lib/userInteraction";
+import {
+  linkedGymWorkoutMediaSessionId,
+  reconcileLinkedGymWorkoutMedia,
+} from "@/src/domain/workoutMedia";
 
 const DEVICE_ID_KEY = "paceboard-cloud-device-id-v1";
 const PENDING_GROUP_KEY = "metric-rally-pending-group-v1";
@@ -930,22 +934,31 @@ async function uploadOwnedMedia(state: AppState): Promise<AppState> {
   if (uploadedAvatarPath) changed = true;
 
   const entries: MetricEntry[] = [];
-  for (const entry of state.entries) {
+  const uploadedEntryMediaByUri = new Map<string, Promise<string>>();
+  const linkedMediaEntries = reconcileLinkedGymWorkoutMedia(
+    state.entries,
+    userId,
+  );
+  if (linkedMediaEntries.some((entry, index) => entry !== state.entries[index]))
+    changed = true;
+  for (const entry of linkedMediaEntries) {
     if (
       entry.userId === userId &&
       !entry.imageStoragePath &&
       isUploadableLocalUri(entry.imageUri ?? null)
     ) {
-      const path = await uploadMedia(
-        userId,
-        "entry",
-        entry.id,
-        entry.imageUri!,
-      );
+      const uri = entry.imageUri!;
+      let upload = uploadedEntryMediaByUri.get(uri);
+      if (!upload) {
+        upload = uploadMedia(userId, "entry", entry.id, uri);
+        uploadedEntryMediaByUri.set(uri, upload);
+      }
+      const path = await upload;
       entries.push({ ...entry, imageStoragePath: path });
       changed = true;
     } else entries.push(entry);
   }
+  const reconciledEntries = reconcileLinkedGymWorkoutMedia(entries, userId);
   const photos: PhotoUpdate[] = [];
   for (const photo of state.photos) {
     const uri = photoUri(photo.uri);
@@ -991,7 +1004,14 @@ async function uploadOwnedMedia(state: AppState): Promise<AppState> {
     groups.find((group) => group.id === state.group.id) ??
     (await updateGroup(state.group));
   return changed
-    ? { ...state, entries, photos, messages, groups, group: currentGroup }
+    ? {
+        ...state,
+        entries: reconciledEntries,
+        photos,
+        messages,
+        groups,
+        group: currentGroup,
+      }
     : state;
 }
 
@@ -1327,9 +1347,11 @@ const workspaceHashCache = new WeakMap<AppState, string>();
 const accountMetadataHashCache = new WeakMap<AppState, string>();
 // Bump when the relational group projection needs a one-time rebuild even if
 // the underlying account data did not change. Version 2 backfilled item-level
-// meal/workout rows; version 3 republishes still-shared detail rows whose old
-// account revision was invalidated by a later privacy cache fence.
-const SHARED_ENTRY_DETAIL_PROJECTION_VERSION = 3;
+// meal/workout rows; version 3 republished still-shared detail rows whose old
+// account revision was invalidated by a later privacy cache fence. Version 4
+// repairs detail rows whose insert raced the earlier fast status checkpoint:
+// those rows were durable, but peers were never told to refresh them.
+const SHARED_ENTRY_DETAIL_PROJECTION_VERSION = 4;
 
 function stableHash(state: AppState) {
   const cached = stableHashCache.get(state);
@@ -1656,14 +1678,21 @@ function mergeUploadedMediaMetadata(
   );
   const entries = current.entries.map((entry) => {
     const source = uploadedEntries.get(metricEntryKey(entry.userId, entry.id));
+    const isLinkedGymWorkoutMedia = Boolean(
+      linkedGymWorkoutMediaSessionId(entry),
+    );
     if (
       entry.imageStoragePath ||
       !source?.imageStoragePath ||
-      entry.imageUri !== source.imageUri
+      (!isLinkedGymWorkoutMedia && entry.imageUri !== source.imageUri)
     )
       return entry;
     changed = true;
-    return { ...entry, imageStoragePath: source.imageStoragePath };
+    return {
+      ...entry,
+      imageUri: source.imageUri ?? entry.imageUri,
+      imageStoragePath: source.imageStoragePath,
+    };
   });
   const uploadedPhotos = new Map(
     uploaded.photos.map((photo) => [photo.id, photo]),

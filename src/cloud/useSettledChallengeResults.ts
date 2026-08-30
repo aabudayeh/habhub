@@ -20,6 +20,10 @@ export function useSettledChallengeResults(groupId: string) {
   const [initiallyLoadedGroupId, setInitiallyLoadedGroupId] = useState<
     string | undefined
   >(() => (isCloudGroupId(groupId) ? undefined : groupId));
+  const [authoritativelyLoadedGroupId, setAuthoritativelyLoadedGroupId] =
+    useState<string | undefined>(() =>
+      isCloudGroupId(groupId) ? undefined : groupId,
+    );
   const groupRef = useRef(groupId);
   groupRef.current = groupId;
   const newestResultEvent = notifications.allEvents.find(
@@ -31,13 +35,17 @@ export function useSettledChallengeResults(groupId: string) {
       setPlacements([]);
       setLoading(false);
       setInitiallyLoadedGroupId(groupId);
+      setAuthoritativelyLoadedGroupId(groupId);
       return;
     }
     let active = true;
     setLoading(true);
     void loadGroupChallengeResultPlacements(groupId)
       .then((rows) => {
-        if (active && groupRef.current === groupId) setPlacements(rows);
+        if (active && groupRef.current === groupId) {
+          setPlacements(rows);
+          setAuthoritativelyLoadedGroupId(groupId);
+        }
       })
       .catch(() => {
         // Keep the last immutable snapshot during a transient network failure.
@@ -67,6 +75,7 @@ export function useSettledChallengeResults(groupId: string) {
     occurrenceKeys,
     loading,
     initialLoadComplete: initiallyLoadedGroupId === groupId,
+    authoritativeLoadComplete: authoritativelyLoadedGroupId === groupId,
   };
 }
 

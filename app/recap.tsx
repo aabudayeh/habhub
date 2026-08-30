@@ -2,13 +2,14 @@ import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import { router, useLocalSearchParams } from "expo-router";
 import React, {
-  useDeferredValue,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
 import {
+  ActivityIndicator,
   Animated,
   Platform,
   Pressable,
@@ -22,6 +23,7 @@ import { AppText as Text, AppTextInput as TextInput } from "@/src/components/App
 import { CheerIcon } from "@/src/components/CheerIcon";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import { DateRangeNavigator, PeriodChoiceBar } from "@/src/components/PeriodNavigator";
+import { useResponsiveRecapFeed } from "@/src/components/useResponsiveRecapFeed";
 import { Avatar, Card, Chip, IconButton, PageHeader, Screen } from "@/src/components/ui";
 import { GroupSocialReactionKind } from "@/src/cloud/groupSocial";
 import { useCloudSyncActions } from "@/src/cloud/CloudSyncProvider";
@@ -39,7 +41,7 @@ import {
   RecapScope,
 } from "@/src/domain/recaps";
 import type { GroupSocialTargetType } from "@/src/domain/groupSocialTarget";
-import { useLocale } from "@/src/i18n";
+import { useLocale, useTranslation } from "@/src/i18n";
 import { useApp } from "@/src/state/AppProvider";
 import { stageChatShareImage } from "@/src/storage/chatShareImageStaging";
 import type { Member } from "@/src/types";
@@ -280,12 +282,9 @@ export default function StoryRecapScreen() {
 export function GroupRecapFeedScreen() {
   const { state, updateSettings } = useApp();
   const cloud = useCloudSyncActions();
-  // Health and cloud sync can update the account snapshot several times per
-  // second. Feed derivation is substantial, so let taps/scrolling win the
-  // current frame while retaining the latest authorized snapshot for the next.
-  const feedState = useDeferredValue(state);
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const t = useTranslation();
   const params = useLocalSearchParams<{
     highlight?: string;
     period?: string;
@@ -324,42 +323,80 @@ export function GroupRecapFeedScreen() {
         : undefined,
     [settledChallengeOccurrenceKeys],
   );
-  const badges = useMemo(
+  const feedScopeKey = useMemo(
     () =>
-      buildBadges(
-        feedState,
-        anchor,
-        challengeCloud.challenges,
-        dateKey(),
-        settledChallengeResults.placements,
-        settledChallengeOccurrenceKeys,
-      ),
+      [
+        state.currentUserId,
+        state.group.id,
+        period,
+        dates[0] ?? anchor,
+        dates[dates.length - 1] ?? anchor,
+      ].join(":"),
     [
       anchor,
+      dates,
+      period,
+      state.currentUserId,
+      state.group.id,
+    ],
+  );
+  const feedAuthority = useMemo(
+    () =>
+      [
+        state.entries,
+        state.dailyMetricStatuses,
+        state.photos,
+        state.metrics,
+        state.group.members,
+        state.group.metricConfiguration,
+        challengeCloud.challenges,
+        settledChallengeOccurrenceKeys,
+        settledChallengeResults.placements,
+      ] as const,
+    [
       challengeCloud.challenges,
       settledChallengeOccurrenceKeys,
       settledChallengeResults.placements,
-      feedState,
+      state.dailyMetricStatuses,
+      state.entries,
+      state.group.members,
+      state.group.metricConfiguration,
+      state.metrics,
+      state.photos,
     ],
   );
-  const feed = useMemo(
-    () =>
-      buildGroupRecapFeed(
-        feedState,
-        dates,
-        badges,
-        challengeCloud.challenges,
-        settledChallengeOccurrences,
-        settledChallengeResults.placements,
-      ),
-    [
+  const deriveFeed = useCallback(() => {
+    const badges = buildBadges(
+      state,
+      anchor,
+      challengeCloud.challenges,
+      dateKey(),
+      settledChallengeResults.placements,
+      settledChallengeOccurrenceKeys,
+    );
+    return buildGroupRecapFeed(
+      state,
+      dates,
       badges,
       challengeCloud.challenges,
-      dates,
       settledChallengeOccurrences,
       settledChallengeResults.placements,
-      feedState,
+    );
+  },
+    [
+      anchor,
+      challengeCloud.challenges,
+      dates,
+      settledChallengeOccurrenceKeys,
+      settledChallengeOccurrences,
+      settledChallengeResults.placements,
+      state,
     ],
+  );
+  const { items: feed, ready: feedReady } = useResponsiveRecapFeed(
+    feedScopeKey,
+    deriveFeed,
+    feedAuthority,
   );
   const visibleFeed = useMemo(() => filterFeed(feed, filter), [feed, filter]);
   const requestedHighlight = useMemo(
@@ -428,14 +465,14 @@ export function GroupRecapFeedScreen() {
     () => displayedFeed.map((item) => item.socialTarget),
     [displayedFeed],
   );
-  const social = useGroupSocialEngagement(state.group.id, targets);
+  const social = useGroupSocialEngagement(state.group.id, targets, "feed");
   const groupNicknames =
-    feedState.settings.memberNicknamesByGroup?.[feedState.group.id];
-  const legacyNicknames = feedState.settings.memberNicknames;
+    state.settings.memberNicknamesByGroup?.[state.group.id];
+  const legacyNicknames = state.settings.memberNicknames;
   const feedMembers = useMemo(
     () =>
       new Map(
-        feedState.group.members.map((member) => [
+        state.group.members.map((member) => [
           member.id,
           {
             member,
@@ -447,7 +484,7 @@ export function GroupRecapFeedScreen() {
         ]),
       ),
     [
-      feedState.group.members,
+      state.group.members,
       groupNicknames,
       legacyNicknames,
     ],
@@ -535,9 +572,9 @@ export function GroupRecapFeedScreen() {
           <MemoFeedCard
             key={item.id}
             item={item}
-            currentUserId={feedState.currentUserId}
+            currentUserId={state.currentUserId}
             members={feedMembers}
-            timeFormat={feedState.settings.timeFormat}
+            timeFormat={state.settings.timeFormat}
             highlighted={highlightedItemId === item.id}
             onLayout={(y) => itemY.current.set(item.id, y)}
             reactions={social.reactionsByTarget.get(social.targetKey(item.socialTarget)) ?? []}
@@ -590,6 +627,16 @@ export function GroupRecapFeedScreen() {
           />
         ))}
       </View>
+      {!feedReady && !visibleFeed.length ? (
+        <View
+          accessibilityRole="progressbar"
+          accessibilityLabel={t("Loading\u2026")}
+          style={styles.loading}
+        >
+          <ActivityIndicator size="small" color={accent} />
+          <Text style={[styles.body, { color: colors.muted }]}>{t("Loading\u2026")}</Text>
+        </View>
+      ) : null}
       {displayedFeed.length < visibleFeed.length ? (
         <Pressable
           accessibilityRole="button"
@@ -605,7 +652,7 @@ export function GroupRecapFeedScreen() {
           <Text style={[styles.body, { color: colors.muted }]}>Load the next {Math.min(FEED_PAGE_SIZE, visibleFeed.length - displayedFeed.length)} updates</Text>
         </Pressable>
       ) : null}
-      {!visibleFeed.length ? <Card style={styles.empty}><Ionicons name="sparkles-outline" size={26} color={accent} /><Text style={[styles.summaryTitle, { color: colors.ink }]}>Nothing meaningful to recap yet</Text><Text style={[styles.body, { color: colors.muted }]}>Shared meals, workouts, photos, badges, challenges, and daily leaders will appear here.</Text></Card> : null}
+      {feedReady && !visibleFeed.length ? <Card style={styles.empty}><Ionicons name="sparkles-outline" size={26} color={accent} /><Text style={[styles.summaryTitle, { color: colors.ink }]}>Nothing meaningful to recap yet</Text><Text style={[styles.body, { color: colors.muted }]}>Shared meals, workouts, photos, badges, challenges, and daily leaders will appear here.</Text></Card> : null}
     </Screen>
   );
 }
@@ -915,6 +962,7 @@ const styles = StyleSheet.create({
   },
   commentComposer: { flexDirection: "row", alignItems: "center", gap: 6 },
   commentInput: { flex: 1, minHeight: 38, borderWidth: 1, borderRadius: 12, paddingHorizontal: 10, fontSize: 10 },
+  loading: { minHeight: 52, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
   empty: { alignItems: "center", gap: 6, padding: 24 },
   showMore: { minHeight: 48, alignItems: "center", justifyContent: "center", gap: 1, paddingVertical: 8 },
 });
