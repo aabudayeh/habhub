@@ -77,7 +77,6 @@ const DIRECT_STEP_ACTIVITY_KEYS = new Set([
   "track_running",
   "treadmill_running",
   "hiking",
-  "backpacking",
 ]);
 
 const DIRECT_STEP_ACTIVITY_LABELS: Readonly<Record<string, string>> = {
@@ -86,7 +85,6 @@ const DIRECT_STEP_ACTIVITY_LABELS: Readonly<Record<string, string>> = {
   track_running: "Track running",
   treadmill_running: "Treadmill running",
   hiking: "Hiking",
-  backpacking: "Backpacking",
 };
 
 const NON_STEP_COVERAGE_SESSION_KEYS = new Set([
@@ -339,6 +337,17 @@ export function stepCoverageSessionIdentity(
   // linked only when a real shared sourceRecordId/gym id exists.
   if (entry.source === "manual" && entry.metricId === "workout")
     return `manual:${encodeURIComponent(entry.userId)}:${encodeURIComponent(
+      stepCoverageSourceEntryId(entry),
+    )}`;
+  // A standalone Active-energy interval may be entered manually or restored
+  // from an older importer without a provider record id. The detail screen is
+  // responsible for admitting only eligible Active-energy rows, but once the
+  // user explicitly classifies one it still needs a private, durable identity
+  // so the preference survives reload and the calories-only estimator can use
+  // it. Keep this generic fallback source-local: callers outside Step coverage
+  // cannot opt an unrelated entry into the calculation accidentally.
+  if (entry.source !== "calculated" && entry.id)
+    return `entry:${encodeURIComponent(entry.userId)}:${encodeURIComponent(
       stepCoverageSourceEntryId(entry),
     )}`;
   return undefined;

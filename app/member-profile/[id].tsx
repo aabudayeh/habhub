@@ -172,19 +172,19 @@ export default function GroupMemberProfile() {
             {memberDisplayName(state, member)}
           </Text>
           <Text style={[styles.role, { color: colors.muted }]}>
-            {memberRoleLabel(member)} · <Text translate={false}>{state.group.name}</Text>
+            {memberRoleLabel(member)} · <Text translate={false} style={styles.roleValue}>{state.group.name}</Text>
           </Text>
           <View style={styles.joinedMeta}>
-            <Text style={[styles.joinedMetaText, { color: colors.muted }]}>
+            <Text numberOfLines={1} style={[styles.joinedMetaText, { color: colors.muted }]}>
               Joined group
-              <Text translate={false} style={{ color: colors.faint }}>
+              <Text translate={false} style={[styles.joinedMetaValue, { color: colors.faint }]}>
                 {` · ${joinedGroupDate}`}
               </Text>
             </Text>
             <Text style={[styles.joinedMetaSeparator, { color: colors.faint }]}>|</Text>
-            <Text style={[styles.joinedMetaText, { color: colors.muted }]}>
+            <Text numberOfLines={1} style={[styles.joinedMetaText, { color: colors.muted }]}>
               Joined HabHub
-              <Text translate={false} style={{ color: colors.faint }}>
+              <Text translate={false} style={[styles.joinedMetaValue, { color: colors.faint }]}>
                 {` · ${joinedAppDate}`}
               </Text>
             </Text>
@@ -310,17 +310,17 @@ const styles = StyleSheet.create({
   hero: { flexDirection: "row", alignItems: "center", gap: 16, padding: 18, marginBottom: 12 },
   heroCopy: { flex: 1 },
   name: { fontSize: 20, fontWeight: "900" },
-  role: { fontSize: 9, lineHeight: 12, marginTop: 3 },
+  role: { fontSize: 8, lineHeight: 11, marginTop: 3 },
+  roleValue: { fontSize: 8, lineHeight: 11 },
   joinedMeta: {
     flexDirection: "row",
     alignItems: "center",
-    flexWrap: "wrap",
-    columnGap: 6,
-    rowGap: 2,
+    columnGap: 5,
     marginTop: 5,
   },
-  joinedMetaText: { flexShrink: 1, fontSize: 8.5, lineHeight: 12, fontWeight: "700" },
-  joinedMetaSeparator: { fontSize: 8.5, lineHeight: 12, fontWeight: "700" },
+  joinedMetaText: { flexShrink: 1, minWidth: 0, fontSize: 7.5, lineHeight: 11, fontWeight: "700" },
+  joinedMetaValue: { fontSize: 7.5, lineHeight: 11, fontWeight: "700" },
+  joinedMetaSeparator: { flexShrink: 0, fontSize: 7.5, lineHeight: 11, fontWeight: "700" },
   sync: { fontSize: 9, marginTop: 6 },
   levelCard: { gap: 10, padding: 15, marginBottom: 12 },
   levelHeading: { flexDirection: "row", alignItems: "center", gap: 10 },

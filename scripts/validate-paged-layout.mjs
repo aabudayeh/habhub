@@ -4,6 +4,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  cappedPageCount,
+  chunkIntoCappedPages,
   chunkIntoPages,
   clampPageIndex,
   configuredPageCapacity,
@@ -23,6 +25,22 @@ assert.deepEqual(chunkIntoPages([1, 2, 3, 4, 5], 2), [
 ]);
 assert.deepEqual(chunkIntoPages([], 4), []);
 assert.deepEqual(chunkIntoPages([1, 2], 0), [[1], [2]]);
+assert.deepEqual(
+  chunkIntoCappedPages(Array.from({ length: 21 }, (_, index) => index + 1), 2, 8),
+  [
+    [1, 2],
+    [3, 4],
+    [5, 6],
+    [7, 8],
+    [9, 10],
+    [11, 12],
+    [13, 14],
+    [15, 16, 17, 18, 19, 20, 21],
+  ],
+  "Today must retain every tracker while bounding the horizontal pager to eight pages",
+);
+assert.equal(cappedPageCount(21, 2, 8), 8);
+assert.equal(cappedPageCount(14, 2, 8), 7);
 assert.equal(clampPageIndex(-2, 3), 0);
 assert.equal(clampPageIndex(7, 3), 2);
 assert.equal(pageIndexFromOffset(640, 320, 4), 2);
@@ -85,6 +103,13 @@ assert.match(today, /state\.settings\.todosBelowGoals !== false/);
 assert.match(today, /!todayUsesPages &&\s*!editing/);
 assert.match(today, /todayUsesPages\s*\? \[\]/);
 assert.match(today, /testID="today-tracker-pages"/);
+assert.match(today, /const MAX_TODAY_TRACKER_PAGES = 8/);
+assert.match(today, /chunkIntoCappedPages\([\s\S]{0,120}MAX_TODAY_TRACKER_PAGES/);
+assert.match(
+  today,
+  /index === MAX_TODAY_TRACKER_PAGES - 1 && page\.length > pageSize[\s\S]{0,220}<ScrollView[\s\S]{0,100}nestedScrollEnabled/,
+  "Today's eighth page must become vertically scrollable when it contains overflow trackers",
+);
 assert.match(today, /pageStyle=\{styles\.todayTrackerPagerPage\}/);
 assert.match(
   today,

@@ -15,6 +15,9 @@ const profilePageSource = read("app/profile.tsx");
 const memberProfileSource = read("app/member-profile/[id].tsx");
 const memberComparisonSource = read("app/member/[id].tsx");
 const metricDetailSource = read("app/metric-detail.tsx");
+const leaderboardDetailSource = read("app/leaderboard-detail.tsx");
+const recapSource = read("app/recap.tsx");
+const alertsSource = read("src/domain/alerts.ts");
 
 assert.match(
   typesSource,
@@ -215,6 +218,26 @@ assert.match(
 );
 assert.match(
   memberProfileSource,
+  /role:\s*\{[^}]*fontSize:\s*8[^}]*lineHeight:\s*11/,
+  "The public role and group name must use compact supporting typography.",
+);
+assert.match(
+  memberProfileSource,
+  /joinedMetaValue:\s*\{[^}]*fontSize:\s*7\.5[^}]*lineHeight:\s*11/,
+  "Joined-date values must match their compact labels rather than growing as nested text.",
+);
+assert.match(
+  memberProfileSource,
+  /joinedMeta:\s*\{[\s\S]{0,140}flexDirection:\s*"row"[\s\S]{0,140}alignItems:\s*"center"/,
+  "Joined group and HabHub dates must remain on one compact row.",
+);
+assert.doesNotMatch(
+  memberProfileSource,
+  /joinedMeta:\s*\{[\s\S]{0,180}flexWrap:\s*"wrap"/,
+  "The compact joined-date row must not split into two stacked rows.",
+);
+assert.match(
+  memberProfileSource,
   /levelCard:\s*\{[^}]*marginBottom:\s*12/,
   "The public level card must retain visible compact section spacing.",
 );
@@ -248,6 +271,10 @@ assert.match(
   /const canOpenWorkout = loggingDestination === "workout"/,
   "Workout-owned and workout-derived details must share the centralized Gym shortcut.",
 );
+assert.match(leaderboardDetailSource, /\["cheer", "sparkles-outline"\]/);
+assert.match(recapSource, /icon="sparkles" count=\{counts\("cheer"\)\}/);
+assert.match(alertsSource, /event\.reaction === "cheer"[\s\S]{0,40}\? "sparkles-outline"/);
+assert.doesNotMatch(leaderboardDetailSource, /\["cheer", "megaphone-outline"\]/);
 assert.match(
   metricDetailSource,
   /accessibilityLabel="Open workout page"[\s\S]{0,180}router\.navigate\("\/gym" as never\)/,

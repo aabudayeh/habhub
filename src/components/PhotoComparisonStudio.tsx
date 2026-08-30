@@ -18,6 +18,7 @@ import { Card } from "@/src/components/ui";
 import { LocalizedAlert as Alert } from "@/src/i18n";
 import { imageSourceUri } from "@/src/domain/media";
 import {
+  adjacentPhotoVideoSpeed,
   chronologicalProgressPhotos,
   fullPhotoDate,
   photoFrameDurationMs,
@@ -131,6 +132,38 @@ async function deliverWebFile(blob: Blob, filename: string, title: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1_000);
 }
 
+function saveWebFile(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1_000);
+}
+
+async function shareWebFile(blob: Blob, filename: string, title: string) {
+  const file = new File([blob], filename, { type: blob.type });
+  const shareNavigator = navigator as Navigator & {
+    canShare?: (data: ShareData) => boolean;
+  };
+  if (
+    typeof shareNavigator.share !== "function" ||
+    !shareNavigator.canShare?.({ files: [file] })
+  )
+    throw new Error(
+      "This browser cannot share video files directly. Use Save video instead.",
+    );
+  try {
+    await shareNavigator.share({ files: [file], title });
+    return true;
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") return false;
+    throw error;
+  }
+}
+
 function drawVideoFrame(
   context: CanvasRenderingContext2D,
   canvas: HTMLCanvasElement,
@@ -203,12 +236,27 @@ export function PhotoComparisonStudio({
   );
   const [showBodyFat, setShowBodyFat] = useState(false);
   const [showLeanMass, setShowLeanMass] = useState(false);
-  const [exportingVideo, setExportingVideo] = useState(false);
+  const [videoAction, setVideoAction] = useState<"save" | "share" | null>(null);
   const [videoProgress, setVideoProgress] = useState(0);
   const collageRef = useRef<ViewShot>(null);
+  const videoArtifactRef = useRef<
+    { key: string; blob: Blob; filename: string } | undefined
+  >(undefined);
   const activeIndex = Math.max(0, ordered.findIndex((photo) => photo.id === activeId));
   const active = ordered[activeIndex];
   const selectedPhotos = ordered.filter((photo) => collageIds.includes(photo.id));
+  const videoArtifactKey = JSON.stringify({
+    photos: ordered.map((photo) => ({
+      id: photo.id,
+      localDate: photo.localDate,
+      capturedAt: photo.capturedAt,
+      createdAt: photo.createdAt,
+      uri: photo.uri,
+    })),
+    speed,
+    showBodyFat,
+    showLeanMass,
+  });
 
   useEffect(() => {
     if (!ordered.length) return;
@@ -232,6 +280,11 @@ export function PhotoComparisonStudio({
     }, photoFrameDurationMs(speed));
     return () => clearTimeout(timer);
   }, [activeIndex, ordered, playing, speed]);
+
+  useEffect(() => {
+    if (videoArtifactRef.current?.key !== videoArtifactKey)
+      videoArtifactRef.current = undefined;
+  }, [videoArtifactKey]);
 
   if (!ordered.length || !active) return null;
 
@@ -334,14 +387,25 @@ export function PhotoComparisonStudio({
     }
   }
 
-  async function exportVideo() {
-    if (!webVideoAvailable() || ordered.length < 2 || exportingVideo) return;
-    setExportingVideo(true);
+  async function createVideoArtifact() {
+    if (!webVideoAvailable() || ordered.length < 2)
+      throw new Error("Video export is not available in this browser.");
+    if (videoArtifactRef.current?.key === videoArtifactKey)
+      return videoArtifactRef.current;
     setVideoProgress(0);
     let stream: MediaStream | undefined;
     try {
       const mimeType = webVideoMimeType();
       if (!mimeType) throw new Error("This browser cannot encode a progress video.");
+      // Decode every image before recording. Loading photos inside the timed
+      // loop made network/decode latency part of each slide and could leave a
+      // blank first frame, especially at 10-20x playback speeds.
+      const frames = await Promise.all(
+        ordered.map(async (photo) => ({
+          photo,
+          image: await loadWebImage(photo),
+        })),
+      );
       const canvas = document.createElement("canvas");
       canvas.width = 720;
       canvas.height = 960;
@@ -360,40 +424,90 @@ export function PhotoComparisonStudio({
         recorder.onerror = () => reject(new Error("The browser stopped encoding the video."));
         recorder.onstop = () => resolve(new Blob(chunks, { type: mimeType }));
       });
+      drawVideoFrame(
+        context,
+        canvas,
+        frames[0].image,
+        frames[0].photo,
+        bodyEntries,
+        userId,
+        locale,
+        showBodyFat,
+        showLeanMass,
+      );
+      setVideoProgress(1 / frames.length);
       recorder.start(1_000);
-      for (let index = 0; index < ordered.length; index += 1) {
-        const photo = ordered[index];
-        const image = await loadWebImage(photo);
-        drawVideoFrame(
-          context,
-          canvas,
-          image,
-          photo,
-          bodyEntries,
-          userId,
-          locale,
-          showBodyFat,
-          showLeanMass,
-        );
-        setVideoProgress((index + 1) / ordered.length);
+      for (let index = 0; index < frames.length; index += 1) {
+        if (index > 0) {
+          const frame = frames[index];
+          drawVideoFrame(
+            context,
+            canvas,
+            frame.image,
+            frame.photo,
+            bodyEntries,
+            userId,
+            locale,
+            showBodyFat,
+            showLeanMass,
+          );
+          setVideoProgress((index + 1) / frames.length);
+        }
         await sleep(photoFrameDurationMs(speed));
       }
       recorder.stop();
       const blob = await stopped;
       const extension = mimeType.startsWith("video/mp4") ? "mp4" : "webm";
-      await deliverWebFile(
+      const artifact = {
+        key: videoArtifactKey,
         blob,
-        `habhub-photo-progress.${extension}`,
+        filename: `habhub-photo-progress.${extension}`,
+      };
+      videoArtifactRef.current = artifact;
+      return artifact;
+    } finally {
+      stream?.getTracks().forEach((track) => track.stop());
+    }
+  }
+
+  async function saveVideo() {
+    if (videoAction) return;
+    setVideoAction("save");
+    try {
+      const artifact = await createVideoArtifact();
+      saveWebFile(artifact.blob, artifact.filename);
+      Alert.alert(
+        "Video saved",
+        `The slideshow was saved locally as ${artifact.filename}.`,
+      );
+    } catch (error) {
+      Alert.alert(
+        "Could not save video",
+        error instanceof Error ? error.message : "Try again.",
+      );
+    } finally {
+      setVideoAction(null);
+      setVideoProgress(0);
+    }
+  }
+
+  async function shareVideo() {
+    if (videoAction) return;
+    setVideoAction("share");
+    try {
+      const artifact = await createVideoArtifact();
+      await shareWebFile(
+        artifact.blob,
+        artifact.filename,
         "HabHub photo progress",
       );
     } catch (error) {
       Alert.alert(
-        "Could not export video",
+        "Could not share video",
         error instanceof Error ? error.message : "Try again.",
       );
     } finally {
-      stream?.getTracks().forEach((track) => track.stop());
-      setExportingVideo(false);
+      setVideoAction(null);
       setVideoProgress(0);
     }
   }
@@ -520,22 +634,31 @@ export function PhotoComparisonStudio({
         >
           <Ionicons name="play-skip-forward" size={16} color={accent} />
         </Pressable>
-        <View style={styles.speedGroup}>
-          {PHOTO_VIDEO_SPEEDS.map((choice) => (
-            <Pressable
-              key={choice}
-              accessibilityRole="radio"
-              accessibilityState={{ checked: speed === choice }}
-              onPress={() => setSpeed(choice)}
-              style={[
-                styles.speedButton,
-                { borderColor: speed === choice ? accent : colors.border },
-                speed === choice && { backgroundColor: colors.primarySoft },
-              ]}
-            >
-              <Text translate={false} style={[styles.speedText, { color: speed === choice ? accent : colors.muted }]}>{choice}×</Text>
-            </Pressable>
-          ))}
+        <View
+          accessibilityRole="adjustable"
+          accessibilityLabel="Slideshow speed"
+          accessibilityValue={{ min: 0.5, max: 20, now: speed, text: `${speed} times` }}
+          style={[styles.speedGroup, { borderColor: colors.border }]}
+        >
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Decrease slideshow speed"
+            disabled={speed === PHOTO_VIDEO_SPEEDS[0]}
+            onPress={() => setSpeed((current) => adjacentPhotoVideoSpeed(current, -1))}
+            style={[styles.speedStepButton, speed === PHOTO_VIDEO_SPEEDS[0] && styles.disabled]}
+          >
+            <Ionicons name="remove" size={14} color={accent} />
+          </Pressable>
+          <Text translate={false} style={[styles.speedText, { color: colors.ink }]}>{speed}×</Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Increase slideshow speed"
+            disabled={speed === PHOTO_VIDEO_SPEEDS.at(-1)}
+            onPress={() => setSpeed((current) => adjacentPhotoVideoSpeed(current, 1))}
+            style={[styles.speedStepButton, speed === PHOTO_VIDEO_SPEEDS.at(-1) && styles.disabled]}
+          >
+            <Ionicons name="add" size={14} color={accent} />
+          </Pressable>
         </View>
       </View>
 
@@ -609,12 +732,32 @@ export function PhotoComparisonStudio({
           ) : null}
 
           {webVideoAvailable() ? (
-            <Pressable disabled={exportingVideo} onPress={exportVideo} style={[styles.videoButton, { backgroundColor: accent }, exportingVideo && styles.disabled]}>
-              <Ionicons name={exportingVideo ? "hourglass-outline" : "videocam-outline"} size={16} color={palette.white} />
-              <Text preserveColor style={styles.videoText}>
-                {exportingVideo ? `Creating video · ${Math.round(videoProgress * 100)}%` : "Save or share slideshow video"}
-              </Text>
-            </Pressable>
+            <View style={styles.videoActions}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Save slideshow video locally"
+                disabled={Boolean(videoAction)}
+                onPress={saveVideo}
+                style={[styles.videoButton, { backgroundColor: accent }, videoAction && styles.disabled]}
+              >
+                <Ionicons name={videoAction === "save" ? "hourglass-outline" : "download-outline"} size={16} color={palette.white} />
+                <Text preserveColor style={styles.videoText}>
+                  {videoAction === "save" ? `Saving · ${Math.round(videoProgress * 100)}%` : "Save video"}
+                </Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Share slideshow video with another app"
+                disabled={Boolean(videoAction)}
+                onPress={shareVideo}
+                style={[styles.videoButton, styles.shareVideoButton, { borderColor: accent }, videoAction && styles.disabled]}
+              >
+                <Ionicons name={videoAction === "share" ? "hourglass-outline" : "share-social-outline"} size={16} color={accent} />
+                <Text style={[styles.videoText, { color: accent }]}>
+                  {videoAction === "share" ? `Preparing · ${Math.round(videoProgress * 100)}%` : "Share video"}
+                </Text>
+              </Pressable>
+            </View>
           ) : (
             <View style={[styles.videoNote, { backgroundColor: colors.primarySoft }]}>
               <Ionicons name="information-circle-outline" size={15} color={accent} />
@@ -652,9 +795,9 @@ const styles = StyleSheet.create({
   playbackRow: { flexDirection: "row", alignItems: "center", gap: 6 },
   roundButton: { width: 34, height: 34, borderWidth: 1, borderRadius: 11, alignItems: "center", justifyContent: "center" },
   playButton: { width: 38, height: 38, borderRadius: 13, alignItems: "center", justifyContent: "center" },
-  speedGroup: { marginLeft: "auto", flexDirection: "row", gap: 4 },
-  speedButton: { minWidth: 32, height: 29, borderWidth: 1, borderRadius: 9, alignItems: "center", justifyContent: "center", paddingHorizontal: 5 },
-  speedText: { fontSize: 7.5, fontWeight: "900" },
+  speedGroup: { marginLeft: "auto", minWidth: 88, height: 32, borderWidth: 1, borderRadius: 10, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  speedStepButton: { width: 28, height: 30, alignItems: "center", justifyContent: "center" },
+  speedText: { minWidth: 30, textAlign: "center", fontSize: 7.5, fontWeight: "900" },
   disabled: { opacity: 0.45 },
   sectionToggle: { borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 10, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   toggleCopy: { flexDirection: "row", alignItems: "center", gap: 7 },
@@ -672,7 +815,9 @@ const styles = StyleSheet.create({
   captureWeight: { color: "#176B4D", fontSize: 7, fontWeight: "900", marginTop: 1 },
   exportButton: { height: 38, borderWidth: 1, borderRadius: 12, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
   exportText: { fontSize: 9, fontWeight: "900" },
-  videoButton: { minHeight: 40, borderRadius: 12, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, paddingHorizontal: 10 },
+  videoActions: { flexDirection: "row", gap: 7 },
+  videoButton: { flex: 1, minHeight: 40, borderRadius: 12, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, paddingHorizontal: 10 },
+  shareVideoButton: { backgroundColor: "transparent", borderWidth: 1 },
   videoText: { color: palette.white, fontSize: 9, fontWeight: "900" },
   videoNote: { borderRadius: 11, padding: 9, flexDirection: "row", alignItems: "flex-start", gap: 7 },
   videoNoteText: { flex: 1, fontSize: 7.5, lineHeight: 11 },

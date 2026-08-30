@@ -680,6 +680,15 @@ const templates: Template[] = [
     ar: () => "الآن", es: () => "ahora", "zh-Hans": () => "刚刚",
     sv: () => "nu", de: () => "jetzt", ru: () => "сейчас", fr: () => "à l’instant",
   }),
+  template(/^(Collapse|Expand) (.+) balance$/, {
+    ar: ([action, date]) => `${action === "Collapse" ? "طي" : "توسيع"} رصيد ${date}`,
+    es: ([action, date]) => `${action === "Collapse" ? "Contraer" : "Expandir"} el balance de ${date}`,
+    "zh-Hans": ([action, date]) => `${action === "Collapse" ? "收起" : "展开"}${date}的平衡`,
+    sv: ([action, date]) => `${action === "Collapse" ? "Fäll ihop" : "Fäll ut"} saldot för ${date}`,
+    de: ([action, date]) => `Bilanz für ${date} ${action === "Collapse" ? "einklappen" : "ausklappen"}`,
+    ru: ([action, date]) => `${action === "Collapse" ? "Свернуть" : "Развернуть"} баланс за ${date}`,
+    fr: ([action, date]) => `${action === "Collapse" ? "Réduire" : "Développer"} le bilan du ${date}`,
+  }),
   template(/^(\d+)(s|m|h|d) ago$/, {
     ar: ([value, unit]) => `منذ ${value} ${unit === "s" ? "ثانية" : unit === "m" ? "دقيقة" : unit === "h" ? "ساعة" : "يوم"}`,
     es: ([value, unit]) => `hace ${value} ${unit === "s" ? "s" : unit === "m" ? "min" : unit === "h" ? "h" : "d"}`,

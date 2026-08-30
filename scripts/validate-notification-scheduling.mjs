@@ -24,8 +24,10 @@ import { createLatestAsyncDrain } from "../src/domain/latestAsyncDrain.ts";
 import {
   acknowledgeWorkoutActionsAfterPersistence,
   formatWorkoutNotificationElapsed,
+  WORKOUT_COMPLETION_NOTIFICATION_WINDOW_MS,
   WEB_WORKOUT_ACTION_ACK_RETRY_MAX_MS,
   webWorkoutActionAckRetryDelay,
+  workoutCompletionCanNotify,
   workoutNotificationElapsedSeconds,
   workoutWebNotificationBody,
   workoutWebNotificationSignature,
@@ -193,6 +195,41 @@ assert.equal(
 );
 
 assert.equal(formatWorkoutNotificationElapsed(3_661), "61:01");
+const workoutCompletionNow = Date.parse("2026-08-30T12:00:00.000Z");
+assert.equal(
+  workoutCompletionCanNotify({
+    localDate: "2026-08-30",
+    recordedAt: "2026-08-30T11:59:00.000Z",
+    completedAt: "2026-08-30T11:59:30.000Z",
+    today: "2026-08-30",
+    now: workoutCompletionNow,
+  }),
+  true,
+  "a workout completed moments ago today may emit its one immediate acknowledgement",
+);
+assert.equal(
+  workoutCompletionCanNotify({
+    localDate: "2026-08-27",
+    recordedAt: new Date(workoutCompletionNow).toISOString(),
+    completedAt: new Date(workoutCompletionNow).toISOString(),
+    today: "2026-08-30",
+    now: workoutCompletionNow,
+  }),
+  false,
+  "editing or hydrating an older-day workout must never replay a completion notification",
+);
+assert.equal(
+  workoutCompletionCanNotify({
+    localDate: "2026-08-30",
+    recordedAt: new Date(
+      workoutCompletionNow - WORKOUT_COMPLETION_NOTIFICATION_WINDOW_MS - 1,
+    ).toISOString(),
+    today: "2026-08-30",
+    now: workoutCompletionNow,
+  }),
+  false,
+  "sign-in and upgrade hydration must baseline a stale same-day workout silently",
+);
 assert.equal(
   workoutNotificationElapsedSeconds({
     phase: "work",
@@ -1500,6 +1537,16 @@ assert.match(webScheduleSyncSource, /WEB_REMINDER_SCHEDULE_REPAIR_MS/);
 assert.match(webScheduleSyncSource, /acceptedAt: Date\.now\(\)/);
 assert.match(webPushSource, /showImmediateWebNotification/);
 assert.match(source, /deliverImmediatePersonalNotification/);
+assert.match(
+  source,
+  /workoutCompletionCanNotify\(\{[\s\S]{0,260}localDate: latest\.localDate[\s\S]{0,260}today: dateKey\(\)/,
+  "workout-save acknowledgements must be gated to a genuinely recent completion today",
+);
+assert.match(
+  source,
+  /if \(shouldNotify\) \{[\s\S]{0,4200}AsyncStorage\.setItem\(achievementKey, latest\.id\)/,
+  "hydrated or quiet-hour workout history must still establish a silent notification baseline",
+);
 assert.doesNotMatch(
   source.slice(
     source.indexOf("export async function notifyProgressMilestones"),

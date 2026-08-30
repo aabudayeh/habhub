@@ -646,8 +646,8 @@ assert.match(
 );
 assert.match(
   weeklyDetail,
-  /report\.dailyBalances[\s\S]{0,260}<Card key=\{entry\.id\} style=\{styles\.entry\}>[\s\S]{0,800}\{actual\} kcal actual · \{target\} kcal target/,
-  "each Weekly balance day must use the standard entry card while preserving actual and target semantics",
+  /report\.dailyBalances[\s\S]{0,800}entryRangeView[\s\S]{0,140}openEntryDates\.includes\(entry\.startDate\)[\s\S]{0,2500}<Card style=\{styles\.entry\}>[\s\S]{0,1200}\{actual\} kcal actual · \{target\} kcal target/,
+  "each Weekly balance range day must start collapsed and expand into the standard actual/target entry card",
 );
 assert.doesNotMatch(
   weeklyDetail,

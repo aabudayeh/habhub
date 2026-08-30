@@ -532,18 +532,23 @@ assert.match(
 
 assert.match(
   nativeWidget,
-  /val twoByOneFeatured = size\.compact && size\.widthDp < 165f/,
-  "The native renderer must identify the 2 x 1 Featured bounds independently",
+  /val twoByOneFeatured = size\.compact && !size\.wide/,
+  "The native renderer must identify 2 x 1 Featured bounds across launcher-specific reported widths",
 );
 assert.match(
   nativeWidget,
-  /if \(twoByOneFeatured\) 4\.35f else 5\.1f,[\s\S]{0,120}if \(twoByOneFeatured\) 3\.5f else 4\.1f[\s\S]{0,180}if \(twoByOneFeatured\) 0f else 0\.04f/,
+  /if \(twoByOneFeatured\) 4f else 5\.1f,[\s\S]{0,120}if \(twoByOneFeatured\) 2\.8f else 4\.1f[\s\S]{0,180}if \(twoByOneFeatured\) 0f else 0\.04f/,
   "The 2 x 1 Featured widget must use its own fitted header treatment so TODAY'S FOCUS is not ellipsized",
 );
 assert.match(
   nativeWidget,
-  /val twoByOneFeatured = size\.compact && size\.widthDp < 165f[\s\S]{0,240}size\.wide -> 8[\s\S]{0,80}twoByOneFeatured -> 7[\s\S]{0,160}else -> 5[\s\S]{0,160}val gap = if \(twoByOneFeatured\) 2f else 3f/,
+  /val twoByOneFeatured = size\.compact && !size\.wide[\s\S]{0,240}size\.wide -> 8[\s\S]{0,80}twoByOneFeatured -> 7[\s\S]{0,160}else -> 5[\s\S]{0,160}val gap = if \(twoByOneFeatured\) 1\.5f else 3f/,
   "Only the 2 x 1 Featured widget should expand its compact goal row to seven squares",
+);
+assert.match(
+  nativeWidget,
+  /val availableWidth = size\.widthDp - 12f - if \(twoByOneFeatured\) 0f else badgeReserve/,
+  "The 2 x 1 goal row must use its full lower width instead of reserving the top progress badge",
 );
 
 console.log("Privacy-safe Featured, Status, and Leaderboard widget snapshots validated.");

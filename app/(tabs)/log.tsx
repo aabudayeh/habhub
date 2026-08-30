@@ -1504,17 +1504,30 @@ function LogScreen() {
           ) : null}
           {selected.id === "weight" ? (
             <>
-              <Text style={[styles.fieldLabel, { color: colors.muted }]}>Body measurements</Text>
+              <Text style={[styles.fieldLabel, { color: colors.muted }]}>Weight</Text>
+              <View
+                style={[
+                  styles.primaryMeasurementInput,
+                  { borderColor: accent, backgroundColor: colors.canvas },
+                ]}
+              >
+                <Ionicons name="scale-outline" size={21} color={accent} />
+                <TextInput
+                  accessibilityLabel="Weight"
+                  value={value}
+                  onChangeText={setValue}
+                  keyboardType="decimal-pad"
+                  placeholder="Optional"
+                  placeholderTextColor={colors.faint}
+                  style={[styles.primaryMeasurementText, { color: colors.ink }]}
+                />
+                <Text style={[styles.primaryMeasurementUnit, { color: colors.muted }]}>
+                  {selected.unit}
+                </Text>
+              </View>
+              <Text style={[styles.fieldLabel, styles.secondaryMeasurementLabel, { color: colors.muted }]}>Body composition (optional)</Text>
               <View style={styles.nutritionGrid}>
-                {[
-                  {
-                    id: "weight",
-                    label: "Weight",
-                    unit: selected.unit,
-                    raw: value,
-                    set: setValue,
-                  },
-                  ...bodyCompositionMetrics.map((metric) => ({
+                {bodyCompositionMetrics.map((metric) => ({
                     id: metric.id,
                     label: metric.name,
                     unit: metric.unit,
@@ -1524,8 +1537,7 @@ function LogScreen() {
                         ...current,
                         [metric.id]: raw,
                       })),
-                  })),
-                ].map((item) => (
+                  })).map((item) => (
                   <View key={item.id} style={styles.nutritionField}>
                     <Text style={[styles.nutritionLabel, { color: colors.muted }]}>{item.label}</Text>
                     <View style={[styles.nutritionInput, { borderColor: colors.border }]}>
@@ -1546,6 +1558,50 @@ function LogScreen() {
             </>
           ) : selected.id === "workout" ? null : selected.dataType === "photo" ? (
             <>
+              <Text style={[styles.fieldLabel, { color: colors.muted }]}>Progress photo</Text>
+              <View style={styles.photoPrimaryWrap}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={entryImage ? "Change progress photo" : "Attach a progress photo"}
+                  onPress={() => pickImage(setEntryImage)}
+                  style={[
+                    styles.photoPrimaryCard,
+                    { borderColor: entryImage ? accent : colors.border, backgroundColor: colors.canvas },
+                  ]}
+                >
+                  {entryImage ? (
+                    <>
+                      <Image source={{ uri: entryImage }} style={styles.photoPrimaryImage} contentFit="cover" />
+                      <View style={styles.photoPrimaryAction}>
+                        <Ionicons name="camera-outline" size={17} color={accent} />
+                        <Text style={[styles.photoPrimaryActionText, { color: accent }]}>Change photo</Text>
+                      </View>
+                    </>
+                  ) : (
+                    <View style={styles.photoEmpty}>
+                      <View style={[styles.photoIcon, { backgroundColor: colors.primarySoft }]}>
+                        <Ionicons name="camera-outline" size={24} color={accent} />
+                      </View>
+                      <View style={styles.grow}>
+                        <Text style={[styles.photoTitle, { color: colors.ink }]}>Attach a photo</Text>
+                        <Text style={[styles.helper, { color: colors.muted }]}>Take one now or choose it from your library.</Text>
+                      </View>
+                      <Ionicons name="add-circle" size={22} color={accent} />
+                    </View>
+                  )}
+                </Pressable>
+                {entryImage ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Remove progress photo"
+                    hitSlop={7}
+                    onPress={() => setEntryImage(null)}
+                    style={styles.photoPrimaryRemove}
+                  >
+                    <Ionicons name="close" size={16} color={palette.white} />
+                  </Pressable>
+                ) : null}
+              </View>
               <Text style={[styles.fieldLabel, { color: colors.muted }]}>Optional body measurements</Text>
               <View style={styles.nutritionGrid}>
                 {[
@@ -2112,30 +2168,34 @@ function LogScreen() {
             ]}
             multiline
           />
-          {entryImage ? (
-            <View style={styles.entryImageWrap}>
-              <Image
-                source={{ uri: entryImage }}
-                style={styles.entryImage}
-                contentFit="cover"
-              />
+          {selected.dataType !== "photo" ? (
+            <>
+              {entryImage ? (
+                <View style={styles.entryImageWrap}>
+                  <Image
+                    source={{ uri: entryImage }}
+                    style={styles.entryImage}
+                    contentFit="cover"
+                  />
+                  <Pressable
+                    onPress={() => setEntryImage(null)}
+                    style={styles.removeImage}
+                  >
+                    <Ionicons name="close" size={16} color={palette.white} />
+                  </Pressable>
+                </View>
+              ) : null}
               <Pressable
-                onPress={() => setEntryImage(null)}
-                style={styles.removeImage}
+                onPress={() => pickImage(setEntryImage)}
+                style={styles.attachRow}
               >
-                <Ionicons name="close" size={16} color={palette.white} />
+                <Ionicons name="camera-outline" size={19} color={accent} />
+                <Text style={[styles.attachText, { color: accent }]}>
+                  {entryImage ? "Change attached photo" : "Attach a photo"}
+                </Text>
               </Pressable>
-            </View>
+            </>
           ) : null}
-          <Pressable
-            onPress={() => pickImage(setEntryImage)}
-            style={styles.attachRow}
-          >
-            <Ionicons name="camera-outline" size={19} color={accent} />
-            <Text style={[styles.attachText, { color: accent }]}>
-              {entryImage ? "Change attached photo" : "Attach a photo"}
-            </Text>
-          </Pressable>
           <Button
             label={
               selected.id === "weight"
@@ -2540,6 +2600,30 @@ const styles = StyleSheet.create({
     gap: 8,
     marginBottom: 12,
   },
+  primaryMeasurementInput: {
+    minHeight: 58,
+    borderWidth: 1.5,
+    borderRadius: 15,
+    paddingHorizontal: 13,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    marginBottom: 12,
+  },
+  primaryMeasurementText: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 22,
+    lineHeight: 27,
+    fontWeight: "900",
+    paddingVertical: 10,
+  },
+  primaryMeasurementUnit: {
+    flexShrink: 0,
+    ...typography.body,
+    fontWeight: "800",
+  },
+  secondaryMeasurementLabel: { marginTop: 1 },
   moreNutrition: {
     flexDirection: "row",
     alignItems: "center",
@@ -2670,8 +2754,37 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     marginBottom: 14,
   },
+  photoPrimaryWrap: { position: "relative", marginBottom: 14 },
+  photoPrimaryCard: {
+    borderWidth: 1.5,
+    borderStyle: "dashed",
+    borderRadius: 16,
+    overflow: "hidden",
+    minHeight: 92,
+  },
+  photoPrimaryImage: { width: "100%", height: 190 },
+  photoPrimaryAction: {
+    minHeight: 42,
+    paddingHorizontal: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 7,
+  },
+  photoPrimaryActionText: { ...typography.body, fontWeight: "900" },
+  photoPrimaryRemove: {
+    position: "absolute",
+    right: 8,
+    top: 8,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: "#0B1622CC",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   photoActions: { flexDirection: "row", gap: 9 },
-  photoEmpty: { flexDirection: "row", alignItems: "center", gap: 12 },
+  photoEmpty: { minHeight: 92, paddingHorizontal: 13, flexDirection: "row", alignItems: "center", gap: 12 },
   photoIcon: {
     width: 49,
     height: 49,

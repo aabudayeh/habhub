@@ -342,7 +342,7 @@ export function buildAlerts(
       category: socialReaction ? "lead" : "challenge",
       icon: socialReaction
         ? event.reaction === "cheer"
-          ? "megaphone-outline"
+          ? "sparkles-outline"
           : event.reaction === "thumbs_down"
           ? "thumbs-down-outline"
           : event.reaction === "thumbs_up"

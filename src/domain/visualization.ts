@@ -24,7 +24,6 @@ function automaticVisualization(
   const isJourney =
     metric.id === "weight" || metric.goalProgressMode === "journey";
   const keepsPurposeBuiltRange =
-    metric.id === "food" ||
     metric.id === "intermittent_fasting" ||
     metric.id === "weekly_deficit_balance" ||
     metric.id === "weekly_deficit" ||

@@ -48,6 +48,7 @@ import {
   exerciseKey,
 } from "@/src/domain/exerciseCatalog";
 import {
+  completedExerciseWeightAverages,
   completedGymSets,
   completedGymDistanceKm,
   completeGymWorkout,
@@ -344,6 +345,26 @@ function workoutNotificationSteps(
 
 function blankSet(reps = 10, weightKg = 0): GymSet {
   return { id: uniqueId("set"), reps, weightKg, completed: false };
+}
+
+function previousSetFieldText(
+  set: GymSet | undefined,
+  field: WorkoutExerciseTrackingField,
+  locale: string,
+) {
+  if (!set?.completed) return "";
+  const value =
+    field === "duration"
+      ? Math.round(((set.workSeconds ?? 0) / 60) * 10) / 10
+      : field === "weight"
+        ? Math.round(Math.max(0, set.weightKg) * 10) / 10
+        : field === "distance"
+          ? Math.round(Math.max(0, set.distanceKm ?? 0) * 100) / 100
+          : Math.max(0, Math.round(set.reps));
+  if (!value) return "";
+  return value.toLocaleString(locale, {
+    maximumFractionDigits: field === "distance" ? 2 : 1,
+  });
 }
 
 function gymPerformanceScoreText(
@@ -1464,7 +1485,6 @@ function GymScreen() {
   );
   const previousExerciseIndex = useMemo(() => {
     const exercisesByKey = new Map<string, GymExercise>();
-    const weightByKey = new Map<string, number>();
     for (const session of sessions) {
       if (
         session.id === sessionId ||
@@ -1477,18 +1497,15 @@ function GymScreen() {
       for (const exercise of expandedGymExercises(session.exercises)) {
         const key = exerciseIdentity(exercise);
         if (!exercisesByKey.has(key)) exercisesByKey.set(key, exercise);
-        if (weightByKey.has(key)) continue;
-        const previousWeight = Math.max(
-          0,
-          ...exercise.sets
-            .filter((set) => set.completed)
-            .map((set) => Math.max(0, set.weightKg)),
-        );
-        if (previousWeight > 0) weightByKey.set(key, previousWeight);
       }
     }
-    return { exercisesByKey, weightByKey };
-  }, [localDate, selectedSession, sessionId, sessions]);
+    const averageWeightByKey = completedExerciseWeightAverages(
+      sessions,
+      state.currentUserId,
+      sessionId,
+    );
+    return { exercisesByKey, averageWeightByKey };
+  }, [localDate, selectedSession, sessionId, sessions, state.currentUserId]);
   const latestExercise = useCallback(
     (key: string) => previousExerciseIndex.exercisesByKey.get(key),
     [previousExerciseIndex],
@@ -2406,7 +2423,7 @@ function GymScreen() {
     const sessionVolume = trainingVolumeKg(sessionExercises);
     const nowRecordedAt = new Date().toISOString();
     const recordedAt =
-      selectedSession?.recordedAt ??
+      (selectedSessionLogged ? selectedSession?.recordedAt : undefined) ??
       (localDate === dateKey()
         ? nowRecordedAt
         : `${localDate}T${nowRecordedAt.slice(11)}`);
@@ -2433,7 +2450,9 @@ function GymScreen() {
       sessionExercises,
     );
     const completedAt = sessionCompletedSets
-      ? timing?.completedAt ?? selectedSession?.completedAt ?? recordedAt
+      ? timing?.completedAt ??
+        (selectedSessionLogged ? selectedSession?.completedAt : undefined) ??
+        recordedAt
       : selectedSession?.completedAt;
     const completedAtMs = completedAt
       ? new Date(completedAt).getTime()
@@ -4133,9 +4152,11 @@ function GymScreen() {
               const activeExerciseRest =
                 active && workoutTimer?.phase === "exercise_rest";
               const history = exerciseHistories.get(identity) ?? [];
-              const previousWeight = trackingFields.includes("weight")
-                ? previousExerciseIndex.weightByKey.get(identity)
+              const averageWeight = trackingFields.includes("weight")
+                ? previousExerciseIndex.averageWeightByKey.get(identity)
                 : undefined;
+              const previousExercise =
+                previousExerciseIndex.exercisesByKey.get(identity);
               const exerciseAverageRestSeconds = averageGymRestSeconds([
                 exercise,
               ]);
@@ -4230,8 +4251,8 @@ function GymScreen() {
                         {exerciseAverageRestSeconds
                           ? ` · ${exerciseAverageRestSeconds}s avg rest`
                           : ""}
-                        {previousWeight
-                          ? ` · Last ${previousWeight.toLocaleString(locale, { maximumFractionDigits: 1 })} kg`
+                        {averageWeight
+                          ? ` · Avg ${averageWeight.toLocaleString(locale, { maximumFractionDigits: 1 })} kg`
                           : ""}
                       </Text>
                     </View>
@@ -4343,53 +4364,94 @@ function GymScreen() {
                                 />
                               </Pressable>
                             )}
-                            {trackingFields.map((field) => (
-                              <DraftNumberInput
-                                key={field}
-                                value={
-                                  field === "duration"
-                                    ? Math.round(
-                                        ((set.workSeconds ?? 0) / 60) * 10,
-                                      ) / 10
-                                    : field === "weight"
-                                      ? set.weightKg
-                                      : field === "distance"
+                            {trackingFields.map((field) => {
+                              const previousText = previousSetFieldText(
+                                previousExercise?.sets[setIndex],
+                                field,
+                                locale,
+                              );
+                              return (
+                                <View key={field} style={styles.setInputCell}>
+                                  <DraftNumberInput
+                                    value={
+                                      field === "duration"
                                         ? Math.round(
-                                            Math.max(0, set.distanceKm ?? 0) *
-                                              100,
-                                          ) / 100
-                                        : set.reps
-                                }
-                                onCommit={(value) =>
-                                  updateSet(
-                                    exercise.id,
-                                    set.id,
-                                    field === "duration"
-                                      ? { workSeconds: Math.max(0, value) * 60 }
-                                      : field === "weight"
-                                        ? { weightKg: Math.max(0, value) }
-                                        : field === "distance"
-                                          ? { distanceKm: Math.max(0, value) }
-                                          : {
-                                              reps: Math.max(
-                                                0,
-                                                Math.round(value),
-                                              ),
-                                            },
-                                  )
-                                }
-                                keyboardType={
-                                  field === "reps" ? "number-pad" : "decimal-pad"
-                                }
-                                style={[
-                                  styles.setInput,
-                                  {
-                                    color: colors.ink,
-                                    borderColor: colors.border,
-                                  },
-                                ]}
-                              />
-                            ))}
+                                            ((set.workSeconds ?? 0) / 60) * 10,
+                                          ) / 10
+                                        : field === "weight"
+                                          ? set.weightKg
+                                          : field === "distance"
+                                            ? Math.round(
+                                                Math.max(
+                                                  0,
+                                                  set.distanceKm ?? 0,
+                                                ) * 100,
+                                              ) / 100
+                                            : set.reps
+                                    }
+                                    onCommit={(value) =>
+                                      updateSet(
+                                        exercise.id,
+                                        set.id,
+                                        field === "duration"
+                                          ? {
+                                              workSeconds:
+                                                Math.max(0, value) * 60,
+                                            }
+                                          : field === "weight"
+                                            ? { weightKg: Math.max(0, value) }
+                                            : field === "distance"
+                                              ? {
+                                                  distanceKm:
+                                                    Math.max(0, value),
+                                                }
+                                              : {
+                                                  reps: Math.max(
+                                                    0,
+                                                    Math.round(value),
+                                                  ),
+                                                },
+                                      )
+                                    }
+                                    keyboardType={
+                                      field === "reps"
+                                        ? "number-pad"
+                                        : "decimal-pad"
+                                    }
+                                    accessibilityHint={
+                                      previousText
+                                        ? `Previous set ${setIndex + 1}: ${previousText}`
+                                        : undefined
+                                    }
+                                    style={[
+                                      styles.setInput,
+                                      previousText
+                                        ? styles.setInputWithPrevious
+                                        : null,
+                                      Platform.OS === "web"
+                                        ? styles.setInputWeb
+                                        : null,
+                                      {
+                                        color: colors.ink,
+                                        borderColor: colors.border,
+                                      },
+                                    ]}
+                                  />
+                                  {previousText ? (
+                                    <Text
+                                      numberOfLines={1}
+                                      pointerEvents="none"
+                                      style={[
+                                        styles.previousSetValue,
+                                        { color: colors.muted },
+                                      ]}
+                                    >
+                                      prev {previousText}
+                                    </Text>
+                                  ) : null}
+                                </View>
+                              );
+                            })}
                             <Pressable
                               onPress={() => removeSetSafely(exercise, set)}
                             >
@@ -5914,7 +5976,13 @@ const styles = StyleSheet.create({
   closeSpace: { width: 19 },
   setBlock: { gap: 2, borderRadius: 9, paddingVertical: 2 },
   activeSet: { paddingHorizontal: 4, backgroundColor: `${palette.lime}16` },
-  setRow: { flexDirection: "row", alignItems: "center", gap: 7 },
+  setRow: {
+    width: "100%",
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
   setTimeText: { marginLeft: 35, fontSize: 7, fontWeight: "700" },
   setTimeTextInline: { fontSize: 7, fontWeight: "700" },
   supersetRow: {
@@ -5979,7 +6047,33 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 5,
   },
-  setInput: { flex: 1, height: 36, borderWidth: 1, borderRadius: 9, textAlign: "center", fontSize: 11, fontWeight: "800" },
+  setInputCell: {
+    flex: 1,
+    minWidth: 0,
+    height: 36,
+    position: "relative",
+  },
+  setInput: {
+    width: "100%",
+    height: 36,
+    borderWidth: 1,
+    borderRadius: 9,
+    textAlign: "center",
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  setInputWeb: { minWidth: 0 },
+  setInputWithPrevious: { paddingTop: 1, paddingBottom: 10 },
+  previousSetValue: {
+    position: "absolute",
+    bottom: 1,
+    left: 2,
+    right: 2,
+    textAlign: "center",
+    fontSize: 5,
+    lineHeight: 7,
+    fontWeight: "800",
+  },
   exerciseNotes: { borderWidth: 1, borderRadius: 9, minHeight: 37, paddingHorizontal: 9, fontSize: 9 },
   exerciseActions: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   removeExercise: { flexDirection: "row", gap: 4, alignItems: "center", padding: 8 },

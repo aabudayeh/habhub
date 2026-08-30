@@ -483,12 +483,12 @@ assert.match(
 );
 assert.match(
   pluginSource,
-  /val twoByOneFeatured = size\.compact && size\.widthDp < 165f[\s\S]*fittedTextPaint\([\s\S]{0,100}eyebrowWidth,[\s\S]{0,80}if \(twoByOneFeatured\) 4\.35f else 5\.1f,[\s\S]{0,60}if \(twoByOneFeatured\) 3\.5f else 4\.1f/,
+  /val twoByOneFeatured = size\.compact && !size\.wide[\s\S]*fittedTextPaint\([\s\S]{0,100}eyebrowWidth,[\s\S]{0,80}if \(twoByOneFeatured\) 4f else 5\.1f,[\s\S]{0,60}if \(twoByOneFeatured\) 2\.8f else 4\.1f/,
   "Only the minimum 2x1 Featured header must use the smaller TODAY'S FOCUS typography",
 );
 assert.match(
   pluginSource,
-  /else if \(twoByOneFeatured\) \{[\s\S]{0,30}1\.2f/,
+  /else if \(twoByOneFeatured\) \{[\s\S]{0,30}0\.5f/,
   "Only the 2x1 Featured header must move slightly left",
 );
 assert.match(pluginSource, /item\.optString\("compactSubtitle", item\.optString\("subtitle"\)\)/);
@@ -527,14 +527,15 @@ assert.ok(
   "Even the minimum launcher-stack height must keep tiles above the renderer's 6dp visibility floor",
 );
 const featured2x1Width = 109;
+const samsungReported2x1Width = 190;
 const featured2x1Pad = 5;
 const featuredBadgeDiameter = 24;
 const featuredBadgeCenter =
   featured2x1Width - featured2x1Pad - featuredBadgeDiameter / 2;
 const featuredContentWidth =
   featuredBadgeCenter - featuredBadgeDiameter / 2 - featured2x1Pad - 5;
-const featuredDateWidth = Math.min(featuredContentWidth * 0.38, 17);
-const featuredEyebrowWidth = featuredContentWidth - featuredDateWidth - 2.2;
+const featuredDateWidth = Math.min(featuredContentWidth * 0.32, 14);
+const featuredEyebrowWidth = featuredContentWidth - featuredDateWidth - 0.5;
 assert.equal(
   featuredContentWidth,
   70,
@@ -544,14 +545,18 @@ assert.ok(
   featuredEyebrowWidth > 48,
   "The compact date must leave enough width to show TODAY'S FOCUS in full",
 );
-const featured2x1GoalAreaWidth = featured2x1Width - 12 - 35;
+const featured2x1GoalAreaWidth = featured2x1Width - 12;
 const featured2x1SevenTileSize = Math.min(
   10.5,
-  (featured2x1GoalAreaWidth - 3 * (7 - 1)) / 7,
+  (featured2x1GoalAreaWidth - 1.5 * (7 - 1)) / 7,
 );
 assert.ok(
   featured2x1SevenTileSize >= 6,
   "The minimum 2x1 Featured widget must fit a seventh tracker square above the visibility floor",
+);
+assert.ok(
+  samsungReported2x1Width < 220,
+  "Samsung's wider reported 2x1 span must remain in the non-wide compact Featured treatment",
 );
 const compactGoalRenderer = pluginSource.slice(
   pluginSource.indexOf("private fun drawCompactGoalTiles"),
@@ -559,7 +564,7 @@ const compactGoalRenderer = pluginSource.slice(
 );
 assert.match(
   compactGoalRenderer,
-  /twoByOneFeatured -> 7[\s\S]*while \(twoByOneFeatured && count > 5 && tileSize < 6f\)/,
+  /twoByOneFeatured -> 7[\s\S]*val availableWidth = size\.widthDp - 12f - if \(twoByOneFeatured\) 0f else badgeReserve[\s\S]*while \(twoByOneFeatured && count > 5 && tileSize < 5\.2f\)/,
   "The 2x1 Featured widget must allow seven squares and fall back safely on unusually narrow launchers",
 );
 assert.match(

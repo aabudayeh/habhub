@@ -443,7 +443,7 @@ export default function NotificationsScreen() {
           }
         />
         <ToggleRow
-          icon="megaphone-outline"
+          icon="sparkles-outline"
           title="Reactions to your updates"
           copy="Likes, hearts, cheers, and other reactions to items you share"
           enabled={value.socialReactions !== false}

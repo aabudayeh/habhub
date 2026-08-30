@@ -1,7 +1,23 @@
 import { MetricEntry, PhotoUpdate } from "@/src/types";
 
-export const PHOTO_VIDEO_SPEEDS = [0.5, 1, 2] as const;
+/**
+ * Deliberately use a short, useful scale instead of forcing dozens of taps.
+ * The UI walks this scale with compact minus/plus controls.
+ */
+export const PHOTO_VIDEO_SPEEDS = [0.5, 1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20] as const;
 export type PhotoVideoSpeed = (typeof PHOTO_VIDEO_SPEEDS)[number];
+
+export function adjacentPhotoVideoSpeed(
+  current: PhotoVideoSpeed,
+  direction: -1 | 1,
+): PhotoVideoSpeed {
+  const currentIndex = Math.max(0, PHOTO_VIDEO_SPEEDS.indexOf(current));
+  const nextIndex = Math.max(
+    0,
+    Math.min(PHOTO_VIDEO_SPEEDS.length - 1, currentIndex + direction),
+  );
+  return PHOTO_VIDEO_SPEEDS[nextIndex];
+}
 
 /**
  * Photo progress is deliberately ordered from oldest to newest. Stable tie
@@ -123,9 +139,9 @@ export function photoWeightLabel(
     ?.compactLabel;
 }
 
-/** 0.5x = two seconds per image; 2x = half a second per image. */
+/** 0.5x = two seconds per image; 20x = 50 milliseconds per image. */
 export function photoFrameDurationMs(speed: PhotoVideoSpeed) {
-  return Math.round(1_000 / speed);
+  return Math.max(50, Math.round(1_000 / speed));
 }
 
 export function photoIndexAtOffset(

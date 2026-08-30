@@ -6,6 +6,7 @@ import {
   consolidateWorkoutTrackers,
 } from "../src/domain/workoutTrackers.ts";
 import {
+  averageCompletedExerciseWeight,
   completedGymDistanceKm,
   completeGymWorkout,
   estimateGymActiveCalories,
@@ -62,6 +63,37 @@ assert.deepEqual(
   "custom exercise fields must allow every non-empty combination in a stable order",
 );
 assert.equal(completedGymDistanceKm([walkingExercise]), 2.4);
+assert.equal(
+  averageCompletedExerciseWeight(
+    [
+      {
+        id: "prior-strength",
+        userId: "user-a",
+        name: "Strength",
+        localDate: "2026-08-28",
+        recordedAt: "2026-08-28T18:00:00.000Z",
+        durationMinutes: 30,
+        visibility: "group",
+        exercises: [
+          {
+            id: "bench",
+            exerciseKey: "bench_press",
+            name: "Bench press",
+            sets: [
+              { id: "one", reps: 8, weightKg: 40, completed: true },
+              { id: "two", reps: 8, weightKg: 50, completed: true },
+              { id: "warmup", reps: 8, weightKg: 20, completed: false },
+            ],
+          },
+        ],
+      },
+    ],
+    "user-a",
+    "bench_press",
+  ),
+  45,
+  "the compact exercise summary must average all completed working-set weights rather than show one previous maximum",
+);
 assert.equal(
   completedGymDistanceKm([
     {
@@ -1141,6 +1173,36 @@ assert.match(
 assert.match(gymScreen, /setGymExerciseCompletion\(item, completed\)/);
 assert.match(
   gymScreen,
+  /completedExerciseWeightAverages\([\s\S]{0,160}state\.currentUserId/,
+  "Workout exercise headers must show an all-time completed-set average instead of one previous maximum",
+);
+assert.match(
+  gymScreen,
+  /previousSetFieldText\([\s\S]{0,180}previousExercise\?\.sets\[setIndex\]/,
+  "each set row must expose its corresponding prior values without replacing the editable value",
+);
+assert.match(
+  gymScreen,
+  /function previousSetFieldText\([\s\S]{0,180}if \(!set\?\.completed\) return ""/,
+  "per-set previous hints must represent performed sets, not unsaved or planned values",
+);
+assert.match(
+  gymScreen,
+  /setInputWeb: \{ minWidth: 0 \}/,
+  "web set inputs must be allowed to shrink when an exercise tracks multiple fields",
+);
+assert.match(
+  gymScreen,
+  /function pickWorkoutImage\([\s\S]{0,620}Camera[\s\S]{0,220}Photo library/,
+  "a workout log must offer camera and library attachment without adding a permanent large picker",
+);
+assert.match(
+  gymScreen,
+  /saveGymSession\(\{[\s\S]{0,900}imageUri: sessionImage\?\.uri,[\s\S]{0,80}imageStoragePath: sessionImage\?\.storagePath/,
+  "the workout photo must persist with the canonical saved workout projection",
+);
+assert.match(
+  gymScreen,
   /accessibilityLabel=\{`Mark \$\{exercise\.name\} incomplete`\}[\s\S]{0,400}setExerciseCompletion\(exercise, false\)/,
   "The green exercise completion control must undo the exercise and all sets",
 );
@@ -1182,7 +1244,7 @@ assert.match(
 );
 assert.match(
   gymScreen,
-  /trackingFields\.map\(\(field\)[\s\S]{0,2200}distanceKm: Math\.max\(0, value\)/,
+  /trackingFields\.map\(\(field\)[\s\S]{0,4200}distanceKm:[\s\S]{0,80}Math\.max\(0, value\)/,
   "The set editor must persist every selected field, including distance",
 );
 assert.match(

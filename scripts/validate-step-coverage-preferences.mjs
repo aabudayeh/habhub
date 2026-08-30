@@ -307,6 +307,27 @@ assert.ok(
 
 const activities = listStepCoverageActivities();
 assert.ok(activities.some((activity) => activity.key === "basketball"));
+assert.equal(
+  activities.find((activity) => activity.key === "backpacking")?.mode,
+  "equivalent",
+  "Backpacking must be an explicit opt-in activity; automatic Step coverage is reserved for walking, running, and hiking",
+);
+for (const activity of activities.filter((candidate) => candidate.mode === "equivalent")) {
+  const candidate = {
+    ...walkingRows[0],
+    id: `health:health_connect:${activity.key}:workout_duration`,
+    sourceRecordId: `activity-${activity.key}`,
+    label: activity.label,
+  };
+  assert.equal(
+    resolveNormalizedStepCoverageChoice(
+      candidate,
+      normalizeStepCoveragePreferences(),
+    )?.included,
+    false,
+    `${activity.label} must require an explicit Step-control choice`,
+  );
+}
 const administrativeActivities = new Set([
   "multisport_transition",
   "other_workout",
@@ -529,6 +550,48 @@ assert.ok(
   ).coveredSteps > 0,
   "an explicitly classified standalone Active-energy session must participate in Step coverage",
 );
+const manualActiveEnergy = {
+  ...standaloneActiveEnergy,
+  id: "manual-active-energy-entry",
+  source: "manual",
+  sourceProvider: undefined,
+  sourceRecordId: undefined,
+  sourceOrigin: undefined,
+  label: "Active energy",
+};
+assert.match(
+  stepCoverageSessionIdentity(manualActiveEnergy),
+  /^entry:/,
+  "a standalone manual Active-energy entry needs a durable private Step-control identity",
+);
+const manualActiveEnergyPreference = withStepCoverageActivityOverride(
+  undefined,
+  manualActiveEnergy,
+  "basketball",
+  "include",
+  "2026-08-28T12:11:00.000Z",
+);
+const coveredByManualCalories = unrecordedStepActivity(
+  [manualActiveEnergy],
+  metrics,
+  6_000,
+  profile,
+  manualActiveEnergyPreference,
+);
+assert.ok(
+  coveredByManualCalories.coveredSteps > 0,
+  "an explicitly classified manual Active-energy entry must use its calories-only activity estimate",
+);
+assert.equal(
+  unrecordedStepActivity(
+    [manualActiveEnergy],
+    metrics,
+    6_000,
+    profile,
+  ).coveredSteps,
+  0,
+  "a manual Active-energy entry must remain excluded until the user classifies it",
+);
 for (const unsafeActiveEnergy of [
   { ...standaloneActiveEnergy, label: "Active energy total" },
   {
@@ -645,8 +708,8 @@ assert.match(
 );
 assert.match(
   ui,
-  /standaloneSyncedActiveEnergy[\s\S]{0,260}stepCoverageActiveEnergyMetricIds\.has\(source\.metricId\)[\s\S]{0,260}!isDailyActiveEnergyAggregateEntry\(source\)/,
-  "a durable standalone Active-energy interval must be classifiable without admitting daily aggregates",
+  /standaloneActiveEnergy[\s\S]{0,180}stepCoverageActiveEnergyMetricIds\.has\(source\.metricId\)[\s\S]{0,180}isEligibleStandaloneActiveEnergyForStepCoverage\(source\)/,
+  "any durable standalone Active-energy interval must be classifiable without admitting daily aggregates",
 );
 assert.match(
   ui,
@@ -692,6 +755,11 @@ assert.match(
   server,
   /sourceRecordId\.startsWith\("samsung-total-workout:"\)[\s\S]{0,500}body\.slice\(separator \+ 1\)/,
   "Google Health's mixed-account calculation must preserve Samsung workout linkage",
+);
+assert.match(
+  server,
+  /String\(entry\.source \?\? ""\) !== "calculated" && id[\s\S]{0,120}`entry:/,
+  "Google Health must resolve the same standalone-entry identity as the app",
 );
 assert.doesNotMatch(
   groupCloud,

@@ -1161,7 +1161,7 @@ function LogRow({
                 ["thumbs_up", "thumbs-up-outline"],
                 ["thumbs_down", "thumbs-down-outline"],
                 ["heart", "heart-outline"],
-                ["cheer", "megaphone-outline"],
+                ["cheer", "sparkles-outline"],
               ] as const
             ).map(([reaction, icon]) => {
               const selected = reactions.some(
@@ -1192,7 +1192,7 @@ function LogRow({
                       selected && reaction === "heart"
                         ? "heart"
                         : selected && reaction === "cheer"
-                          ? "megaphone"
+                          ? "sparkles"
                           : icon
                     }
                     size={14}

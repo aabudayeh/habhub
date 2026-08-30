@@ -139,6 +139,7 @@ import { totalEnergyBurnedBreakdownEntries } from "@/src/domain/energyBreakdown"
 import {
   isDailyActiveEnergyAggregateEntry,
   isCalculatedStepFallback,
+  isEligibleStandaloneActiveEnergyForStepCoverage,
   isFitbitRestingEnergyEntry,
   unrecordedStepActivity,
 } from "@/src/domain/health";
@@ -340,8 +341,8 @@ export default function TrackerDetail() {
   const entriesSectionOpen = entriesOpenOverride ?? !entryRangeView;
   useEffect(() => {
     setEntriesOpenOverride(undefined);
-    setCollapsedEntryDates([]);
-  }, [day, period, trackerId]);
+    setCollapsedEntryDates(entryRangeView ? dates : []);
+  }, [dates, entryRangeView, trackerId]);
   function shiftRange(direction: number) {
     const next = shiftedPeriodAnchor(
       period,
@@ -637,15 +638,13 @@ export default function TrackerDetail() {
     )
       return false;
     const identity = stepCoverageSessionIdentity(source);
-    const standaloneSyncedActiveEnergy =
-      source.source === "imported" &&
+    const standaloneActiveEnergy =
       stepCoverageActiveEnergyMetricIds.has(source.metricId) &&
-      !isFitbitRestingEnergyEntry(source) &&
-      !isDailyActiveEnergyAggregateEntry(source);
+      isEligibleStandaloneActiveEnergyForStepCoverage(source);
     return Boolean(
       identity &&
         (stepCoverageWorkoutSessionIds.has(identity) ||
-          standaloneSyncedActiveEnergy),
+          standaloneActiveEnergy),
     );
   };
   const gymSessionForStepCoverageEntry = (entry: MetricEntry) => {
@@ -1325,6 +1324,9 @@ export default function TrackerDetail() {
       ),
   );
   const canOpenWorkout = loggingDestination === "workout";
+  const canOpenPhotoProgress =
+    tracker.id === "weight" &&
+    state.metrics.some((metric) => metric.id === "progress_photo");
   const canUseActivityTimer =
     tracker.timerEnabled && loggingDestination === "direct" && !isFasting;
   const addActionLabel =
@@ -1573,7 +1575,7 @@ export default function TrackerDetail() {
           </Card>
         ) : null}
       </View>
-      {canSkipToday || canAddEntry || canOpenWorkout || canUseActivityTimer || isFasting ? (
+      {canSkipToday || canAddEntry || canOpenWorkout || canOpenPhotoProgress || canUseActivityTimer || isFasting ? (
         <OptionalTutorialTarget enabled={isFasting} id="fasting-controls">
           <View style={styles.detailQuickActions}>
           {canSkipToday ? (
@@ -1619,6 +1621,28 @@ export default function TrackerDetail() {
             >
               <Ionicons name={addActionIcon} size={16} color={palette.white} />
               <Text style={styles.quickAddText}>{addActionLabel}</Text>
+            </Pressable>
+          ) : null}
+          {canOpenPhotoProgress ? (
+            <Pressable
+              accessibilityRole="link"
+              accessibilityLabel="Open Photo progress"
+              onPress={() =>
+                router.navigate({
+                  pathname: "/metric-detail",
+                  params: { metric: "progress_photo", date: day, period },
+                } as never)
+              }
+              style={[
+                styles.skipToday,
+                {
+                  borderColor: colors.border,
+                  backgroundColor: colors.primarySoft,
+                },
+              ]}
+            >
+              <Ionicons name="images-outline" size={16} color={accent} />
+              <Text style={[styles.skipTodayText, { color: accent }]}>Photos</Text>
             </Pressable>
           ) : null}
           {canOpenWorkout ? (
@@ -4153,11 +4177,15 @@ function WeeklyDetail({
   const locale = useLocale();
   const { t } = useLocalization();
   const [entriesOpenOverride, setEntriesOpenOverride] = useState<boolean>();
+  const [openEntryDates, setOpenEntryDates] = useState<string[]>([]);
   const entryRangeView = ["week", "month", "year", "overall"].includes(
     period,
   );
   const entriesOpen = entriesOpenOverride ?? !entryRangeView;
-  useEffect(() => setEntriesOpenOverride(undefined), [day, period]);
+  useEffect(() => {
+    setEntriesOpenOverride(undefined);
+    setOpenEntryDates([]);
+  }, [day, period]);
   const tracker = state.metrics.find(
     (metric) => metric.id === "weekly_deficit_balance",
   );
@@ -4559,41 +4587,80 @@ function WeeklyDetail({
       </Pressable>
       {entriesOpen ? <View style={styles.entries}>
         {report.dailyBalances.length ? (
-          [...report.dailyBalances].reverse().map((entry) => (
-            <Card key={entry.id} style={styles.entry}>
-              <View style={styles.entryTop}>
-                <View style={styles.grow}>
-                  <Text style={[styles.entryTitle, { color: colors.ink }]}>
-                    {friendlyDate(entry.startDate, locale)}
-                  </Text>
-                  <Text style={[styles.time, { color: colors.muted }]}>
-                    {formatLocalizedTemplate(
-                      t,
-                      "{actual} kcal actual · {target} kcal target",
-                      {
-                        actual: Math.round(entry.actual).toLocaleString(locale),
-                        target: Math.round(entry.target).toLocaleString(locale),
-                      },
-                    )}
-                  </Text>
-                </View>
-                <Text
-                  numberOfLines={2}
-                  adjustsFontSizeToFit
-                  minimumFontScale={0.72}
-                  style={[
-                    styles.entryValue,
-                    {
-                      color: entry.balance >= 0 ? trackerColor : palette.red,
-                      textAlign: "right",
-                    },
-                  ]}
-                >
-                  {bucketBalanceLabel(entry.balance)}
-                </Text>
-              </View>
-            </Card>
-          ))
+          [...report.dailyBalances].reverse().map((entry) => {
+            const entryOpen =
+              !entryRangeView || openEntryDates.includes(entry.startDate);
+            return (
+              <React.Fragment key={entry.id}>
+                {entryRangeView ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityState={{ expanded: entryOpen }}
+                    accessibilityLabel={`${entryOpen ? "Collapse" : "Expand"} ${friendlyDate(entry.startDate, locale)} balance`}
+                    onPress={() =>
+                      setOpenEntryDates((current) =>
+                        current.includes(entry.startDate)
+                          ? current.filter((date) => date !== entry.startDate)
+                          : [...current, entry.startDate],
+                      )
+                    }
+                    style={[
+                      styles.dateGroupHeader,
+                      { borderColor: colors.border },
+                    ]}
+                  >
+                    <Text style={[styles.entryTitle, { color: colors.ink }]}>
+                      {friendlyDate(entry.startDate, locale)}
+                    </Text>
+                    <View style={styles.dateGroupMeta}>
+                      <Text style={[styles.time, { color: colors.muted }]}>1 entry</Text>
+                      <Ionicons
+                        name={entryOpen ? "chevron-up" : "chevron-down"}
+                        size={16}
+                        color={accent}
+                      />
+                    </View>
+                  </Pressable>
+                ) : null}
+                {entryOpen ? (
+                  <Card style={styles.entry}>
+                    <View style={styles.entryTop}>
+                      <View style={styles.grow}>
+                        <Text style={[styles.entryTitle, { color: colors.ink }]}>
+                          {friendlyDate(entry.startDate, locale)}
+                        </Text>
+                        <Text style={[styles.time, { color: colors.muted }]}>
+                          {formatLocalizedTemplate(
+                            t,
+                            "{actual} kcal actual · {target} kcal target",
+                            {
+                              actual: Math.round(entry.actual).toLocaleString(locale),
+                              target: Math.round(entry.target).toLocaleString(locale),
+                            },
+                          )}
+                        </Text>
+                      </View>
+                      <Text
+                        numberOfLines={2}
+                        adjustsFontSizeToFit
+                        minimumFontScale={0.72}
+                        style={[
+                          styles.entryValue,
+                          {
+                            color:
+                              entry.balance >= 0 ? trackerColor : palette.red,
+                            textAlign: "right",
+                          },
+                        ]}
+                      >
+                        {bucketBalanceLabel(entry.balance)}
+                      </Text>
+                    </View>
+                  </Card>
+                ) : null}
+              </React.Fragment>
+            );
+          })
         ) : (
           <Text style={[styles.empty, { color: colors.muted }]}>
             No completed food-logged days in this period yet.

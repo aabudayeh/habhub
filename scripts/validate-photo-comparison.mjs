@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  adjacentPhotoVideoSpeed,
   chronologicalProgressPhotos,
   fullPhotoDate,
   nearestPhotoMeasurement,
@@ -61,6 +62,9 @@ assert.match(
   "A nearest measurement more than seven days away must disclose its date.",
 );
 assert.equal(photoFrameDurationMs(2), 500);
+assert.equal(photoFrameDurationMs(20), 50);
+assert.equal(adjacentPhotoVideoSpeed(15, 1), 20);
+assert.equal(adjacentPhotoVideoSpeed(0.5, -1), 0.5);
 assert.equal(photoIndexAtOffset(50, 100, 5), 2);
 
 const seed = read("src/data/seed.ts");
@@ -79,21 +83,47 @@ assert.match(
 );
 assert.match(
   logScreen,
-  /selected\.dataType === "photo"[\s\S]{0,500}Optional body measurements[\s\S]{0,1200}bodyCompositionMetrics/,
+  /selected\.dataType === "photo"[\s\S]{0,4000}Optional body measurements[\s\S]{0,1200}bodyCompositionMetrics/,
   "Photo progress logging must expose compact optional Weight, Body fat, and Lean mass inputs.",
+);
+assert.match(
+  logScreen,
+  /selected\.id === "weight"[\s\S]{0,1500}primaryMeasurementInput[\s\S]{0,300}accessibilityLabel="Weight"[\s\S]{0,1000}Body composition \(optional\)/,
+  "Weight must remain the visually primary measurement in its multi-metric log.",
+);
+assert.match(
+  logScreen,
+  />Progress photo<[\s\S]{0,800}accessibilityLabel=\{entryImage \? "Change progress photo" : "Attach a progress photo"\}[\s\S]{0,4000}Optional body measurements/,
+  "Photo progress must make the required photo visually primary before optional measurements.",
 );
 assert.match(metricDetail, /entryRangeView = \["week", "month", "year", "overall"\]\.includes/);
 assert.match(metricDetail, /entriesSectionOpen = entriesOpenOverride \?\? !entryRangeView/);
+assert.match(metricDetail, /setCollapsedEntryDates\(entryRangeView \? dates : \[\]\)/);
 assert.match(metricDetail, /accessibilityState=\{\{ expanded: entriesSectionOpen \}\}/);
 assert.match(metricDetail, /\{entriesSectionOpen \? <View style=\{styles\.entries\}>/);
 assert.match(metricDetail, /function WeeklyDetail[\s\S]{0,1500}entriesOpen = entriesOpenOverride \?\? !entryRangeView/);
+assert.match(metricDetail, /function WeeklyDetail[\s\S]{0,1500}setOpenEntryDates\(\[\]\)/);
 assert.match(studio, /MediaRecorder\.isTypeSupported/);
 assert.match(studio, /mimeType\.startsWith\("video\/mp4"\) \? "mp4" : "webm"/);
+assert.match(
+  studio,
+  /const frames = await Promise\.all\([\s\S]{0,240}loadWebImage\(photo\)[\s\S]{0,1200}drawVideoFrame\([\s\S]{0,500}recorder\.start\(1_000\)/,
+  "slideshow photos must decode and the first frame must be drawn before timed recording starts",
+);
+assert.match(studio, /PHOTO_VIDEO_SPEEDS\.at\(-1\)/);
+assert.match(studio, /adjacentPhotoVideoSpeed\(current, 1\)/);
+assert.match(studio, /accessibilityLabel="Save slideshow video locally"/);
+assert.match(studio, /accessibilityLabel="Share slideshow video with another app"/);
+assert.match(studio, /Alert\.alert\([\s\S]{0,80}"Video saved"/);
+assert.match(studio, /await shareWebFile\(/);
+assert.doesNotMatch(studio, /Save or share slideshow video/);
 assert.match(studio, /minimumSelected=\{2\}/);
 assert.match(studio, /onDeletePhoto\(active\.id\)/);
 assert.match(studio, /showBodyFat/);
 assert.match(studio, /showLeanMass/);
 assert.match(memberComparison, /photoComparisonSection: \{ gap: 8, marginTop: 12 \}/);
 assert.match(memberComparison, /fullPhotoDate\(primary\.localDate, locale\)/);
+assert.match(metricDetail, /const canOpenPhotoProgress =[\s\S]{0,180}tracker\.id === "weight"/);
+assert.match(metricDetail, /accessibilityLabel="Open Photo progress"/);
 
 console.log("Photo comparison checks passed.");

@@ -117,7 +117,8 @@ import {
 import { isInternalTracker } from "@/src/domain/trackerCatalog";
 import { orderTodayMetrics } from "@/src/domain/todayOrdering";
 import {
-  chunkIntoPages,
+  cappedPageCount,
+  chunkIntoCappedPages,
   configuredPageCapacity,
   todayPageCapacity,
 } from "@/src/domain/pagedLayout";
@@ -151,6 +152,7 @@ const COMPLETION_INDICATOR_SIZE = 60;
 const GOAL_DOT_SIZE = 23;
 const GOAL_LIQUID_REVEAL_MS = 2200;
 const TRACKER_DOUBLE_TAP_MS = 210;
+const MAX_TODAY_TRACKER_PAGES = 8;
 
 function parseGoalLiquidSnapshot(
   saved: string | null,
@@ -947,7 +949,7 @@ function Today() {
   );
   const pageCapacity = Math.min(fittingPageCapacity, preferredPageCapacity);
   const todayPageCount = todayUsesPages
-    ? Math.ceil(primary.length / pageCapacity)
+    ? cappedPageCount(primary.length, pageCapacity, MAX_TODAY_TRACKER_PAGES)
     : 0;
   const todayTileMaxHeight = iosWebDevice && todayUsesPages ? 96 : 88;
   const tileHeight = Math.max(
@@ -1528,6 +1530,9 @@ function Today() {
         <TodayTrackerPageFlow
           items={primary}
           pageSize={pageCapacity}
+          pageViewportHeight={
+            pageCapacity * tileHeight + Math.max(0, pageCapacity - 1) * 6
+          }
           paged={todayUsesPages}
           scrollEnabled={!draggingMetricId}
           requestedPage={requestedTodayPage}
@@ -2176,6 +2181,7 @@ function Today() {
 function TodayTrackerPageFlow({
   items,
   pageSize,
+  pageViewportHeight,
   paged,
   scrollEnabled,
   requestedPage,
@@ -2184,6 +2190,7 @@ function TodayTrackerPageFlow({
 }: {
   items: MetricDefinition[];
   pageSize: number;
+  pageViewportHeight: number;
   paged: boolean;
   scrollEnabled: boolean;
   requestedPage?: number;
@@ -2192,6 +2199,11 @@ function TodayTrackerPageFlow({
 }) {
   const rows = items.map(renderItem);
   if (!paged) return <View style={styles.list}>{rows}</View>;
+  const pages = chunkIntoCappedPages(
+    rows,
+    pageSize,
+    MAX_TODAY_TRACKER_PAGES,
+  );
   return (
     <HorizontalPager
       accessibilityLabel="Today"
@@ -2201,9 +2213,23 @@ function TodayTrackerPageFlow({
       scrollEnabled={scrollEnabled}
       showPageDots={false}
       pageStyle={styles.todayTrackerPagerPage}
-      pages={chunkIntoPages(rows, pageSize).map((page, index) => (
-        <View key={index} style={styles.list}>{page}</View>
-      ))}
+      pages={pages.map((page, index) => {
+        const finalOverflowPage =
+          index === MAX_TODAY_TRACKER_PAGES - 1 && page.length > pageSize;
+        return finalOverflowPage ? (
+          <ScrollView
+            key={index}
+            nestedScrollEnabled
+            showsVerticalScrollIndicator
+            style={[styles.todayOverflowPage, { height: pageViewportHeight }]}
+            contentContainerStyle={styles.todayOverflowList}
+          >
+            {page}
+          </ScrollView>
+        ) : (
+          <View key={index} style={styles.list}>{page}</View>
+        );
+      })}
     />
   );
 }
@@ -4090,6 +4116,8 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
   list: { flex: 1, gap: 6 },
+  todayOverflowPage: { flexGrow: 0, flexShrink: 0 },
+  todayOverflowList: { gap: 6, paddingBottom: 2 },
   // A one-point gutter keeps the antialiased completion outline of the next
   // page outside the visible snap boundary. Clipping also contains animated
   // card borders during a swipe without changing scrolling-list alignment.

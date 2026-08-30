@@ -1,6 +1,32 @@
 export const WEB_WORKOUT_ACTION_ACK_RETRY_MAX_MS = 30_000;
+export const WORKOUT_COMPLETION_NOTIFICATION_WINDOW_MS = 10 * 60_000;
 
 export type WorkoutSystemNotificationPhase = "work" | "rest" | "paused";
+
+/**
+ * A workout achievement is an immediate completion acknowledgement, not a
+ * digest. Hydrating cloud history, signing in, upgrading, or enabling alerts
+ * must never replay an earlier workout as newly completed.
+ */
+export function workoutCompletionCanNotify({
+  localDate,
+  recordedAt,
+  completedAt,
+  today,
+  now = Date.now(),
+}: {
+  localDate: string;
+  recordedAt: string;
+  completedAt?: string;
+  today: string;
+  now?: number;
+}) {
+  if (localDate !== today) return false;
+  const completionTime = Date.parse(completedAt ?? recordedAt);
+  if (!Number.isFinite(completionTime)) return false;
+  const age = now - completionTime;
+  return age >= -60_000 && age <= WORKOUT_COMPLETION_NOTIFICATION_WINDOW_MS;
+}
 
 export function workoutNotificationElapsedSeconds({
   phase,

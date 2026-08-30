@@ -17,9 +17,13 @@ assert.equal(
   "both",
   "ordinary calculated trackers should default to combined line and bars",
 );
+assert.equal(
+  metricVisualization({ ...base, id: "food" }).detailRange,
+  "both",
+  "Food range charts should use the combined line and bars view",
+);
 
 for (const metric of [
-  { ...base, id: "food" },
   { ...base, id: "intermittent_fasting" },
   { ...base, id: "fast", fastingSettings: {} },
   { ...base, id: "weekly_deficit_balance", dataType: "calculated" },

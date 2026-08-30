@@ -450,6 +450,53 @@ export function exerciseHistory(
     .sort((a, b) => a.localDate.localeCompare(b.localDate));
 }
 
+/**
+ * Average load across every completed, weighted set for one exercise.
+ *
+ * This describes the user's normal working weight rather than their record;
+ * records and estimated one-rep max remain available in exercise details.
+ */
+export function completedExerciseWeightAverages(
+  sessions: GymSession[],
+  userId: string,
+  excludeSessionId?: string,
+) {
+  const totals = new Map<string, { sum: number; count: number }>();
+  sessions
+    .filter(
+      (session) =>
+        session.userId === userId && session.id !== excludeSessionId,
+    )
+    .flatMap((session) => expandedGymExercises(session.exercises))
+    .forEach((exercise) => {
+      const key = exerciseIdentity(exercise);
+      exercise.sets.forEach((set) => {
+        const weight = Math.max(0, set.weightKg);
+        if (!set.completed || !Number.isFinite(weight) || weight <= 0) return;
+        const current = totals.get(key) ?? { sum: 0, count: 0 };
+        current.sum += weight;
+        current.count += 1;
+        totals.set(key, current);
+      });
+    });
+  return new Map(
+    [...totals].map(([key, total]) => [key, total.sum / total.count]),
+  );
+}
+
+export function averageCompletedExerciseWeight(
+  sessions: GymSession[],
+  userId: string,
+  key: string,
+  excludeSessionId?: string,
+) {
+  return (
+    completedExerciseWeightAverages(sessions, userId, excludeSessionId).get(
+      key,
+    ) ?? 0
+  );
+}
+
 export type GymTrend = "building" | "steady" | "regressing" | "learning";
 
 /**

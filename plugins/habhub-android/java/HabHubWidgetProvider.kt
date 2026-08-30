@@ -1059,7 +1059,10 @@ object HabHubWidgetRenderer {
     // The launcher's 2 x 1 bounds leave less header width once the date and
     // progress badge are reserved. Keep this adjustment local to that size so
     // larger Featured widgets retain their existing typography.
-    val twoByOneFeatured = size.compact && size.widthDp < 165f
+    // Samsung and other launchers can report the same two-column span anywhere
+    // from roughly 109-219dp. Treat every non-wide one-row Featured surface as
+    // the compact 2 x 1 layout instead of relying on a fragile 165dp cutoff.
+    val twoByOneFeatured = size.compact && !size.wide
     val badgeDiameter = if (stackedCompact) 21f else if (size.compact) 24f else 35f
     val badgeCenterX = size.widthDp - pad - badgeDiameter / 2f
     val badgeCenterY = if (size.compact) min(if (stackedCompact) 17f else 19f, size.heightDp * 0.42f) else 30f
@@ -1069,18 +1072,18 @@ object HabHubWidgetRenderer {
     val dateLabel = item.optString("dateLabel")
     val headerBaseline = if (stackedCompact) 7.9f else if (size.compact) 8.7f else 16f
     val datePaint = textPaint(
-      if (size.compact) 4.7f else 7.3f,
+      if (twoByOneFeatured) 4.15f else if (size.compact) 4.7f else 7.3f,
       Color.argb(225, 222, 230, 242),
       true,
     )
     val dateWidth = if (dateLabel.isBlank()) 0f else min(
-      contentWidth * 0.38f,
-      max(if (size.compact) 16f else 24f, datePaint.measureText(dateLabel) + 1f),
+      contentWidth * if (twoByOneFeatured) 0.32f else 0.38f,
+      max(if (twoByOneFeatured) 14f else if (size.compact) 16f else 24f, datePaint.measureText(dateLabel) + 1f),
     )
     val headerGap = if (dateLabel.isBlank()) {
       0f
     } else if (twoByOneFeatured) {
-      1.2f
+      0.5f
     } else if (size.compact) {
       2.2f
     } else {
@@ -1095,8 +1098,8 @@ object HabHubWidgetRenderer {
       fittedTextPaint(
         eyebrow,
         eyebrowWidth,
-        if (twoByOneFeatured) 4.35f else 5.1f,
-        if (twoByOneFeatured) 3.5f else 4.1f,
+        if (twoByOneFeatured) 4f else 5.1f,
+        if (twoByOneFeatured) 2.8f else 4.1f,
         Color.argb(205, 255, 255, 255),
         true,
         if (twoByOneFeatured) 0f else 0.04f,
@@ -1233,7 +1236,7 @@ object HabHubWidgetRenderer {
     bottom: Float,
     accent: Int,
   ) {
-    val twoByOneFeatured = size.compact && size.widthDp < 165f
+    val twoByOneFeatured = size.compact && !size.wide
     var count = min(
       goals.length(),
       when {
@@ -1243,24 +1246,27 @@ object HabHubWidgetRenderer {
       },
     )
     if (count <= 0 || bottom <= top) return
-    val gap = if (twoByOneFeatured) 2f else 3f
+    val gap = if (twoByOneFeatured) 1.5f else 3f
     val badgeReserve = if (size.wide) 46f else 35f
-    val availableWidth = size.widthDp - 12f - badgeReserve
+    // The badge occupies only the top of this card. The bottom goal row can
+    // safely use the full width in the 2 x 1 layout; reserving the badge width
+    // here was what silently reduced seven goals back to six on real launchers.
+    val availableWidth = size.widthDp - 12f - if (twoByOneFeatured) 0f else badgeReserve
     fun resolvedTileSize() = min(
       if (size.wide) 12f else 10.5f,
       min(bottom - top, (availableWidth - gap * (count - 1)) / count),
     )
     var tileSize = resolvedTileSize()
-    // A normal 2 x 1 has room for seven compact goal squares. Some launchers
-    // report slightly narrower bounds, so gracefully fall back to the former
-    // five/six-square layout instead of hiding the row altogether.
-    while (twoByOneFeatured && count > 5 && tileSize < 6f) {
+    // A normal 2 x 1 has room for seven compact goal squares. Only reduce the
+    // count when a launcher reports genuinely unusable bounds.
+    while (twoByOneFeatured && count > 5 && tileSize < 5.2f) {
       count -= 1
       tileSize = resolvedTileSize()
     }
-    if (tileSize < 6f) return
+    val minimumTileSize = if (twoByOneFeatured) 5.2f else 6f
+    if (tileSize < minimumTileSize) return
     val totalWidth = tileSize * count + gap * (count - 1)
-    val startX = 6f
+    val startX = if (twoByOneFeatured) max(6f, (size.widthDp - totalWidth) / 2f) else 6f
     repeat(count) { index ->
       val goal = goals.optJSONObject(index) ?: return@repeat
       val left = startX + index * (tileSize + gap)

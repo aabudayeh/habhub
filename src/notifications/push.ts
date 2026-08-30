@@ -36,6 +36,7 @@ import {
 } from '@/src/domain/notificationScheduling';
 import { automaticFastProgress } from '@/src/domain/fasting';
 import { createLatestAsyncDrain } from '@/src/domain/latestAsyncDrain';
+import { workoutCompletionCanNotify } from '@/src/domain/workoutNotifications';
 import {
   averageGymRestSeconds,
   completedGymSets,
@@ -1674,68 +1675,77 @@ async function syncGymNotificationsNow(state: AppState) {
       state.currentUserId,
     );
 
-  if (
-    settings.gymAchievements !== false &&
-    latest &&
-    !isQuietNow(settings)
-  ) {
+  if (settings.gymAchievements !== false && latest) {
     const alreadyNotified = await AsyncStorage.getItem(achievementKey);
     if (alreadyNotified !== latest.id) {
-      const records = latest.exercises.flatMap((exercise) => {
-        const current = Math.max(
-          0,
-          ...exercise.sets
-            .filter((set) => set.completed)
-            .map((set) => estimatedOneRepMax(set.weightKg, set.reps)),
-        );
-        const previousHistory = exerciseHistory(
-          sessions.filter((session) => session.id !== latest.id),
-          state.currentUserId,
-          exerciseIdentity(exercise),
-        );
-        const previousBest = Math.max(
-          0,
-          ...previousHistory.map((item) => item.estimatedOneRepMaxKg),
-        );
-        return current > 0 && previousBest > 0 && current >= previousBest * 1.005
-          ? [exercise.name]
-          : [];
-      });
-      const previousComparable =
-        sessions
-          .slice(1)
-          .find(
-            (session) =>
-              (latest.planId && session.planId === latest.planId) ||
-              session.name.trim().toLowerCase() ===
-                latest.name.trim().toLowerCase(),
-          ) ?? sessions[1];
-      const latestRest = averageGymRestSeconds(latest.exercises);
-      const priorRest = previousComparable
-        ? averageGymRestSeconds(previousComparable.exercises)
-        : 0;
-      const restCopy =
-        latestRest > 0 && priorRest > 0
-          ? ` Average rest was ${Math.abs(latestRest - priorRest)}s ${latestRest > priorRest ? 'longer' : 'shorter'} than ${previousComparable.name}.`
-          : '';
-      await deliverImmediatePersonalNotification(state, {
-        ...localizedContent(
-          state,
-          records.length ? 'New workout best' : 'Workout saved',
-          records.length
-            ? `${records
-                .slice(0, 2)
-                .map((name) =>
-                  localizeExerciseName(state.settings.language, {
-                    exerciseKey: latest.exercises.find((item) => item.name === name)?.exerciseKey,
-                    name,
-                  }),
-                )
-                .join(' and ')} moved above your prior estimated best.${restCopy}`
-            : `${completedGymSets(latest.exercises)} sets and ${Math.round(trainingVolumeKg(latest.exercises)).toLocaleString(localeForLanguage(state.settings.language))} kg of volume logged.${restCopy}`,
-        ),
-        data: { route: '/gym', notificationKind: 'gym-achievement' },
-      }, `gym-achievement:${latest.id}`);
+      const shouldNotify =
+        !isQuietNow(settings) &&
+        workoutCompletionCanNotify({
+          localDate: latest.localDate,
+          recordedAt: latest.recordedAt,
+          completedAt: latest.completedAt,
+          today: dateKey(),
+        });
+      if (shouldNotify) {
+        const records = latest.exercises.flatMap((exercise) => {
+          const current = Math.max(
+            0,
+            ...exercise.sets
+              .filter((set) => set.completed)
+              .map((set) => estimatedOneRepMax(set.weightKg, set.reps)),
+          );
+          const previousHistory = exerciseHistory(
+            sessions.filter((session) => session.id !== latest.id),
+            state.currentUserId,
+            exerciseIdentity(exercise),
+          );
+          const previousBest = Math.max(
+            0,
+            ...previousHistory.map((item) => item.estimatedOneRepMaxKg),
+          );
+          return current > 0 && previousBest > 0 && current >= previousBest * 1.005
+            ? [exercise.name]
+            : [];
+        });
+        const previousComparable =
+          sessions
+            .slice(1)
+            .find(
+              (session) =>
+                (latest.planId && session.planId === latest.planId) ||
+                session.name.trim().toLowerCase() ===
+                  latest.name.trim().toLowerCase(),
+            ) ?? sessions[1];
+        const latestRest = averageGymRestSeconds(latest.exercises);
+        const priorRest = previousComparable
+          ? averageGymRestSeconds(previousComparable.exercises)
+          : 0;
+        const restCopy =
+          latestRest > 0 && priorRest > 0
+            ? ` Average rest was ${Math.abs(latestRest - priorRest)}s ${latestRest > priorRest ? 'longer' : 'shorter'} than ${previousComparable.name}.`
+            : '';
+        await deliverImmediatePersonalNotification(state, {
+          ...localizedContent(
+            state,
+            records.length ? 'New workout best' : 'Workout saved',
+            records.length
+              ? `${records
+                  .slice(0, 2)
+                  .map((name) =>
+                    localizeExerciseName(state.settings.language, {
+                      exerciseKey: latest.exercises.find((item) => item.name === name)?.exerciseKey,
+                      name,
+                    }),
+                  )
+                  .join(' and ')} moved above your prior estimated best.${restCopy}`
+              : `${completedGymSets(latest.exercises)} sets and ${Math.round(trainingVolumeKg(latest.exercises)).toLocaleString(localeForLanguage(state.settings.language))} kg of volume logged.${restCopy}`,
+          ),
+          data: { route: '/gym', notificationKind: 'gym-achievement' },
+        }, `gym-achievement:${latest.id}`);
+      }
+      // Also establish a baseline when hydration/sign-in surfaces historical
+      // data or quiet hours suppress the acknowledgement, so it cannot replay
+      // on the next scheduler pass.
       await AsyncStorage.setItem(achievementKey, latest.id);
     }
   }

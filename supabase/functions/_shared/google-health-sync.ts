@@ -1080,7 +1080,6 @@ const DIRECT_STEP_ACTIVITY_KEYS = new Set([
   "track_running",
   "treadmill_running",
   "hiking",
-  "backpacking",
 ]);
 
 function normalizedActivityLabel(value: unknown) {
@@ -1125,8 +1124,6 @@ function stepCoverageActivity(value: unknown) {
     return { key: "running", mode: "direct" as const };
   if (/\b(?:hike|hiking)\b/.test(label))
     return { key: "hiking", mode: "direct" as const };
-  if (/\bbackpacking\b/.test(label))
-    return { key: "backpacking", mode: "direct" as const };
   if (/\b(?:walk|walking)\b/.test(label))
     return { key: "walking", mode: "direct" as const };
   return undefined;
@@ -1165,7 +1162,9 @@ function stepCoverageSessionIdentity(entry: JsonObject) {
     : String(entry.source ?? "") === "manual" &&
         String(entry.metricId ?? "") === "workout"
       ? `manual:${encodeURIComponent(String(entry.userId ?? ""))}:${encodeURIComponent(id)}`
-      : undefined;
+      : String(entry.source ?? "") !== "calculated" && id
+        ? `entry:${encodeURIComponent(String(entry.userId ?? ""))}:${encodeURIComponent(id)}`
+        : undefined;
 }
 
 function eligibleStandaloneActiveEnergyForStepCoverage(entry: JsonObject) {

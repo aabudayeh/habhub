@@ -7,6 +7,44 @@ export function chunkIntoPages<T>(items: readonly T[], requestedSize: number): T
   return pages;
 }
 
+/**
+ * Keeps a paged surface bounded while retaining every item. Once the cap is
+ * reached, the final page receives the remaining rows and can provide its own
+ * vertical scroll instead of creating an unmanageable strip of page dots.
+ */
+export function chunkIntoCappedPages<T>(
+  items: readonly T[],
+  requestedSize: number,
+  requestedMaximumPages: number,
+): T[][] {
+  const size = Math.max(1, Math.floor(requestedSize));
+  const maximumPages = Math.max(1, Math.floor(requestedMaximumPages));
+  if (!items.length) return [];
+  const pages: T[][] = [];
+  const fixedPageCount = Math.min(
+    maximumPages - 1,
+    Math.floor(items.length / size),
+  );
+  for (let index = 0; index < fixedPageCount; index += 1) {
+    pages.push(items.slice(index * size, (index + 1) * size));
+  }
+  const remainderStart = fixedPageCount * size;
+  if (remainderStart < items.length)
+    pages.push(items.slice(remainderStart));
+  return pages;
+}
+
+export function cappedPageCount(
+  itemCount: number,
+  requestedSize: number,
+  requestedMaximumPages: number,
+) {
+  if (!Number.isFinite(itemCount) || itemCount <= 0) return 0;
+  const size = Math.max(1, Math.floor(requestedSize));
+  const maximumPages = Math.max(1, Math.floor(requestedMaximumPages));
+  return Math.min(maximumPages, Math.ceil(itemCount / size));
+}
+
 export function clampPageIndex(index: number, pageCount: number) {
   if (pageCount <= 0) return 0;
   return Math.max(0, Math.min(Math.round(index), pageCount - 1));
