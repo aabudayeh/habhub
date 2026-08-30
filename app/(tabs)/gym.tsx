@@ -103,6 +103,7 @@ import {
 import { useFocusedCloudSyncPause } from "@/src/cloud/useFocusedCloudSyncPause";
 import {
   setWorkoutTimerPresence,
+  workoutDraftImageKey,
   workoutDraftKey,
 } from "@/src/storage/workoutTimerPresence";
 import { readBackgroundWorkoutCompletion } from "@/src/storage/backgroundWorkoutFinish";
@@ -210,6 +211,7 @@ type StoredWorkoutDraft = {
   sessionNotes: string;
   sessionImageUri?: string;
   sessionImageStoragePath?: string;
+  sessionImageCacheKey?: string;
   visibility: Visibility;
   selectedPlanId: string | null;
   setStartDelaySeconds: number;
@@ -218,6 +220,10 @@ type StoredWorkoutDraft = {
   processedWebWorkoutActionIds?: string[];
   processedNativeWorkoutActionIds?: string[];
 };
+
+function isEmbeddedWorkoutImageUri(uri: string | undefined) {
+  return Boolean(uri?.startsWith("data:image/"));
+}
 
 function queuedWorkoutTimerActionId(action: QueuedWorkoutTimerAction) {
   return action.webActionId
@@ -670,6 +676,10 @@ function GymScreen() {
   const webTimerActionAckAttempt = useRef(0);
   const nativeTimerActionAckAttempt = useRef(0);
   const workoutDraftPersistenceRef = useRef<Promise<void>>(Promise.resolve());
+  const persistedWebWorkoutImage = useRef<{
+    key: string;
+    uri: string;
+  } | null>(null);
   const timerActionRef = useRef<
     (action: string, occurredAt?: number) => void
   >(() => undefined);
@@ -1712,7 +1722,7 @@ function GymScreen() {
     }
     let cancelled = false;
     void AsyncStorage.getItem(workoutDraftKey(state.currentUserId))
-      .then((stored) => {
+      .then(async (stored) => {
         if (cancelled || !stored) return;
         const draft = JSON.parse(stored) as StoredWorkoutDraft;
         if (
@@ -1753,6 +1763,27 @@ function GymScreen() {
           processedNativeTimerActionIds.current.add(id);
           processedNativeTimerActionOrder.current.push(id);
         }
+        let draftImageUri = draft.sessionImageUri;
+        const expectedImageCacheKey = workoutDraftImageKey(
+          state.currentUserId,
+          draft.sessionId,
+        );
+        if (
+          Platform.OS === "web" &&
+          draft.sessionImageCacheKey === expectedImageCacheKey
+        ) {
+          const cachedImageUri = await AsyncStorage.getItem(
+            expectedImageCacheKey,
+          ).catch(() => null);
+          if (cancelled) return;
+          if (isEmbeddedWorkoutImageUri(cachedImageUri ?? undefined)) {
+            draftImageUri = cachedImageUri!;
+            persistedWebWorkoutImage.current = {
+              key: expectedImageCacheKey,
+              uri: cachedImageUri!,
+            };
+          }
+        }
         initializedDate.current = draft.localDate;
         setLocalDate(draft.localDate);
         setSessionId(draft.sessionId);
@@ -1764,9 +1795,9 @@ function GymScreen() {
         setSessionNotes(draft.sessionNotes);
         sessionImageDirty.current = false;
         setSessionImage(
-          draft.sessionImageUri || draft.sessionImageStoragePath
+          draftImageUri || draft.sessionImageStoragePath
             ? {
-                uri: draft.sessionImageUri,
+                uri: draftImageUri,
                 storagePath: draft.sessionImageStoragePath,
               }
             : null,
@@ -1796,8 +1827,15 @@ function GymScreen() {
   useEffect(() => {
     if (tutorialSandbox || !workoutDraftReady) return;
     const key = workoutDraftKey(state.currentUserId);
-    const persist = () => {
-      if (!workoutTimer) return AsyncStorage.removeItem(key);
+    const persist = async () => {
+      if (!workoutTimer) {
+        const cachedImageKey = persistedWebWorkoutImage.current?.key;
+        persistedWebWorkoutImage.current = null;
+        await AsyncStorage.removeItem(key);
+        if (Platform.OS === "web" && cachedImageKey)
+          await AsyncStorage.removeItem(cachedImageKey);
+        return;
+      }
       const processedWebWorkoutActionIds =
         processedNativeTimerActionOrder.current
           .filter((id) => id.startsWith("web:"))
@@ -1807,6 +1845,30 @@ function GymScreen() {
         processedNativeTimerActionOrder.current
           .filter((id) => !id.startsWith("web:"))
           .slice(-60);
+      const embeddedWebImageUri =
+        Platform.OS === "web" && isEmbeddedWorkoutImageUri(sessionImage?.uri)
+          ? sessionImage?.uri
+          : undefined;
+      const imageCacheKey = embeddedWebImageUri
+        ? workoutDraftImageKey(state.currentUserId, sessionId)
+        : undefined;
+      const cachedWebWorkoutImage = persistedWebWorkoutImage.current;
+      const previousImageCacheKey = cachedWebWorkoutImage?.key;
+      if (
+        embeddedWebImageUri &&
+        imageCacheKey &&
+        (cachedWebWorkoutImage?.key !== imageCacheKey ||
+          cachedWebWorkoutImage?.uri !== embeddedWebImageUri)
+      ) {
+        // Write the large payload before publishing the small reference. A
+        // failed write leaves the previous durable draft intact and retries on
+        // the next mutation instead of creating a dangling photo reference.
+        await AsyncStorage.setItem(imageCacheKey, embeddedWebImageUri);
+        persistedWebWorkoutImage.current = {
+          key: imageCacheKey,
+          uri: embeddedWebImageUri,
+        };
+      }
       const draft: StoredWorkoutDraft = {
         savedAt: Date.now(),
         localDate,
@@ -1817,8 +1879,11 @@ function GymScreen() {
         calorieCalculationMode,
         intensity,
         sessionNotes,
-        sessionImageUri: sessionImage?.uri,
+        sessionImageUri: embeddedWebImageUri
+          ? undefined
+          : sessionImage?.uri,
         sessionImageStoragePath: sessionImage?.storagePath,
+        sessionImageCacheKey: imageCacheKey,
         visibility,
         selectedPlanId,
         setStartDelaySeconds,
@@ -1827,7 +1892,16 @@ function GymScreen() {
         processedWebWorkoutActionIds,
         processedNativeWorkoutActionIds,
       };
-      return AsyncStorage.setItem(key, JSON.stringify(draft));
+      await AsyncStorage.setItem(key, JSON.stringify(draft));
+      if (
+        Platform.OS === "web" &&
+        previousImageCacheKey &&
+        previousImageCacheKey !== imageCacheKey
+      ) {
+        await AsyncStorage.removeItem(previousImageCacheKey);
+        if (persistedWebWorkoutImage.current?.key === previousImageCacheKey)
+          persistedWebWorkoutImage.current = null;
+      }
     };
     const persistence = workoutDraftPersistenceRef.current.then(
       persist,

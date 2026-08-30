@@ -102,6 +102,23 @@ assert.ok(
   Math.abs(walking.coveredSteps - 3_000 / measuredLength) < 0.001,
   "one linked walking workout must be covered once from measured distance",
 );
+const unrelatedHistory = Array.from({ length: 2_000 }, (_, index) => ({
+  ...linked(index % 2 ? "food" : "weight", 100_000, `unrelated-${index}`),
+  // A hostile/corrupt source id collision must not admit an unrelated tracker
+  // into the workout session bucket.
+  sourceRecordId: "workout-1",
+  label: index % 2 ? "Lunch" : "Weight",
+}));
+assert.equal(
+  unrecordedStepActivity(
+    [...walkingRows, ...unrelatedHistory],
+    metrics,
+    6_000,
+    profile,
+  ).coveredSteps,
+  walking.coveredSteps,
+  "unrelated non-calculated history must not enter client Step-coverage grouping",
+);
 
 const excludedPreferences = withStepCoverageChoice(
   undefined,
@@ -662,6 +679,7 @@ const server = fs.readFileSync(
   "supabase/functions/_shared/google-health-sync.ts",
   "utf8",
 );
+const healthDomain = fs.readFileSync("src/domain/health.ts", "utf8");
 const groupCloud = fs.readFileSync("src/cloud/groupCloud.ts", "utf8");
 const provider = fs.readFileSync("src/state/AppProvider.tsx", "utf8");
 const backgroundFinish = fs.readFileSync(
@@ -761,6 +779,17 @@ assert.match(
   /String\(entry\.source \?\? ""\) !== "calculated" && id[\s\S]{0,120}`entry:/,
   "Google Health must resolve the same standalone-entry identity as the app",
 );
+for (const source of [healthDomain, server]) {
+  const guardIndex = source.indexOf("!workoutMetricIds.has(");
+  const identityIndex = source.indexOf(
+    "stepCoverageSessionIdentity(entry)",
+    guardIndex,
+  );
+  assert.ok(
+    guardIndex >= 0 && identityIndex > guardIndex,
+    "client and Google worker must reject unrelated tracker rows before creating Step-coverage identities",
+  );
+}
 assert.doesNotMatch(
   groupCloud,
   /stepCoveragePreferences/,

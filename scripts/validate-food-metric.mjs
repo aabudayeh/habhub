@@ -826,8 +826,13 @@ assert.match(detail, /strokeDasharray=/);
 assert.doesNotMatch(detail, /foodMacroBarGoalTick: \{[\s\S]{0,180}borderStyle: "dashed"/);
 assert.match(
   detail,
-  /const entryRangeView = \["week", "month", "year", "overall"\]\.includes\([\s\S]{0,120}const entriesSectionOpen = entriesOpenOverride \?\? !entryRangeView;[\s\S]{0,260}setCollapsedEntryDates\(entryRangeView \? dates : \[\]\)/,
+  /const entryRangeView = \["week", "month", "year", "overall"\]\.includes\([\s\S]{0,120}const entriesSectionOpen = entriesOpenOverride \?\? !entryRangeView;[\s\S]{0,280}setCollapsedEntryDates\(new Set\(entryRangeView \? dates : \[\]\)\)/,
   "the Entries section and its day groups must default collapsed only for the four date-range views",
+);
+assert.match(
+  detail,
+  /collapsedEntryDates\.has\((?:session|entry)\.localDate\)/,
+  "range entry date visibility must use constant-time membership checks",
 );
 assert.match(
   detail,

@@ -1238,6 +1238,16 @@ export function unrecordedStepActivity(
   const sessionKeys = new Map<string, MetricEntry>();
   for (const entry of dayEntries) {
     if (isCalculatedStepFallback(entry)) continue;
+    // Food, Weight, sleep, journal, and unrelated custom tracker rows cannot
+    // contribute workout coverage. Reject them before deriving a durable
+    // identity or allocating a session bucket. Active-energy rows remain here
+    // because users may explicitly classify a standalone interval, while all
+    // workout-mapped rows remain available for duration/distance/calorie links.
+    if (
+      !workoutMetricIds.has(entry.metricId) &&
+      !activeEnergyIds.has(entry.metricId)
+    )
+      continue;
     const identity = stepCoverageSessionIdentity(entry);
     if (!identity) continue;
     const rows = linkedRows.get(identity);

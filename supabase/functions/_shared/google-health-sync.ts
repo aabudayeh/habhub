@@ -1638,9 +1638,22 @@ function appendStepFallbackRecords(
       metric.healthMapping.field === "value"
     )
     .map((metric) => String(metric.id)));
+  // Step coverage only consumes the canonical Step total, workout-linked
+  // duration/distance/calorie rows, and explicitly classifiable standalone
+  // Active-energy rows. A snapshot can contain years of Food, Weight, sleep,
+  // journal, and custom tracker history; admitting those rows into the day and
+  // session maps creates identities and arrays that can never affect this
+  // calculation. Keep this allow-list local to the calculation so standalone
+  // Active-energy Step-control and cross-metric workout linkage remain intact.
+  const stepCoverageMetricIds = new Set([
+    ...stepMetricIds,
+    ...workoutMetricIds,
+    ...activeEnergyMetricIds,
+  ]);
   const inferredGymActivities = inferredGymStepActivities(snapshot);
   const byDay = new Map<string, JsonObject[]>();
   for (const entry of entries) {
+    if (!stepCoverageMetricIds.has(String(entry.metricId ?? ""))) continue;
     const localDate = String(entry.localDate ?? "");
     if (!/^\d{4}-\d{2}-\d{2}$/.test(localDate)) continue;
     const rows = byDay.get(localDate);
@@ -1666,6 +1679,11 @@ function appendStepFallbackRecords(
     const linkedRows = new Map<string, JsonObject[]>();
     for (const entry of dayEntries) {
       if (String(entry.label ?? "") === "Estimated unrecorded walking from steps") continue;
+      const metricId = String(entry.metricId ?? "");
+      if (
+        !workoutMetricIds.has(metricId) &&
+        !activeEnergyMetricIds.has(metricId)
+      ) continue;
       const key = stepCoverageSessionIdentity(entry);
       if (!key) continue;
       const rows = linkedRows.get(key);
@@ -1673,10 +1691,9 @@ function appendStepFallbackRecords(
       else linkedRows.set(key, [entry]);
     }
     let coveredSteps = 0;
-    for (const rows of linkedRows.values()) {
+    for (const [identity, rows] of linkedRows) {
       const activityEntry = rows.find((entry) => {
         const metricId = String(entry.metricId ?? "");
-        const identity = stepCoverageSessionIdentity(entry);
         const preferences = asObject(
           asObject(snapshot.settings).stepCoveragePreferences,
         );

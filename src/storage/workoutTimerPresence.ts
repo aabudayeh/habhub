@@ -14,6 +14,15 @@ const listeners = new Set<() => void>();
 export const workoutDraftKey = (userId: string) =>
   `habhub-active-gym-workout-v2:${userId}`;
 
+/**
+ * Web image pickers return an embedded data URI. Keep that large payload out of
+ * the frequently-mutated workout draft JSON so timer/set edits only rewrite the
+ * small draft document. The session-scoped key is also safe to replace when the
+ * user chooses a different photo for the same active workout.
+ */
+export const workoutDraftImageKey = (userId: string, sessionId: string) =>
+  `habhub-active-gym-workout-image-v1:${encodeURIComponent(userId)}:${encodeURIComponent(sessionId)}`;
+
 export function setWorkoutTimerPresence(userId: string, active: boolean) {
   if (presence.userId === userId && presence.active === active) return;
   presence = { userId, active };

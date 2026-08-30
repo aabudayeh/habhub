@@ -98,17 +98,27 @@ assert.match(
 );
 assert.match(metricDetail, /entryRangeView = \["week", "month", "year", "overall"\]\.includes/);
 assert.match(metricDetail, /entriesSectionOpen = entriesOpenOverride \?\? !entryRangeView/);
-assert.match(metricDetail, /setCollapsedEntryDates\(entryRangeView \? dates : \[\]\)/);
+assert.match(metricDetail, /setCollapsedEntryDates\(new Set\(entryRangeView \? dates : \[\]\)\)/);
 assert.match(metricDetail, /accessibilityState=\{\{ expanded: entriesSectionOpen \}\}/);
 assert.match(metricDetail, /\{entriesSectionOpen \? <View style=\{styles\.entries\}>/);
 assert.match(metricDetail, /function WeeklyDetail[\s\S]{0,1500}entriesOpen = entriesOpenOverride \?\? !entryRangeView/);
-assert.match(metricDetail, /function WeeklyDetail[\s\S]{0,1500}setOpenEntryDates\(\[\]\)/);
+assert.match(metricDetail, /function WeeklyDetail[\s\S]{0,1500}setOpenEntryDates\(new Set\(\)\)/);
 assert.match(studio, /MediaRecorder\.isTypeSupported/);
 assert.match(studio, /mimeType\.startsWith\("video\/mp4"\) \? "mp4" : "webm"/);
+assert.doesNotMatch(
+  studio,
+  /Promise\.all\([\s\S]{0,300}ordered\.map[\s\S]{0,300}loadWebImage/,
+  "Video export must not retain a full history of decoded phone photos.",
+);
 assert.match(
   studio,
-  /const frames = await Promise\.all\([\s\S]{0,240}loadWebImage\(photo\)[\s\S]{0,1200}drawVideoFrame\([\s\S]{0,500}recorder\.start\(1_000\)/,
-  "slideshow photos must decode and the first frame must be drawn before timed recording starts",
+  /currentImage = await loadWebImage\(ordered\[0\]\)[\s\S]{0,1800}drawVideoFrame\([\s\S]{0,500}activeRecorder\.start\(1_000\)/,
+  "The first slideshow photo must decode and render before timed recording starts.",
+);
+assert.match(
+  studio,
+  /const nextImageResult = nextIndex < ordered\.length[\s\S]{0,300}loadWebImage\(ordered\[nextIndex\]\)[\s\S]{0,500}transitionWebRecorder\(activeRecorder, "pause"\)[\s\S]{0,1000}releaseWebImage\(previousImage\)[\s\S]{0,300}transitionWebRecorder\(activeRecorder, "resume"\)/,
+  "Video export must use bounded look-ahead and pause encoding around slow image transitions.",
 );
 assert.match(studio, /PHOTO_VIDEO_SPEEDS\.at\(-1\)/);
 assert.match(studio, /adjacentPhotoVideoSpeed\(current, 1\)/);

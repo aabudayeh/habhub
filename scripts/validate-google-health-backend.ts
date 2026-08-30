@@ -527,6 +527,44 @@ assert.deepEqual(
   ["exercise", "workout_distance", "workout_duration"],
   "Google Health web sync must materialize the same unrecorded-step tracker family as native sync",
 );
+const unrelatedGoogleHistory = Array.from({ length: 2_000 }, (_, index) => ({
+  externalId: `unrelated:${index}`,
+  dataType: index % 2 ? "nutrition" : "weight",
+  localDate: "2026-08-21",
+  entry: {
+    id: `google-health:unrelated:${index}`,
+    metricId: index % 2 ? "food" : "weight",
+    userId: "owner",
+    value: 100_000,
+    localDate: "2026-08-21",
+    recordedAt: "2026-08-21T11:00:00.000Z",
+    visibility: "private",
+    source: "imported",
+    label: index % 2 ? "Lunch" : "Weight",
+    sourceProvider: "google_health",
+    // Even a provider-id collision may not let unrelated rows join a workout.
+    sourceRecordId: workoutRecord.externalId,
+  },
+}));
+const webStepFallbackWithUnrelatedHistory =
+  googleHealthSyncTestHooks.appendStepFallbackRecords(
+    [...mappedStepFallbackInputs, ...unrelatedGoogleHistory],
+    fallbackSnapshot,
+    "owner",
+    "2026-08-21T12:00:00.000Z",
+    [
+      { dataType: "steps", fromDate: "2026-08-21", throughDate: "2026-08-21" },
+      { dataType: "workouts", fromDate: "2026-08-21", throughDate: "2026-08-21" },
+    ],
+    [],
+  );
+assert.equal(
+  webStepFallbackWithUnrelatedHistory.mapped.find((row) =>
+    row.dataType === "derived_step_fallback" && row.entry.metricId === "exercise"
+  )?.entry.note,
+  fallbackRows.find((row) => row.entry.metricId === "exercise")?.entry.note,
+  "unrelated Food and Weight history must not alter Google Step coverage",
+);
 assert.ok(
   Number(fallbackRows.find((row) => row.entry.metricId === "workout_distance")?.entry.value) > 0,
   "the web fallback must retain walking distance not covered by an imported workout",

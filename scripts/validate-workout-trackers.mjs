@@ -1081,6 +1081,10 @@ const manualWorkout = fs.readFileSync(
   "utf8",
 );
 const gymScreen = fs.readFileSync("app/(tabs)/gym.tsx", "utf8");
+const workoutTimerPresence = fs.readFileSync(
+  "src/storage/workoutTimerPresence.ts",
+  "utf8",
+);
 const metricDetail = fs.readFileSync("app/metric-detail.tsx", "utf8");
 const types = fs.readFileSync("src/types.ts", "utf8");
 const workoutNotifications = fs.readFileSync(
@@ -1200,6 +1204,26 @@ assert.match(
   gymScreen,
   /saveGymSession\(\{[\s\S]{0,900}imageUri: sessionImage\?\.uri,[\s\S]{0,80}imageStoragePath: sessionImage\?\.storagePath/,
   "the workout photo must persist with the canonical saved workout projection",
+);
+assert.match(
+  workoutTimerPresence,
+  /workoutDraftImageKey[\s\S]{0,180}habhub-active-gym-workout-image-v1/,
+  "web workout draft photos need a separate account/session-scoped cache key",
+);
+assert.match(
+  gymScreen,
+  /AsyncStorage\.setItem\(imageCacheKey, embeddedWebImageUri\)[\s\S]{0,1300}sessionImageUri: embeddedWebImageUri[\s\S]{0,80}\? undefined[\s\S]{0,180}sessionImageCacheKey: imageCacheKey/,
+  "the embedded web photo must be written once before the frequently-mutated draft references it",
+);
+assert.match(
+  gymScreen,
+  /draft\.sessionImageCacheKey === expectedImageCacheKey[\s\S]{0,220}AsyncStorage\.getItem\([\s\S]{0,80}expectedImageCacheKey/,
+  "an active web workout must restore its separately cached photo after reload",
+);
+assert.match(
+  gymScreen,
+  /if \(!workoutTimer\)[\s\S]{0,320}removeItem\(cachedImageKey\)/,
+  "finishing or abandoning the active workout must retire its web photo cache",
 );
 assert.match(
   gymScreen,

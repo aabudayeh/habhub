@@ -82,6 +82,49 @@ function loadWebImage(photo: PhotoUpdate) {
   });
 }
 
+function releaseWebImage(image: HTMLImageElement | undefined) {
+  if (!image) return;
+  image.onload = null;
+  image.onerror = null;
+  image.removeAttribute("src");
+}
+
+function transitionWebRecorder(
+  recorder: MediaRecorder,
+  action: "pause" | "resume",
+) {
+  const targetState = action === "pause" ? "paused" : "recording";
+  const eventName = action === "pause" ? "pause" : "resume";
+  if (recorder.state === targetState) return Promise.resolve();
+  return new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timeout);
+      recorder.removeEventListener(eventName, onTransition);
+      recorder.removeEventListener("error", onError);
+    };
+    const onTransition = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = () => {
+      cleanup();
+      reject(new Error(`The browser could not ${action} video encoding.`));
+    };
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error(`The browser took too long to ${action} video encoding.`));
+    }, 3_000);
+    recorder.addEventListener(eventName, onTransition);
+    recorder.addEventListener("error", onError);
+    try {
+      recorder[action]();
+    } catch (error) {
+      cleanup();
+      reject(error);
+    }
+  });
+}
+
 function drawCover(
   context: CanvasRenderingContext2D,
   image: HTMLImageElement,
@@ -394,18 +437,17 @@ export function PhotoComparisonStudio({
       return videoArtifactRef.current;
     setVideoProgress(0);
     let stream: MediaStream | undefined;
+    let recorder: MediaRecorder | undefined;
+    let stopped: Promise<Blob> | undefined;
+    let currentImage: HTMLImageElement | undefined;
     try {
       const mimeType = webVideoMimeType();
       if (!mimeType) throw new Error("This browser cannot encode a progress video.");
-      // Decode every image before recording. Loading photos inside the timed
-      // loop made network/decode latency part of each slide and could leave a
-      // blank first frame, especially at 10-20x playback speeds.
-      const frames = await Promise.all(
-        ordered.map(async (photo) => ({
-          photo,
-          image: await loadWebImage(photo),
-        })),
-      );
+      // Decode the first image before recording so frame one is never blank.
+      // Remaining images use one-frame look-ahead; the recorder pauses if the
+      // next decode is slow, so loading time cannot lengthen a slide in the
+      // exported video. At most two full-resolution images are retained.
+      currentImage = await loadWebImage(ordered[0]);
       const canvas = document.createElement("canvas");
       canvas.width = 720;
       canvas.height = 960;
@@ -413,49 +455,69 @@ export function PhotoComparisonStudio({
       if (!context) throw new Error("Canvas video export is unavailable.");
       stream = canvas.captureStream(30);
       const chunks: Blob[] = [];
-      const recorder = new MediaRecorder(stream, {
+      const activeRecorder = new MediaRecorder(stream, {
         mimeType,
         videoBitsPerSecond: 1_800_000,
       });
-      recorder.ondataavailable = (event) => {
+      recorder = activeRecorder;
+      activeRecorder.ondataavailable = (event) => {
         if (event.data.size) chunks.push(event.data);
       };
-      const stopped = new Promise<Blob>((resolve, reject) => {
-        recorder.onerror = () => reject(new Error("The browser stopped encoding the video."));
-        recorder.onstop = () => resolve(new Blob(chunks, { type: mimeType }));
+      stopped = new Promise<Blob>((resolve, reject) => {
+        activeRecorder.onerror = () =>
+          reject(new Error("The browser stopped encoding the video."));
+        activeRecorder.onstop = () =>
+          resolve(new Blob(chunks, { type: mimeType }));
       });
       drawVideoFrame(
         context,
         canvas,
-        frames[0].image,
-        frames[0].photo,
+        currentImage,
+        ordered[0],
         bodyEntries,
         userId,
         locale,
         showBodyFat,
         showLeanMass,
       );
-      setVideoProgress(1 / frames.length);
-      recorder.start(1_000);
-      for (let index = 0; index < frames.length; index += 1) {
-        if (index > 0) {
-          const frame = frames[index];
-          drawVideoFrame(
-            context,
-            canvas,
-            frame.image,
-            frame.photo,
-            bodyEntries,
-            userId,
-            locale,
-            showBodyFat,
-            showLeanMass,
-          );
-          setVideoProgress((index + 1) / frames.length);
-        }
+      setVideoProgress(1 / ordered.length);
+      activeRecorder.start(1_000);
+      for (let index = 0; index < ordered.length; index += 1) {
+        const nextIndex = index + 1;
+        // Attach both handlers immediately so a fast decode failure cannot
+        // become an unhandled rejection while the current frame is displayed.
+        const nextImageResult = nextIndex < ordered.length
+          ? loadWebImage(ordered[nextIndex]).then(
+              (image) => ({ image, error: undefined }),
+              (error: unknown) => ({ image: undefined, error }),
+            )
+          : undefined;
         await sleep(photoFrameDurationMs(speed));
+        if (!nextImageResult) continue;
+        await transitionWebRecorder(activeRecorder, "pause");
+        const next = await nextImageResult;
+        if (!next.image)
+          throw next.error instanceof Error
+            ? next.error
+            : new Error("A progress photo could not be decoded.");
+        const previousImage = currentImage;
+        currentImage = next.image;
+        drawVideoFrame(
+          context,
+          canvas,
+          currentImage,
+          ordered[nextIndex],
+          bodyEntries,
+          userId,
+          locale,
+          showBodyFat,
+          showLeanMass,
+        );
+        releaseWebImage(previousImage);
+        setVideoProgress((nextIndex + 1) / ordered.length);
+        await transitionWebRecorder(activeRecorder, "resume");
       }
-      recorder.stop();
+      activeRecorder.stop();
       const blob = await stopped;
       const extension = mimeType.startsWith("video/mp4") ? "mp4" : "webm";
       const artifact = {
@@ -465,7 +527,18 @@ export function PhotoComparisonStudio({
       };
       videoArtifactRef.current = artifact;
       return artifact;
+    } catch (error) {
+      if (recorder && recorder.state !== "inactive") {
+        try {
+          recorder.stop();
+        } catch {
+          // The original export error is more useful to the user.
+        }
+      }
+      if (stopped) await stopped.catch(() => undefined);
+      throw error;
     } finally {
+      releaseWebImage(currentImage);
       stream?.getTracks().forEach((track) => track.stop());
     }
   }

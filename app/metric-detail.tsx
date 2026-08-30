@@ -246,7 +246,9 @@ export default function TrackerDetail() {
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [recordsOpen, setRecordsOpen] = useState(false);
   const [entriesOpenOverride, setEntriesOpenOverride] = useState<boolean>();
-  const [collapsedEntryDates, setCollapsedEntryDates] = useState<string[]>([]);
+  const [collapsedEntryDates, setCollapsedEntryDates] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [editingFoodEntryId, setEditingFoodEntryId] = useState<string>();
   const [foodTimeDraft, setFoodTimeDraft] = useState("12:00");
   const [foodTimeSaving, setFoodTimeSaving] = useState(false);
@@ -341,7 +343,7 @@ export default function TrackerDetail() {
   const entriesSectionOpen = entriesOpenOverride ?? !entryRangeView;
   useEffect(() => {
     setEntriesOpenOverride(undefined);
-    setCollapsedEntryDates(entryRangeView ? dates : []);
+    setCollapsedEntryDates(new Set(entryRangeView ? dates : []));
   }, [dates, entryRangeView, trackerId]);
   function shiftRange(direction: number) {
     const next = shiftedPeriodAnchor(
@@ -977,11 +979,12 @@ export default function TrackerDetail() {
   const entryCountForDate = (localDate: string) =>
     entryCountsByDate.get(localDate) ?? 0;
   const toggleEntryDate = (localDate: string) =>
-    setCollapsedEntryDates((current) =>
-      current.includes(localDate)
-        ? current.filter((date) => date !== localDate)
-        : [...current, localDate],
-    );
+    setCollapsedEntryDates((current) => {
+      const next = new Set(current);
+      if (next.has(localDate)) next.delete(localDate);
+      else next.add(localDate);
+      return next;
+    });
   const pairedBloodPressure = (entry: (typeof entries)[number]) => {
     if (!isBloodPressure) return null;
     const diastolicId = state.metrics.find(
@@ -2509,7 +2512,7 @@ export default function TrackerDetail() {
           const firstOnDate =
             index === 0 ||
             gymSourceSessions[index - 1].localDate !== session.localDate;
-          const collapsed = collapsedEntryDates.includes(session.localDate);
+          const collapsed = collapsedEntryDates.has(session.localDate);
           const coverageEntry = stepCoverageEntryForGymSession(session);
           return (
             <React.Fragment key={`gym:${session.id}`}>
@@ -2627,7 +2630,7 @@ export default function TrackerDetail() {
         {entries.map((entry, index) => {
           const firstOnDate =
             index === 0 || entries[index - 1].localDate !== entry.localDate;
-          const collapsed = collapsedEntryDates.includes(entry.localDate);
+          const collapsed = collapsedEntryDates.has(entry.localDate);
           const linkedGymSession = entry.id.startsWith("gym-sync:")
             ? (state.gymSessions ?? []).find((session) =>
                 entry.id.startsWith(`gym-sync:${session.id}:`),
@@ -4177,14 +4180,16 @@ function WeeklyDetail({
   const locale = useLocale();
   const { t } = useLocalization();
   const [entriesOpenOverride, setEntriesOpenOverride] = useState<boolean>();
-  const [openEntryDates, setOpenEntryDates] = useState<string[]>([]);
+  const [openEntryDates, setOpenEntryDates] = useState<Set<string>>(
+    () => new Set(),
+  );
   const entryRangeView = ["week", "month", "year", "overall"].includes(
     period,
   );
   const entriesOpen = entriesOpenOverride ?? !entryRangeView;
   useEffect(() => {
     setEntriesOpenOverride(undefined);
-    setOpenEntryDates([]);
+    setOpenEntryDates(new Set());
   }, [day, period]);
   const tracker = state.metrics.find(
     (metric) => metric.id === "weekly_deficit_balance",
@@ -4589,7 +4594,7 @@ function WeeklyDetail({
         {report.dailyBalances.length ? (
           [...report.dailyBalances].reverse().map((entry) => {
             const entryOpen =
-              !entryRangeView || openEntryDates.includes(entry.startDate);
+              !entryRangeView || openEntryDates.has(entry.startDate);
             return (
               <React.Fragment key={entry.id}>
                 {entryRangeView ? (
@@ -4598,11 +4603,13 @@ function WeeklyDetail({
                     accessibilityState={{ expanded: entryOpen }}
                     accessibilityLabel={`${entryOpen ? "Collapse" : "Expand"} ${friendlyDate(entry.startDate, locale)} balance`}
                     onPress={() =>
-                      setOpenEntryDates((current) =>
-                        current.includes(entry.startDate)
-                          ? current.filter((date) => date !== entry.startDate)
-                          : [...current, entry.startDate],
-                      )
+                      setOpenEntryDates((current) => {
+                        const next = new Set(current);
+                        if (next.has(entry.startDate))
+                          next.delete(entry.startDate);
+                        else next.add(entry.startDate);
+                        return next;
+                      })
                     }
                     style={[
                       styles.dateGroupHeader,
