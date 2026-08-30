@@ -1971,11 +1971,21 @@ export function goalCelebrationTiming(
   return "immediate";
 }
 
+const dailyScoreCache = new WeakMap<AppState, Map<string, number>>();
+
 export function dailyScore(
   state: AppState,
   userId: string,
   localDate: string,
 ): number {
+  let stateCache = dailyScoreCache.get(state);
+  if (!stateCache) {
+    stateCache = new Map<string, number>();
+    dailyScoreCache.set(state, stateCache);
+  }
+  const cacheKey = `${userId}\u0000${localDate}`;
+  const cached = stateCache.get(cacheKey);
+  if (cached !== undefined) return cached;
   const groupMetrics = state.group.metricConfiguration ?? [];
   const enabled = groupMetrics.filter(
     (metric) =>
@@ -1988,7 +1998,7 @@ export function dailyScore(
   );
   const totalWeight =
     enabled.reduce((sum, metric) => sum + metric.scoreWeight, 0) || 1;
-  return enabled.reduce((score, metric) => {
+  const score = enabled.reduce((total, metric) => {
     const status = statusForDay(
       state.dailyMetricStatuses,
       state.group.id,
@@ -1998,7 +2008,7 @@ export function dailyScore(
     );
     if (status && userId !== state.currentUserId) {
       return (
-        score +
+        total +
         (metric.scoreWeight / totalWeight) *
           Math.min(Math.max(status.scoreContribution, 0), 100)
       );
@@ -2033,8 +2043,10 @@ export function dailyScore(
       ),
       1,
     );
-    return score + (metric.scoreWeight / totalWeight) * cappedProgress * 100;
+    return total + (metric.scoreWeight / totalWeight) * cappedProgress * 100;
   }, 0);
+  stateCache.set(cacheKey, score);
+  return score;
 }
 
 export function isMetricTrackedOnDate(

@@ -1832,7 +1832,8 @@ function preferenceAllowed(
   if (event.category === "winner" && settings.badgesAndWinners === false)
     return false;
   if (
-    event.eventType === "social_reaction" &&
+    (event.eventType === "social_reaction" ||
+      event.eventType === "social_comment") &&
     (groupPreference.socialReactions ?? settings.socialReactions ?? true) ===
       false
   )
@@ -1872,6 +1873,7 @@ function preferenceAllowed(
   if (
     event.category === "metric" &&
     event.eventType !== "social_reaction" &&
+    event.eventType !== "social_comment" &&
     (groupPreference.trackerUpdates ??
       groupPreference.progressUpdates ??
       settings.groupMetricActivity ??

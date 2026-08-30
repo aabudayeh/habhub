@@ -104,13 +104,13 @@ const authorizedActivityPersistence = cloudProvider.slice(
 );
 assert.match(
   authorizedActivityPersistence,
-  /Platform\.OS !== "web"[\s\S]{0,120}await waitForCloudCacheWriteTurn\(\);[\s\S]{0,120}if \(!cacheWriteIsCurrent\(\)\) return;[\s\S]{0,120}writeGroupActivityCache\(/,
-  "large native activity-cache serialization must wait for real-touch quiet and recheck authorization",
+  /Platform\.OS !== "web"[\s\S]{0,120}await waitForCloudCacheWriteTurn\(\);[\s\S]{0,120}if \(!cacheWriteIsCurrent\(\)\) return;[\s\S]{0,420}cachedGroupActivity\(next, groupId\)[\s\S]{0,180}writeGroupActivityCache\(/,
+  "large native activity projection and cache serialization must wait for real-touch quiet and recheck authorization",
 );
 
 const backgroundActivityPersistenceStart = cloudProvider.indexOf(
-  "const cachePayload = cachedGroupActivity",
-  authorizedActivityPersistenceEnd,
+  "scheduleResponsiveWork(() => {",
+  cloudProvider.indexOf("const hydrateGroupInBackground"),
 );
 const backgroundActivityPersistenceEnd = cloudProvider.indexOf(
   "minimumUserQuietMs: 1_600",
@@ -126,8 +126,8 @@ assert.match(
     backgroundActivityPersistenceStart,
     backgroundActivityPersistenceEnd + 40,
   ),
-  /scheduleResponsiveWork\([\s\S]*writeGroupActivityCache\([\s\S]*minimumUserQuietMs: 1_600/,
-  "background SQLite group-cache serialization must wait for real-touch quiet",
+  /scheduleResponsiveWork\([\s\S]*const cachePayload = cachedGroupActivity\([\s\S]*writeGroupActivityCache\([\s\S]*minimumUserQuietMs: 1_600/,
+  "background group projection and SQLite serialization must wait for real-touch quiet",
 );
 assert.match(
   cloudProvider,

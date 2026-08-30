@@ -126,11 +126,21 @@ export default function Alerts() {
     if (filter === "all") return unreadEventIds;
     if (filter === "challenge")
       return groupFeedEvents
-        .filter((event) => !event.readAt && event.kind !== "social_reaction")
+        .filter(
+          (event) =>
+            !event.readAt &&
+            event.kind !== "social_reaction" &&
+            event.kind !== "social_comment",
+        )
         .map((event) => event.id);
     if (filter === "lead")
       return groupFeedEvents
-        .filter((event) => !event.readAt && event.kind === "social_reaction")
+        .filter(
+          (event) =>
+            !event.readAt &&
+            (event.kind === "social_reaction" ||
+              event.kind === "social_comment"),
+        )
         .map((event) => event.id);
     return [];
   }, [filter, groupFeedEvents, unreadEventIds]);
@@ -445,13 +455,16 @@ export default function Alerts() {
                       } as never);
                       return;
                     }
-                    if (alert.targetType === "photo_update" && alert.entryId) {
+                    if (alert.targetType && alert.entryId) {
                       router.navigate({
                         pathname: "/(tabs)/recapfeed",
                         params: {
                           period: "custom",
                           anchor: alert.localDate,
-                          highlight: `photo:${alert.entryId}`,
+                          targetType: alert.targetType,
+                          targetId: alert.entryId,
+                          ...(alert.groupId ? { groupId: alert.groupId } : {}),
+                          feedFocusAt: String(Date.now()),
                         },
                       } as never);
                       return;

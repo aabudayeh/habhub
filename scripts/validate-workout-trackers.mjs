@@ -1200,10 +1200,29 @@ assert.match(
   /function pickWorkoutImage\([\s\S]{0,620}Camera[\s\S]{0,220}Photo library/,
   "a workout log must offer camera and library attachment without adding a permanent large picker",
 );
+const workoutPhotoEditorAt = gymScreen.indexOf("styles.workoutPhotoEditor");
+const workoutTemplateOptionsAt = gymScreen.search(/>\s*Template options\s*</);
+const workoutSaveAt = gymScreen.indexOf('id="workout-save"');
+assert.ok(
+  workoutPhotoEditorAt > workoutTemplateOptionsAt &&
+    workoutPhotoEditorAt < workoutSaveAt,
+  "the workout-photo action must stay visible at the bottom of the live workout, immediately before Save",
+);
 assert.match(
   gymScreen,
   /saveGymSession\(\{[\s\S]{0,900}imageUri: sessionImage\?\.uri,[\s\S]{0,80}imageStoragePath: sessionImage\?\.storagePath/,
   "the workout photo must persist with the canonical saved workout projection",
+);
+const workoutDetailImageSourceAt = metricDetail.indexOf(
+  "const workoutImageUri = coverageEntry?.imageUri ?? session.imageUri;",
+);
+const workoutDetailImageAt = metricDetail.indexOf(
+  "uri={workoutImageUri}",
+  workoutDetailImageSourceAt,
+);
+assert.ok(
+  workoutDetailImageSourceAt >= 0 && workoutDetailImageAt > workoutDetailImageSourceAt,
+  "saved workout cards must render their canonical attached image with the normal session details",
 );
 assert.match(
   workoutTimerPresence,

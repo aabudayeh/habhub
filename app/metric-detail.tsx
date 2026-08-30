@@ -2514,6 +2514,7 @@ export default function TrackerDetail() {
             gymSourceSessions[index - 1].localDate !== session.localDate;
           const collapsed = collapsedEntryDates.has(session.localDate);
           const coverageEntry = stepCoverageEntryForGymSession(session);
+          const workoutImageUri = coverageEntry?.imageUri ?? session.imageUri;
           return (
             <React.Fragment key={`gym:${session.id}`}>
             {dates.length > 1 && firstOnDate ? (
@@ -2621,6 +2622,12 @@ export default function TrackerDetail() {
               <Text translate={false} style={[styles.note, { color: colors.faint }]}>
                 {session.exercises.map((exercise) => localizeExerciseName(language, exercise)).join(", ")}
               </Text>
+              {workoutImageUri ? (
+                <ExpandableImage
+                  uri={workoutImageUri}
+                  thumbnailStyle={styles.image}
+                />
+              ) : null}
             </Card>
             </Pressable>
             ) : null}

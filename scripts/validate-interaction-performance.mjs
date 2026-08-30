@@ -13,6 +13,8 @@ import { accountOwnedCollections } from "../src/domain/accountCollections.ts";
 import { wheelIndexFromOffset } from "../src/domain/timeWheel.ts";
 import "./validate-responsive-work.mjs";
 import "./validate-native-sync-performance.mjs";
+import "./validate-native-leaderboard-performance.mjs";
+import "./validate-recap-feed-performance.mjs";
 
 const ui = fs.readFileSync("src/components/ui.tsx", "utf8");
 const calendar = fs.readFileSync("src/domain/calendar.ts", "utf8");

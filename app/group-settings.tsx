@@ -491,8 +491,8 @@ export default function GroupSettings() {
               accent={accent}
             />
             <NotificationPreferenceRow
-              title="Reactions to your updates"
-              detail="Likes, hearts, cheers and other reactions from this group"
+              title="Feed interactions"
+              detail="Likes, hearts, cheers, and comments from this group"
               value={
                 groupNotificationPreferences.socialReactions ??
                 notifications.socialReactions !== false

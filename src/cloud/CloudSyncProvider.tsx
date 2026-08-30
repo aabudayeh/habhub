@@ -52,6 +52,10 @@ import {
 } from "@/src/domain/accountProfile";
 import { metricEntryKey } from "@/src/domain/metricEntry";
 import {
+  mergeGroupActivityEntries,
+  mergeGroupActivityStatuses,
+} from "@/src/domain/groupActivityMerge";
+import {
   metricIdsForHealthDataTypes,
   reconcileGoogleHealthNativeMirrors,
 } from "@/src/domain/health";
@@ -151,7 +155,6 @@ import {
 import { networkReachability } from "@/src/domain/network";
 import { accountOwnedCollections } from "@/src/domain/accountCollections";
 import { mergeStepCoveragePreferences } from "@/src/domain/stepCoveragePreferences";
-import { cloudSourceTimestampIsNewer } from "@/src/domain/cloudMaintenance";
 import {
   canBootstrapCloudSnapshotCursor,
   cloudSnapshotCursorForAcknowledgement,
@@ -191,6 +194,17 @@ const MAX_SURFACE_READ_RETRY_MS = 60 * 1000;
 const CHAT_OUTBOX_RECOVERY_LIMIT = 200;
 const CHAT_OUTBOX_AUTOMATIC_RETRY_LIMIT = 5;
 const LEADERBOARD_FRESHNESS_INTERVAL_MS = 5 * 60 * 1000;
+
+function dailyStatusKey(
+  status: AppState["dailyMetricStatuses"][number],
+) {
+  return [
+    status.groupId,
+    status.metricId,
+    status.userId,
+    status.localDate,
+  ].join(":");
+}
 
 function mergeQueuedActivitySince(
   current: string | null | undefined,
@@ -2277,78 +2291,6 @@ function groupConfigurationHash(state: AppState) {
   });
 }
 
-function dailyStatusKey(
-  status: AppState["dailyMetricStatuses"][number],
-) {
-  return [
-    status.groupId,
-    status.metricId,
-    status.userId,
-    status.localDate,
-  ].join(":");
-}
-
-function mergeActivityEntries(
-  cached: AppState["entries"],
-  fetched: AppState["entries"],
-  currentUserId: string,
-) {
-  const entries = new Map(
-    cached.map((entry) => [
-      metricEntryKey(entry.userId, entry.id),
-      entry,
-    ]),
-  );
-  fetched.forEach((entry) => {
-    const key = metricEntryKey(entry.userId, entry.id);
-    const existing = entries.get(key);
-    const existingIsNewer =
-      cloudSourceTimestampIsNewer(
-        existing?.sourceUpdatedAt,
-        entry.sourceUpdatedAt,
-      );
-    // Owned rows may be newer local writes waiting for upload. Fetched rows are
-    // authoritative for friends unless their native-source revision is older
-    // than the one already rendered from cache.
-    if (
-      !existing ||
-      (existing.userId !== currentUserId && !existingIsNewer)
-    )
-      entries.set(key, entry);
-    else if (
-      existing.userId === currentUserId &&
-      entry.cloudId &&
-      existing.cloudId !== entry.cloudId
-    )
-      // Preserve an owned pending/newer local value while accepting the
-      // server-owned relational identity needed by social engagement.
-      entries.set(key, { ...existing, cloudId: entry.cloudId });
-  });
-  return [...entries.values()].sort((a, b) =>
-    a.recordedAt.localeCompare(b.recordedAt),
-  );
-}
-
-function mergeActivityStatuses(
-  cached: AppState["dailyMetricStatuses"],
-  fetched: AppState["dailyMetricStatuses"],
-) {
-  const statuses = new Map(
-    cached.map((status) => [dailyStatusKey(status), status]),
-  );
-  fetched.forEach((status) => {
-    const key = dailyStatusKey(status);
-    const existing = statuses.get(key);
-    if (
-      !existing?.syncedAt ||
-      !status.syncedAt ||
-      status.syncedAt >= existing.syncedAt
-    )
-      statuses.set(key, status);
-  });
-  return [...statuses.values()];
-}
-
 function messagesEquivalent(
   left: AppState["messages"],
   right: AppState["messages"],
@@ -2518,7 +2460,7 @@ function mergeWorkspaceWithoutRegression(
       ...(live.settings.deletedEntryIds ?? []),
     ],
   );
-  const entries = mergeActivityEntries(
+  const entries = mergeGroupActivityEntries(
     cachedEntries,
     remote.entries,
     live.currentUserId,
@@ -2543,7 +2485,7 @@ function mergeWorkspaceWithoutRegression(
       ...(live.settings.deletedPhotoIds ?? []),
     ],
   );
-  const statuses = mergeActivityStatuses(
+  const statuses = mergeGroupActivityStatuses(
     live.dailyMetricStatuses.filter(
       (status) => status.userId === live.currentUserId,
     ),
@@ -3459,12 +3401,12 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
 
       const next = {
         ...current,
-        entries: mergeActivityEntries(
+        entries: mergeGroupActivityEntries(
           current.entries,
           stillAuthorized.entries,
           current.currentUserId,
         ),
-        dailyMetricStatuses: mergeActivityStatuses(
+        dailyMetricStatuses: mergeGroupActivityStatuses(
           current.dailyMetricStatuses,
           stillAuthorized.dailyMetricStatuses,
         ),
@@ -6336,7 +6278,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           // authoritatively prune absent friend rows in its bounded date range.
           const next = {
             ...live,
-            entries: mergeActivityEntries(
+            entries: mergeGroupActivityEntries(
               baseEntries.filter(
                 (entry) =>
                   !deletedEntryKeys.has(
@@ -6346,14 +6288,13 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
               activity.entries,
               live.currentUserId,
             ),
-            dailyMetricStatuses: mergeActivityStatuses(
+            dailyMetricStatuses: mergeGroupActivityStatuses(
               baseStatuses,
               activity.dailyMetricStatuses,
             ),
           };
           stateRef.current = next;
           replaceState(next, { source: "cloud" });
-          const cached = cachedGroupActivity(next, groupId);
           const cacheBoundary = `${next.currentUserId}:${groupId}`;
           const cacheWriteGeneration =
             (groupActivityCacheWriteGenerationRef.current.get(
@@ -6383,6 +6324,9 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
               await waitForCloudCacheWriteTurn();
               if (!cacheWriteIsCurrent()) return;
             }
+            // Projection scans every retained friend row. Build it only after
+            // the touch-aware gate, not eagerly on the response/press lane.
+            const cached = cachedGroupActivity(next, groupId);
             const results = await Promise.allSettled([
               writeGroupActivityCache({
                 groupId,
@@ -6663,7 +6607,6 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           replaceState(next, { source: "cloud" });
           markGroupReadSucceeded(groupId);
           setPendingChanges(hasUnsyncedLocalChanges());
-          const cachePayload = cachedGroupActivity(next, groupId);
           const cacheBoundary = `${next.currentUserId}:${groupId}`;
           const cacheWriteGeneration =
             (groupActivityCacheWriteGenerationRef.current.get(
@@ -6687,6 +6630,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
               ) !== cacheWriteGeneration
             )
               return;
+            const cachePayload = cachedGroupActivity(next, groupId);
             void Promise.allSettled([
               writeGroupActivityCache({
                 groupId,

@@ -25,6 +25,7 @@ import {
   challengeSettlementKey,
   type ResolvedChallengePlacement,
 } from "./groupChallenges";
+import type { GroupSocialTargetType } from "./groupSocialTarget";
 
 export type RecapScope = "personal" | "group";
 
@@ -81,6 +82,35 @@ export type RecapFeedItem = {
   };
 };
 
+/** Resolve a server-owned social target back to its exact rendered feed card. */
+export function recapFeedItemIdForSocialTarget(
+  items: readonly RecapFeedItem[],
+  targetType: GroupSocialTargetType | undefined,
+  targetId: string | undefined,
+) {
+  if (!targetType || !targetId) return undefined;
+  const exact = items.find(
+    (item) =>
+      item.socialTarget.type === targetType &&
+      item.socialTarget.id === targetId,
+  )?.id;
+  if (exact) return exact;
+  // Mixed-version notification rows may still carry leader:<date>. The card id
+  // intentionally remains date-based even though new mutation identities also
+  // bind the rendered member, so old deep links can still focus the right card.
+  if (targetType === "recap_feed" && targetId.startsWith("leader:"))
+    return items.find((item) => item.id === targetId)?.id;
+  return undefined;
+}
+
+function firstById<T extends { id: string }>(items: readonly T[]) {
+  const byId = new Map<string, T>();
+  for (const item of items) {
+    if (!byId.has(item.id)) byId.set(item.id, item);
+  }
+  return byId;
+}
+
 function meaningfulFeedEntry(
   metric: MetricDefinition,
   entry: AppState["entries"][number],
@@ -132,24 +162,51 @@ export function buildGroupRecapFeed(
   settledChallengePlacements?: readonly ResolvedChallengePlacement[],
 ): RecapFeedItem[] {
   const dateSet = new Set(dates);
+  const groupMembersById = firstById(state.group.members);
+  const memberNamesById = new Map(
+    [...groupMembersById.values()].map((member) => [
+      member.id,
+      memberDisplayName(state, member),
+    ]),
+  );
+  const groupMetrics = state.group.metricConfiguration ?? [];
   const groupMetricIds = new Set(
-    (state.group.metricConfiguration ?? [])
+    groupMetrics
       .filter((metric) => metric.sections.group)
       .map((metric) => metric.id),
   );
+  const groupMetricsById = firstById(groupMetrics);
+  const stateMetricsById = firstById(state.metrics);
   const metrics = new Map(
     state.metrics
       .filter((metric) => groupMetricIds.has(metric.id))
       .map((metric) => [metric.id, metric]),
   );
+  const settledPlacementByOccurrence = new Map<
+    string,
+    ResolvedChallengePlacement
+  >();
+  for (const placement of settledChallengePlacements ?? []) {
+    const key = challengeSettlementKey(
+      placement.challengeId,
+      placement.localDate,
+    );
+    // Match Array.find's first-result behavior if a malformed response contains
+    // the same occurrence twice.
+    if (!settledPlacementByOccurrence.has(key))
+      settledPlacementByOccurrence.set(key, placement);
+  }
   const items: RecapFeedItem[] = [];
+  const activeDates = new Set<string>();
   for (const entry of state.entries) {
     if (!dateSet.has(entry.localDate)) continue;
+    if (entry.visibility === "group" && groupMetricIds.has(entry.metricId))
+      activeDates.add(entry.localDate);
     const metric = metrics.get(entry.metricId);
     if (!metric || !meaningfulFeedEntry(metric, entry)) continue;
-    const member = state.group.members.find((item) => item.id === entry.userId);
+    const member = groupMembersById.get(entry.userId);
     if (!member) continue;
-    const memberName = memberDisplayName(state, member);
+    const memberName = memberNamesById.get(member.id) ?? member.name;
     const workout =
       metric.healthMapping?.dataType === "workouts" ||
       metric.category === "gym" ||
@@ -209,7 +266,7 @@ export function buildGroupRecapFeed(
   }
   for (const photo of state.photos) {
     if (photo.visibility !== "group" || !dateSet.has(photo.localDate)) continue;
-    const member = state.group.members.find((item) => item.id === photo.userId);
+    const member = groupMembersById.get(photo.userId);
     if (!member) continue;
     items.push({
       id: `photo:${photo.id}`,
@@ -218,7 +275,7 @@ export function buildGroupRecapFeed(
       createdAt: photo.createdAt,
       memberId: photo.userId,
       eyebrow: "PHOTO UPDATE",
-      title: `${memberDisplayName(state, member)} shared a photo`,
+      title: `${memberNamesById.get(member.id) ?? member.name} shared a photo`,
       body: photo.caption || "A moment from their day.",
       icon: "image-outline",
       color: member.color,
@@ -233,9 +290,7 @@ export function buildGroupRecapFeed(
       !dateSet.has(badge.anchorDate)
     )
       continue;
-    const member = state.group.members.find(
-      (item) => item.id === badge.memberId,
-    );
+    const member = groupMembersById.get(badge.memberId);
     if (!member) continue;
     items.push({
       id: `badge:${badge.id}:${badge.anchorDate}`,
@@ -244,7 +299,7 @@ export function buildGroupRecapFeed(
       createdAt: `${badge.anchorDate}T23:59:00`,
       memberId: badge.memberId,
       eyebrow: "BADGE UNLOCKED",
-      title: `${memberDisplayName(state, member)} earned ${badge.title}`,
+      title: `${memberNamesById.get(member.id) ?? member.name} earned ${badge.title}`,
       body: badge.description,
       value: badge.caption,
       icon: badge.icon,
@@ -276,9 +331,8 @@ export function buildGroupRecapFeed(
   const today = dateKey();
   for (const challenge of challengeOccurrences) {
     const metric =
-      (state.group.metricConfiguration ?? []).find(
-        (candidate) => candidate.id === challenge.metricId,
-      ) ?? state.metrics.find((candidate) => candidate.id === challenge.metricId);
+      groupMetricsById.get(challenge.metricId) ??
+      stateMetricsById.get(challenge.metricId);
     if (!metric) continue;
     const sourceId = groupChallengeSourceId(challenge);
     const endDate = groupChallengeEndDate(challenge);
@@ -331,11 +385,7 @@ export function buildGroupRecapFeed(
       sourceId,
       challenge.localDate,
     );
-    const settledPlacement = settledChallengePlacements?.find(
-      (result) =>
-        challengeSettlementKey(result.challengeId, result.localDate) ===
-        settlementKey,
-    );
+    const settledPlacement = settledPlacementByOccurrence.get(settlementKey);
     const progress = groupChallengeProgress(state, challenge, metric);
     const winnerIds = settledChallengePlacements
       ? (settledPlacement?.placements ?? [])
@@ -347,15 +397,13 @@ export function buildGroupRecapFeed(
           metric.rankingDirection,
         );
     const winnerNames = winnerIds
-      .map((winnerId) =>
-        state.group.members.find((member) => member.id === winnerId),
-      )
-      .filter((member): member is NonNullable<typeof member> => Boolean(member))
-      .map((member) => memberDisplayName(state, member));
+      .map((winnerId) => memberNamesById.get(winnerId))
+      .filter((name): name is string => Boolean(name));
     const winningPlacement = settledPlacement?.placements.find(
       (placement) => placement.winner === true,
     );
-    const winningRow = progress.find((row) => winnerIds.includes(row.member.id));
+    const winnerIdSet = new Set(winnerIds);
+    const winningRow = progress.find((row) => winnerIdSet.has(row.member.id));
     items.push({
       id: `challenge:${sourceId}:${challenge.localDate}:result`,
       kind: "challenge",
@@ -389,20 +437,14 @@ export function buildGroupRecapFeed(
   // live rank change or background health sample. Only evaluate dates with a
   // real group projection and cap headline work for year/all-time feeds; raw
   // entry/photo cards remain available throughout the selected range.
-  const activeDates = new Set([
-    ...state.entries
-      .filter(
-        (entry) =>
-          entry.visibility === "group" && groupMetricIds.has(entry.metricId),
-      )
-      .map((entry) => entry.localDate),
-    ...(state.dailyMetricStatuses ?? [])
-      .filter(
-        (status) =>
-          status.groupId === state.group.id && status.visibility !== "private",
-      )
-      .map((status) => status.localDate),
-  ]);
+  for (const status of state.dailyMetricStatuses ?? []) {
+    if (
+      dateSet.has(status.localDate) &&
+      status.groupId === state.group.id &&
+      status.visibility !== "private"
+    )
+      activeDates.add(status.localDate);
+  }
   const headlineDates = dates
     .filter((localDate) => activeDates.has(localDate))
     .slice(-45);
@@ -423,7 +465,7 @@ export function buildGroupRecapFeed(
       createdAt: `${localDate}T23:58:00`,
       memberId: leader.member.id,
       eyebrow: "DAILY LEADER",
-      title: `${memberDisplayName(state, leader.member)} led the board`,
+      title: `${memberNamesById.get(leader.member.id) ?? leader.member.name} led the board`,
       body:
         ranked.length > 1
           ? `${Math.max(0, Math.round(leader.score - ranked[1].score))} points ahead of second place.`
@@ -431,7 +473,13 @@ export function buildGroupRecapFeed(
       value: `${Math.round(leader.score)}/100`,
       icon: "trophy-outline",
       color: leader.member.color,
-      socialTarget: { type: "recap_feed", id: `leader:${localDate}` },
+      // Bind the interaction identity to the member this client rendered. The
+      // server independently validates the unique daily leader before routing
+      // a notification, so a date-only tie can never address the wrong person.
+      socialTarget: {
+        type: "recap_feed",
+        id: `leader:${leader.member.id}:${localDate}`,
+      },
       deepLink: {
         pathname: "/group",
         params: { period: "custom", anchor: localDate },

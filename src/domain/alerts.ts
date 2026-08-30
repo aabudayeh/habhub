@@ -42,7 +42,7 @@ export type PaceAlert = {
   entryId?: string;
   localDate?: string;
   todoId?: string;
-  targetType?: "metric_entry" | "photo_update";
+  targetType?: GroupNotificationEvent["targetType"];
 };
 export function buildAlerts(
   state: AppState,
@@ -303,7 +303,11 @@ export function buildAlerts(
   const challengeEvents = groupNotificationEvents
     .filter((event) => {
       if (!groupEventsEnabled) return false;
-      if (event.kind === "social_reaction") return socialReactionsEnabled;
+      if (
+        event.kind === "social_reaction" ||
+        event.kind === "social_comment"
+      )
+        return socialReactionsEnabled;
       if (
         (event.kind === "challenge_invitation" ||
           event.kind === "challenge_accepted" ||
@@ -338,11 +342,15 @@ export function buildAlerts(
     const result = event.kind === "challenge_result";
     const reminder = event.kind === "challenge_reminder";
     const socialReaction = event.kind === "social_reaction";
+    const socialComment = event.kind === "social_comment";
+    const socialInteraction = socialReaction || socialComment;
     return {
       id: `group-notification-${event.id}`,
-      category: socialReaction ? "lead" : "challenge",
-      icon: socialReaction
-        ? event.reaction === "cheer"
+      category: socialInteraction ? "lead" : "challenge",
+      icon: socialInteraction
+        ? socialComment
+          ? "chatbubble-ellipses-outline"
+          : event.reaction === "cheer"
           ? "sparkles-outline"
           : event.reaction === "thumbs_down"
           ? "thumbs-down-outline"
@@ -362,8 +370,10 @@ export function buildAlerts(
         socialReaction && event.reaction === "cheer"
           ? "party-popper"
           : "ionicons",
-      color: socialReaction
-        ? event.reaction === "cheer"
+      color: socialInteraction
+        ? socialComment
+          ? palette.primary
+          : event.reaction === "cheer"
           ? palette.amber
           : palette.red
         : invitation

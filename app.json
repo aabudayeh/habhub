@@ -106,8 +106,8 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "HabHub uses your photos only when you choose to add a progress update.",
-          "cameraPermission": "HabHub uses your camera only when you choose to take a progress photo.",
+          "photosPermission": "HabHub uses your photos only when you choose to attach an image to a log, workout, note, or progress update.",
+          "cameraPermission": "HabHub uses your camera only when you choose to attach a photo to a log, workout, note, or progress update.",
           "microphonePermission": false
         }
       ],

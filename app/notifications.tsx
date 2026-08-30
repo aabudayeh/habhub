@@ -444,8 +444,8 @@ export default function NotificationsScreen() {
         />
         <ToggleRow
           icon="sparkles-outline"
-          title="Reactions to your updates"
-          copy="Likes, hearts, cheers, and other reactions to items you share"
+          title="Feed interactions"
+          copy="Likes, hearts, cheers, and comments on feed items you share"
           enabled={value.socialReactions !== false}
           onPress={() =>
             patch({ socialReactions: value.socialReactions === false })

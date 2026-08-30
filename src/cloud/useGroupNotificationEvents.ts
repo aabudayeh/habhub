@@ -19,7 +19,7 @@ function preferenceAllowsEvent(
 ) {
   if (preferences?.enabled === false) return false;
   if (
-    event.kind === "social_reaction" &&
+    (event.kind === "social_reaction" || event.kind === "social_comment") &&
     preferences?.socialReactions === false
   )
     return false;

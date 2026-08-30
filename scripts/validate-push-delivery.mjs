@@ -853,7 +853,11 @@ assert.ok(
     reactionTargetRepair > optimisticReactionPaint,
   "reaction controls must paint before target repair or network work",
 );
-assert.match(recapScreen, /const FEED_PAGE_SIZE = 30/);
+assert.match(
+  recapScreen,
+  /const FEED_PAGE_SIZE = Platform\.OS === "web" \? 30 : 12/,
+  "the native feed must mount a smaller first batch without reducing the web feed",
+);
 assert.match(recapScreen, /const feedState = useDeferredValue\(state\)/);
 assert.match(recapScreen, /visibleFeed\.slice\(0, renderLimit\)/);
 assert.match(recapScreen, /const MemoFeedCard = React\.memo/);
@@ -999,7 +1003,7 @@ assert.match(canonicalChatPreview, /Shared an attachment/);
 assert.match(canonicalChatPreview, /localizedChatFallback/);
 assert.match(canonicalChatPreview, /hasAttachment \? " · Attachment" : ""/);
 assert.match(edge, /event\.eventType === "social_reaction"[\s\S]{0,180}socialReactions/);
-assert.match(notifications, /title="Reactions to your updates"/);
+assert.match(notifications, /title="Feed interactions"/);
 assert.match(groupSettings, /groupNotificationPreferences\.socialReactions/);
 assert.match(groupNotificationHook, /event\.kind === "social_reaction"[\s\S]{0,100}preferences\?\.socialReactions === false/);
 const effectiveGroupPreferencesStart = group.indexOf(

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Platform } from "react-native";
 
 import {
   addGroupSocialComment,
@@ -19,6 +20,7 @@ import {
 import { useCloudSyncActions } from "@/src/cloud/CloudSyncProvider";
 import { subscribePrivateBroadcast } from "@/src/cloud/privateBroadcast";
 import { supabase } from "@/src/lib/supabase";
+import { scheduleResponsiveWork } from "@/src/lib/responsiveWork";
 import {
   beginSocialReactionBurst,
   confirmSocialReactionBurst,
@@ -139,8 +141,17 @@ export function useGroupSocialEngagement(
   useEffect(() => {
     requestGenerationRef.current += 1;
     requestRef.current = null;
-    void refresh();
+    const task =
+      Platform.OS === "web"
+        ? undefined
+        : scheduleResponsiveWork(() => void refresh(), {
+            minimumDelayMs: 180,
+            maximumDelayMs: 2_000,
+            minimumUserQuietMs: 650,
+          });
+    if (Platform.OS === "web") void refresh();
     return () => {
+      task?.cancel();
       requestGenerationRef.current += 1;
     };
   }, [refresh]);
@@ -148,16 +159,29 @@ export function useGroupSocialEngagement(
   useEffect(() => {
     if (!cloudEnabled) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let task: ReturnType<typeof scheduleResponsiveWork> | undefined;
     const unsubscribe = subscribePrivateBroadcast(
       `group:${groupId}:social`,
       "social_updated",
       () => {
         if (timer) clearTimeout(timer);
-        timer = setTimeout(() => void refresh(), 160);
+        task?.cancel();
+        timer = setTimeout(() => {
+          if (Platform.OS === "web") {
+            void refresh();
+            return;
+          }
+          task = scheduleResponsiveWork(() => void refresh(), {
+            minimumDelayMs: 80,
+            maximumDelayMs: 2_000,
+            minimumUserQuietMs: 650,
+          });
+        }, 160);
       },
     );
     return () => {
       if (timer) clearTimeout(timer);
+      task?.cancel();
       unsubscribe();
     };
   }, [cloudEnabled, groupId, refresh]);
@@ -432,6 +456,10 @@ export function useGroupSocialEngagement(
           );
           setComments(commentsRef.current);
         }
+        // The insert trigger has already created an immutable recipient event
+        // and push outbox row. Ask the bounded dispatcher to deliver it now;
+        // a transient failure remains durable for the normal foreground drain.
+        void flushPendingGroupPushEvents().catch(() => undefined);
       } catch (reason) {
         commentsRef.current = commentsRef.current.filter(
           (item) => item.id !== pendingId,

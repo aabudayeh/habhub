@@ -4010,63 +4010,6 @@ function GymScreen() {
                 multiline
                 style={[styles.notes, { color: colors.ink, borderColor: colors.border }]}
               />
-              <View
-                style={[
-                  styles.workoutPhotoEditor,
-                  { borderColor: colors.border },
-                ]}
-              >
-                {sessionImage?.uri ? (
-                  <Image
-                    source={sessionImage.uri}
-                    contentFit="cover"
-                    style={styles.workoutPhotoPreview}
-                  />
-                ) : (
-                  <View
-                    style={[
-                      styles.workoutPhotoPlaceholder,
-                      { backgroundColor: colors.primarySoft },
-                    ]}
-                  >
-                    <Ionicons
-                      name="camera-outline"
-                      size={18}
-                      color={accent}
-                    />
-                  </View>
-                )}
-                <View style={styles.grow}>
-                  <Text style={[styles.label, { color: colors.ink }]}>Workout photo</Text>
-                  <Text style={[styles.meta, { color: colors.muted }]}>
-                    {sessionImage
-                      ? "Attached to this workout log."
-                      : "Optional · visible wherever this log is shared."}
-                  </Text>
-                </View>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={sessionImage ? "Change workout photo" : "Attach workout photo"}
-                  onPress={pickWorkoutImage}
-                  style={[styles.photoAction, { borderColor: colors.border }]}
-                >
-                  <Ionicons
-                    name={sessionImage ? "images-outline" : "add"}
-                    size={15}
-                    color={accent}
-                  />
-                </Pressable>
-                {sessionImage ? (
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="Remove workout photo"
-                    onPress={removeWorkoutImage}
-                    style={[styles.photoAction, { borderColor: colors.border }]}
-                  >
-                    <Ionicons name="trash-outline" size={14} color={palette.red} />
-                  </Pressable>
-                ) : null}
-              </View>
                 </>
               ) : null}
             </Card>
@@ -4863,6 +4806,63 @@ function GymScreen() {
                         ) : null}
                       </View>
                     </View>
+                  ) : null}
+                </View>
+                <View
+                  style={[
+                    styles.workoutPhotoEditor,
+                    { borderColor: colors.border },
+                  ]}
+                >
+                  {sessionImage?.uri ? (
+                    <Image
+                      source={sessionImage.uri}
+                      contentFit="cover"
+                      style={styles.workoutPhotoPreview}
+                    />
+                  ) : (
+                    <View
+                      style={[
+                        styles.workoutPhotoPlaceholder,
+                        { backgroundColor: colors.primarySoft },
+                      ]}
+                    >
+                      <Ionicons
+                        name="camera-outline"
+                        size={18}
+                        color={accent}
+                      />
+                    </View>
+                  )}
+                  <View style={styles.grow}>
+                    <Text style={[styles.label, { color: colors.ink }]}>Attach workout photo</Text>
+                    <Text style={[styles.meta, { color: colors.muted }]}>
+                      {sessionImage
+                        ? "Saved with this workout and shown in its tracker details."
+                        : "Optional · take a photo or choose one from your library."}
+                    </Text>
+                  </View>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={sessionImage ? "Change workout photo" : "Attach workout photo"}
+                    onPress={pickWorkoutImage}
+                    style={[styles.photoAction, { borderColor: colors.border }]}
+                  >
+                    <Ionicons
+                      name={sessionImage ? "images-outline" : "add"}
+                      size={15}
+                      color={accent}
+                    />
+                  </Pressable>
+                  {sessionImage ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Remove workout photo"
+                      onPress={removeWorkoutImage}
+                      style={[styles.photoAction, { borderColor: colors.border }]}
+                    >
+                      <Ionicons name="trash-outline" size={14} color={palette.red} />
+                    </Pressable>
                   ) : null}
                 </View>
                 <TutorialTarget id="workout-save">

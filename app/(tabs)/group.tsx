@@ -360,6 +360,7 @@ function LeaderboardScreen() {
   const celebratingChallengeIds = useRef(new Set<string>());
   const [, setClockTick] = useState(0);
   const [draggingCardId, setDraggingCardId] = useState<string | null>(null);
+  const [activeLeaderboardPage, setActiveLeaderboardPage] = useState(0);
   const screenScrollRef = useRef<ScrollView>(null);
   const groupTodoY = useRef<number | undefined>(undefined);
   const handledGroupTodoFocusKey = useRef<string | undefined>(undefined);
@@ -477,6 +478,10 @@ function LeaderboardScreen() {
       ),
     [state.group.metricConfiguration],
   );
+  const trackedById = useMemo(
+    () => new Map(tracked.map((metric) => [metric.id, metric])),
+    [tracked],
+  );
   const completedChallengeResults = useMemo(() => {
     if (!screenFocused) return [];
     const today = dateKey();
@@ -525,7 +530,7 @@ function LeaderboardScreen() {
         tracked.some((item) => item.id === challenge.metricId),
       );
     if (!next) return [];
-    const metric = tracked.find((item) => item.id === next.metricId)!;
+    const metric = trackedById.get(next.metricId)!;
     const canonicalResult = groupFeedEvents.find(
       (event) =>
         event.kind === "challenge_result" &&
@@ -554,6 +559,7 @@ function LeaderboardScreen() {
     screenFocused,
     state,
     tracked,
+    trackedById,
     tutorialSandbox,
   ]);
   useEffect(() => {
@@ -1009,6 +1015,51 @@ function LeaderboardScreen() {
         return index >= 0 ? Math.floor(index / leaderboardPageSize) : undefined;
       })()
     : undefined;
+  // Native mounts only the active and adjacent pager pages. Calculate ranking
+  // rows for that same bounded window instead of eagerly projecting every
+  // hidden tracker whenever a cloud activity delta arrives. A remotely focused
+  // challenge also primes its target window before the pager animates there.
+  const rankingMetricIds = useMemo(() => {
+    if (Platform.OS === "web" || !leaderboardUsesPages)
+      return calculationSelected;
+    const maximumPage = Math.max(
+      0,
+      Math.ceil(displayedSelected.length / leaderboardPageSize) - 1,
+    );
+    const currentPage = Math.max(
+      0,
+      Math.min(activeLeaderboardPage, maximumPage),
+    );
+    const mountedPages = new Set([
+      currentPage - 1,
+      currentPage,
+      currentPage + 1,
+      ...(requestedLeaderboardPage === undefined
+        ? []
+        : [
+            requestedLeaderboardPage - 1,
+            requestedLeaderboardPage,
+            requestedLeaderboardPage + 1,
+          ]),
+    ]);
+    const mountedIds = new Set<string>();
+    for (const page of mountedPages) {
+      if (page < 0 || page > maximumPage) continue;
+      for (const cardId of displayedSelected.slice(
+        page * leaderboardPageSize,
+        (page + 1) * leaderboardPageSize,
+      ))
+        if (!challengeIdFromCard(cardId)) mountedIds.add(cardId);
+    }
+    return calculationSelected.filter((metricId) => mountedIds.has(metricId));
+  }, [
+    activeLeaderboardPage,
+    calculationSelected,
+    displayedSelected,
+    leaderboardPageSize,
+    leaderboardUsesPages,
+    requestedLeaderboardPage,
+  ]);
   const rankingInputs = useMemo(
     () => ({
       statuses: state.dailyMetricStatuses,
@@ -1058,8 +1109,8 @@ function LeaderboardScreen() {
   const rankingRows = useMemo(() => {
     void rankingInputs;
     const rows = new Map<string, ReturnType<typeof leaderboardRows>>();
-    for (const id of calculationSelected) {
-      const metric = tracked.find((item) => item.id === id);
+    for (const id of rankingMetricIds) {
+      const metric = trackedById.get(id);
       rows.set(
         id,
         leaderboardRows(
@@ -1074,19 +1125,20 @@ function LeaderboardScreen() {
     return rows;
   }, [
     dates,
-    calculationSelected,
+    rankingMetricIds,
     rankingInputs,
-    tracked,
+    trackedById,
   ]);
   const visibleGridKeys = useMemo(
     () =>
       calculationSelected.flatMap((metricId) =>
         metricId === SCORE_ID
           ? []
-          : (rankingRows.get(metricId) ?? [])
-              .map((row) => `${metricId}:${row.member.id}`),
+          : state.group.members.map(
+              (member) => `${metricId}:${member.id}`,
+            ),
       ),
-    [calculationSelected, rankingRows],
+    [calculationSelected, state.group.members],
   );
   const targetedActivitySince = useMemo(
     () => {
@@ -1361,6 +1413,29 @@ function LeaderboardScreen() {
     setShowPicker(false);
     setShowHistoryOptions(false);
   }, []);
+  const handleLeaderboardPageChange = useCallback(
+    (page: number) => {
+      setActiveLeaderboardPage((current) =>
+        current === page ? current : page,
+      );
+      if (page !== requestedLeaderboardPage || !pendingChallengeCardId)
+        return;
+      if (pendingChallengeFocusKey.current)
+        setTimeout(
+          () => completePendingChallengeFocus(pendingChallengeCardId),
+          80,
+        );
+      else
+        // Locally created challenges already selected their page and do not
+        // carry an external focus request to acknowledge.
+        setPendingChallengeCardId(undefined);
+    },
+    [
+      completePendingChallengeFocus,
+      pendingChallengeCardId,
+      requestedLeaderboardPage,
+    ],
+  );
   useFocusEffect(
     useCallback(() => {
       const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
@@ -1559,7 +1634,7 @@ function LeaderboardScreen() {
                 <ChallengeRankingCard
                   challenge={challenge}
                   state={state}
-                  metric={tracked.find((item) => item.id === challenge.metricId)}
+                  metric={trackedById.get(challenge.metricId)}
                   colors={colors}
                   accent={accent}
                   editing={editing}
@@ -1576,7 +1651,7 @@ function LeaderboardScreen() {
             </ReorderItem>
           );
         }
-        const metric = tracked.find((item) => item.id === id);
+        const metric = trackedById.get(id);
         const includeScore = id === SCORE_ID;
         const rows = rankingRows.get(id) ?? [];
         return (
@@ -1922,19 +1997,7 @@ function LeaderboardScreen() {
             scrollEnabled={!draggingCardId}
             webNaturalHeight
             requestedPage={requestedLeaderboardPage}
-            onPageChange={(page) => {
-              if (page !== requestedLeaderboardPage || !pendingChallengeCardId)
-                return;
-              if (pendingChallengeFocusKey.current)
-                setTimeout(
-                  () => completePendingChallengeFocus(pendingChallengeCardId),
-                  80,
-                );
-              else
-                // Locally created challenges already selected their page and
-                // do not carry an external focus request to acknowledge.
-                setPendingChallengeCardId(undefined);
-            }}
+            onPageChange={handleLeaderboardPageChange}
           />
         );
       })()}

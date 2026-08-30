@@ -639,15 +639,22 @@ export type GroupNotificationEvent = {
     | "challenge_standing"
     | "challenge_reminder"
     | "challenge_result"
-    | "social_reaction";
+    | "social_reaction"
+    | "social_comment";
   challengeId?: string;
   /** Scored occurrence settled by the server, including recurring series. */
   occurrenceDate?: string;
   /** Server-authored copy for standings/results; legacy invitation rows omit it. */
   title?: string;
   detail?: string;
-  /** Optional privacy-authorized social target for likes/reactions. */
-  targetType?: "metric_entry" | "photo_update";
+  /** Optional privacy-authorized target for a feed reaction or comment. */
+  targetType?:
+    | "recap_feed"
+    | "metric_entry"
+    | "photo_update"
+    | "badge"
+    | "group_challenge"
+    | "group_todo";
   targetId?: string;
   reaction?: "heart" | "thumbs_up" | "thumbs_down" | "cheer";
   createdAt: string;
@@ -1319,7 +1326,7 @@ export type UserSettings = {
 export type NotificationSettings = {
   pushEnabled: boolean;
   groupMetricActivity: boolean;
-  /** Likes, hearts, cheers, and other reactions to the user's shared items. */
+  /** Reactions and comments on the user's shared feed items. */
   socialReactions?: boolean;
   leadChanges: boolean;
   metricIds: string[];
@@ -1361,7 +1368,7 @@ export type GroupNotificationPreferences = {
   enabled?: boolean;
   /** Fresh shared tracker logs. */
   trackerUpdates?: boolean;
-  /** Reactions to the current user's shared logs and feed items. */
+  /** Reactions and comments on the current user's shared feed items. */
   socialReactions?: boolean;
   /** Legacy pre-release field retained while older local snapshots migrate. */
   progressUpdates?: boolean;

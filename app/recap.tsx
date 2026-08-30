@@ -24,13 +24,21 @@ import { MonthCalendar } from "@/src/components/MonthCalendar";
 import { DateRangeNavigator, PeriodChoiceBar } from "@/src/components/PeriodNavigator";
 import { Avatar, Card, Chip, IconButton, PageHeader, Screen } from "@/src/components/ui";
 import { GroupSocialReactionKind } from "@/src/cloud/groupSocial";
+import { useCloudSyncActions } from "@/src/cloud/CloudSyncProvider";
 import { useGroupChallenges } from "@/src/cloud/useGroupChallenges";
 import { useGroupSocialEngagement } from "@/src/cloud/useGroupSocialEngagement";
 import { useSettledChallengeResults } from "@/src/cloud/useSettledChallengeResults";
 import { buildBadges } from "@/src/domain/badges";
 import { dateKey, dateKeyWithOffset, friendlyDate, relativeTime } from "@/src/domain/date";
 import { LeaderboardPeriod, periodDates, shiftedPeriodAnchor } from "@/src/domain/leaderboard";
-import { buildGroupRecapFeed, buildRecapStories, RecapFeedItem, RecapScope } from "@/src/domain/recaps";
+import {
+  buildGroupRecapFeed,
+  buildRecapStories,
+  recapFeedItemIdForSocialTarget,
+  RecapFeedItem,
+  RecapScope,
+} from "@/src/domain/recaps";
+import type { GroupSocialTargetType } from "@/src/domain/groupSocialTarget";
 import { useLocale } from "@/src/i18n";
 import { useApp } from "@/src/state/AppProvider";
 import { stageChatShareImage } from "@/src/storage/chatShareImageStaging";
@@ -45,7 +53,10 @@ const feedFilters: { id: FeedFilter; label: string }[] = [
   { id: "badges", label: "Badges" },
   { id: "challenges", label: "Challenges" },
 ];
-const FEED_PAGE_SIZE = 30;
+const FEED_PAGE_SIZE = Platform.OS === "web" ? 30 : 12;
+const FEED_FOCUS_RETRY_MS = 80;
+const FEED_FOCUS_MAX_ATTEMPTS = 25;
+const FEED_HIGHLIGHT_MS = 5_000;
 
 function filterFeed(items: readonly RecapFeedItem[], filter: FeedFilter) {
   if (filter === "logs") return items.filter((item) => ["log", "meal", "workout", "photo"].includes(item.kind));
@@ -268,23 +279,35 @@ export default function StoryRecapScreen() {
 
 export function GroupRecapFeedScreen() {
   const { state, updateSettings } = useApp();
+  const cloud = useCloudSyncActions();
   // Health and cloud sync can update the account snapshot several times per
   // second. Feed derivation is substantial, so let taps/scrolling win the
   // current frame while retaining the latest authorized snapshot for the next.
   const feedState = useDeferredValue(state);
   const colors = useAppColors();
   const accent = useGroupAccent();
-  const params = useLocalSearchParams<{ highlight?: string; period?: string; anchor?: string }>();
+  const params = useLocalSearchParams<{
+    highlight?: string;
+    period?: string;
+    anchor?: string;
+    targetType?: string;
+    targetId?: string;
+    groupId?: string;
+    feedFocusAt?: string;
+  }>();
   const [period, setPeriod] = useState<LeaderboardPeriod>((params.period as LeaderboardPeriod) || "week");
   const [anchor, setAnchor] = useState(params.anchor || dateKey());
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [filter, setFilter] = useState<FeedFilter>("all");
   const [renderLimit, setRenderLimit] = useState(FEED_PAGE_SIZE);
-  const [highlightedItemId, setHighlightedItemId] = useState(params.highlight);
+  const [highlightedItemId, setHighlightedItemId] = useState<string>();
   const [socialActionError, setSocialActionError] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
   const feedY = useRef(0);
   const itemY = useRef(new Map<string, number>());
+  const handledFeedFocusRef = useRef<string | undefined>(undefined);
+  const attemptedGroupSwitchRef = useRef<string | undefined>(undefined);
+  const targetGroupReady = !params.groupId || params.groupId === state.group.id;
   const dateNavigatorOpen = state.settings.recapDateNavigatorCollapsed === false;
   const dates = useMemo(
     () => periodDates(period, anchor, state.settings.weekStartsOn ?? 1),
@@ -339,17 +362,64 @@ export function GroupRecapFeedScreen() {
     ],
   );
   const visibleFeed = useMemo(() => filterFeed(feed, filter), [feed, filter]);
+  const requestedHighlight = useMemo(
+    () =>
+      targetGroupReady
+        ? params.highlight ??
+          recapFeedItemIdForSocialTarget(
+            visibleFeed,
+            params.targetType as GroupSocialTargetType | undefined,
+            params.targetId,
+          )
+        : undefined,
+    [
+      params.highlight,
+      params.targetId,
+      params.targetType,
+      targetGroupReady,
+      visibleFeed,
+    ],
+  );
+  const feedFocusKey = requestedHighlight
+    ? [
+        params.feedFocusAt ?? "initial",
+        params.targetType ?? "item",
+        params.targetId ?? requestedHighlight,
+      ].join(":")
+    : undefined;
+  useEffect(() => {
+    const requestedGroupId = params.groupId;
+    if (
+      !requestedGroupId ||
+      requestedGroupId === state.group.id ||
+      attemptedGroupSwitchRef.current === requestedGroupId ||
+      !state.groups.some((group) => group.id === requestedGroupId)
+    )
+      return;
+    attemptedGroupSwitchRef.current = requestedGroupId;
+    // Account alerts can belong to any authorized group. Switch to that
+    // group's cached shell first; cloud hydration then refreshes the exact feed.
+    void cloud.switchGroup(requestedGroupId).catch(() => undefined);
+  }, [cloud, params.groupId, state.group.id, state.groups]);
+  useEffect(() => {
+    if (!params.feedFocusAt) return;
+    if (params.period) setPeriod(params.period as LeaderboardPeriod);
+    if (params.anchor) setAnchor(params.anchor);
+  }, [params.anchor, params.feedFocusAt, params.period]);
   useEffect(() => {
     setRenderLimit(FEED_PAGE_SIZE);
   }, [anchor, filter, period]);
   useEffect(() => {
-    if (!params.highlight) return;
+    itemY.current.clear();
+  }, [anchor, filter, period]);
+  useEffect(() => {
+    if (!requestedHighlight) return;
     const highlightedIndex = visibleFeed.findIndex(
-      (item) => item.id === params.highlight,
+      (item) => item.id === requestedHighlight,
     );
     if (highlightedIndex >= 0)
       setRenderLimit((current) => Math.max(current, highlightedIndex + 1));
-  }, [params.highlight, visibleFeed]);
+  }, [requestedHighlight, visibleFeed]);
   const displayedFeed = useMemo(
     () => visibleFeed.slice(0, renderLimit),
     [renderLimit, visibleFeed],
@@ -401,25 +471,44 @@ export function GroupRecapFeedScreen() {
     setCalendarOpen(false);
   }
   useEffect(() => {
-    if (params.highlight) setFilter("all");
-  }, [params.highlight]);
+    if (params.highlight || (params.targetType && params.targetId))
+      setFilter("all");
+  }, [params.highlight, params.targetId, params.targetType]);
   useEffect(() => {
-    if (!params.highlight || !displayedFeed.length) return;
-    setHighlightedItemId(params.highlight);
-    const scrollTimer = setTimeout(() => {
-      const y = itemY.current.get(params.highlight!);
+    if (!requestedHighlight || !feedFocusKey) return;
+    if (handledFeedFocusRef.current === feedFocusKey) return;
+    handledFeedFocusRef.current = feedFocusKey;
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let clearTimer: ReturnType<typeof setTimeout> | undefined;
+    const focusItem = (attempt: number) => {
+      if (cancelled) return;
+      const y = itemY.current.get(requestedHighlight);
+      if (typeof y !== "number" && attempt < FEED_FOCUS_MAX_ATTEMPTS) {
+        retryTimer = setTimeout(
+          () => focusItem(attempt + 1),
+          FEED_FOCUS_RETRY_MS,
+        );
+        return;
+      }
+      setHighlightedItemId(requestedHighlight);
       if (typeof y === "number")
         scrollRef.current?.scrollTo({
           y: Math.max(0, feedY.current + y - 110),
           animated: true,
         });
-    }, 160);
-    const clearTimer = setTimeout(() => setHighlightedItemId(undefined), 4_000);
-    return () => {
-      clearTimeout(scrollTimer);
-      clearTimeout(clearTimer);
+      clearTimer = setTimeout(() => {
+        if (handledFeedFocusRef.current === feedFocusKey)
+          setHighlightedItemId(undefined);
+      }, FEED_HIGHLIGHT_MS);
     };
-  }, [displayedFeed, params.highlight]);
+    focusItem(0);
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      if (clearTimer) clearTimeout(clearTimer);
+    };
+  }, [feedFocusKey, requestedHighlight]);
 
   return (
     <Screen

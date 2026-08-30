@@ -38,6 +38,7 @@ import {
   shouldCommitGroupActivityResponse,
 } from "../src/domain/groupActivityRefresh.ts";
 import { periodDates } from "../src/domain/leaderboard.ts";
+import { recapFeedItemIdForSocialTarget } from "../src/domain/recaps.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (file) => readFileSync(path.join(root, file), "utf8");
@@ -174,6 +175,20 @@ assert.equal(
   "an explicit cold Overall detail request must reuse the existing 730-day history bound",
 );
 assert.equal(
+  recapFeedItemIdForSocialTarget(
+    [
+      {
+        id: "entry:local-food",
+        socialTarget: { type: "metric_entry", id: "cloud-food" },
+      },
+    ],
+    "metric_entry",
+    "cloud-food",
+  ),
+  "entry:local-food",
+  "a notification's canonical target must resolve to the exact rendered feed card",
+);
+assert.equal(
   boundedOverallHistory.at(-1),
   "2026-08-28",
   "the bounded Overall detail request must end on its selected anchor",
@@ -224,6 +239,14 @@ const googleWorkoutDetailMigration = read(
 const durableSocialMigration = read(
   "supabase/migrations/202608280001_durable_group_log_social_identity.sql",
 );
+const socialNotificationMigration = read(
+  "supabase/migrations/202608300002_group_feed_interaction_notifications.sql",
+);
+const pushWorker = read("supabase/functions/send-push/index.ts");
+const alertsScreen = read("app/alerts.tsx");
+const groupNotificationHook = read("src/cloud/useGroupNotificationEvents.ts");
+const appRoot = read("app/_layout.tsx");
+const webPushWorker = read("public/habhub-sw.js");
 const cachedGroupActivityBlock = provider.slice(
   provider.indexOf("function cachedGroupActivity("),
   provider.indexOf("function mergeWorkspaceWithoutRegression("),
@@ -1342,6 +1365,16 @@ assert.match(
   "group-feed comments must show a localized date and time",
 );
 assert.match(
+  appRoot,
+  /typeof route === "string" && route\.startsWith\("\/"\)[\s\S]{0,700}router\.push\(\{ pathname: route, params \}/,
+  "native push taps must preserve the social target parameters",
+);
+assert.match(
+  webPushWorker,
+  /function routeWithParameters\(data\)[\s\S]{0,700}target\.searchParams\.set\(key, String\(value\)/,
+  "web push taps must preserve the social target parameters",
+);
+assert.match(
   recapScreen,
   /commentDateTimeLabel\(\s*comment\.createdAt,[\s\S]{0,220}timeFormat/,
   "each rendered group-feed comment must use its persisted creation time",
@@ -1388,6 +1421,62 @@ assert.match(
   durableSocialMigration,
   /insert into public\.group_social_reactions[\s\S]{0,500}v_canonical_target_id/,
   "the reaction RPC must persist only the canonical server identity",
+);
+assert.match(
+  socialNotificationMigration,
+  /event_type in \([\s\S]{0,400}'social_reaction', 'social_comment'/,
+  "feed comments and reactions must share the durable recipient bell feed",
+);
+assert.match(
+  socialNotificationMigration,
+  /resolve_group_social_notification_target[\s\S]{0,9000}v_recipient_id = new\.user_id[\s\S]{0,7000}emit_group_social_comment_notification/,
+  "the backend must resolve the feed owner and suppress self-notifications for both interaction kinds",
+);
+for (const reaction of ["heart", "thumbs_up", "thumbs_down", "cheer"])
+  assert.match(
+    socialNotificationMigration,
+    new RegExp(`when '${reaction}'`),
+    `the ${reaction} interaction must receive explicit push copy`,
+  );
+assert.match(
+  socialNotificationMigration,
+  /'route', '\/recapfeed'[\s\S]{0,500}'targetType', new\.target_type[\s\S]{0,160}'targetId', new\.target_id/,
+  "social pushes must carry the canonical target back to the group feed",
+);
+assert.match(
+  socialNotificationMigration,
+  /create trigger group_social_comments_emit_notification[\s\S]{0,180}after insert/,
+  "a saved feed comment must emit exactly once on insertion",
+);
+assert.match(
+  pushWorker,
+  /event\.eventType === "social_reaction" \|\|[\s\S]{0,100}event\.eventType === "social_comment"/,
+  "the push worker must apply the same social preference to reactions and comments",
+);
+assert.match(
+  groupNotificationHook,
+  /event\.kind === "social_reaction" \|\| event\.kind === "social_comment"/,
+  "the in-app Leaderboard feed must apply the same social preference to comments",
+);
+assert.match(
+  alertsScreen,
+  /pathname: "\/\(tabs\)\/recapfeed"[\s\S]{0,350}targetType: alert\.targetType[\s\S]{0,120}targetId: alert\.entryId[\s\S]{0,180}groupId: alert\.groupId[\s\S]{0,150}feedFocusAt:/,
+  "a stored Leaderboard interaction must focus its exact feed card",
+);
+assert.match(
+  recapScreen,
+  /const requestedGroupId = params\.groupId[\s\S]{0,850}cloud\.switchGroup\(requestedGroupId\)/,
+  "an account-wide interaction alert must activate its authorized group before focusing the feed",
+);
+assert.match(
+  recapScreen,
+  /recapFeedItemIdForSocialTarget\([\s\S]{0,400}params\.targetId/,
+  "the feed must resolve a canonical notification target to its rendered card",
+);
+assert.match(
+  recapScreen,
+  /setHighlightedItemId\(requestedHighlight\)[\s\S]{0,350}scrollRef\.current\?\.scrollTo\([\s\S]{0,350}setTimeout\([\s\S]{0,180}setHighlightedItemId\(undefined\)[\s\S]{0,100}FEED_HIGHLIGHT_MS/,
+  "the feed must scroll to and highlight the requested card for five seconds",
 );
 assert.equal(
   (leaderboardDetail.match(/pathname: "\/member\/\[id\]"/g) ?? []).length,

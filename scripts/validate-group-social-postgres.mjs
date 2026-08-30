@@ -5,6 +5,7 @@ const migrations = await Promise.all(
   [
     "supabase/migrations/202608280001_durable_group_log_social_identity.sql",
     "supabase/migrations/202608300001_social_cheers.sql",
+    "supabase/migrations/202608300002_group_feed_interaction_notifications.sql",
   ].map((path) => Deno.readTextFile(new URL(path, root))),
 );
 
@@ -118,6 +119,7 @@ await db.exec(`
     group_id uuid not null,
     slug text not null,
     name text not null,
+    score_weight numeric not null default 1,
     archived_at timestamptz
   );
   create table public.metric_entries (
@@ -144,20 +146,36 @@ await db.exec(`
     local_date date not null,
     created_at timestamptz not null default now()
   );
-  create table public.group_todos (id uuid primary key, group_id uuid not null);
+  create table public.group_todos (
+    id uuid primary key,
+    group_id uuid not null,
+    creator_id uuid not null,
+    created_at timestamptz not null default now()
+  );
   create table public.daily_metric_status (
     group_id uuid not null,
     metric_id uuid not null,
     user_id uuid not null,
     local_date date not null,
-    visibility text
+    visibility text,
+    score_contribution numeric not null default 0
   );
   create table public.group_challenges (
     id uuid primary key,
     group_id uuid not null,
+    creator_id uuid not null,
+    metric_slug text not null,
+    title text,
     local_date date not null,
+    end_date date not null,
     recurrence jsonb,
     deleted_at timestamptz
+  );
+  create table public.group_challenge_result_placements (
+    challenge_id uuid not null,
+    occurrence_date date not null,
+    user_id uuid not null,
+    winner boolean not null
   );
   create table public.group_social_reactions (
     group_id uuid not null,
@@ -179,6 +197,16 @@ await db.exec(`
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now()
   );
+  create function public.touch_group_social_updated_at()
+  returns trigger language plpgsql as $$
+  begin
+    new.updated_at = clock_timestamp();
+    return new;
+  end;
+  $$;
+  create trigger group_social_reactions_touch_updated_at
+  before update on public.group_social_reactions
+  for each row execute function public.touch_group_social_updated_at();
   create table public.group_notification_events (
     event_key text not null,
     group_id uuid not null,
@@ -232,6 +260,7 @@ const legacyEntryId = "50000000-0000-4000-8000-000000000001";
 const photoId = "photo-client-id";
 const todoId = "60000000-0000-4000-8000-000000000001";
 const challengeId = "70000000-0000-4000-8000-000000000001";
+const forgedBadgeTarget = `${otherOwnerId}:not-an-earned-badge:2026-08-28`;
 
 await db.exec(`
   set request.jwt.claim.sub = '${viewerId}';
@@ -244,17 +273,19 @@ await db.exec(`
     ('${groupId}', '${ownerId}', 'active'),
     ('${groupId}', '${otherOwnerId}', 'active');
   insert into public.metric_definitions values
-    ('${metricId}', '${groupId}', 'food', 'Food', null);
+    ('${metricId}', '${groupId}', 'food', 'Food', 1, null);
   insert into public.metric_entries values
     ('${entryId}', '${legacyEntryId}', '${metricId}', '${ownerId}',
      date '2026-08-28', 'group', 5, now());
   insert into public.photo_updates values
     ('${groupId}', '${ownerId}', '${photoId}', 'group', date '2026-08-28', now());
-  insert into public.group_todos values ('${todoId}', '${groupId}');
+  insert into public.group_todos values
+    ('${todoId}', '${groupId}', '${ownerId}', now());
   insert into public.daily_metric_status values
-    ('${groupId}', '${metricId}', '${ownerId}', date '2026-08-28', 'group');
+    ('${groupId}', '${metricId}', '${ownerId}', date '2026-08-28', 'group', 100);
   insert into public.group_challenges values
-    ('${challengeId}', '${groupId}', date '2026-08-28', null, null);
+    ('${challengeId}', '${groupId}', '${ownerId}', 'food', 'Food challenge',
+     date '2026-08-28', date '2026-08-28', null, null);
 `);
 
 async function scalar(sql) {
@@ -283,6 +314,53 @@ const metricReaction = await db.query(`
 if (metricReaction.rows[0]?.target_id !== entryId)
   throw new Error("Metric reaction was not persisted on the canonical UUID.");
 
+const metricReactionEventCount = Number(
+  await scalar(`
+    select count(*)
+      from public.group_notification_events
+     where event_type = 'social_reaction'
+       and target_type = 'metric_entry'
+       and target_id = '${entryId}'
+  `),
+);
+const metricReactionPushCount = Number(
+  await scalar(`
+    select count(*)
+      from public.push_dispatch_events
+     where event_type = 'social_reaction'
+       and data ->> 'targetType' = 'metric_entry'
+       and data ->> 'targetId' = '${entryId}'
+  `),
+);
+await db.query(`
+  select public.set_group_social_reaction(
+    '${groupId}', 'metric_entry', '${entryId}', 'cheer'
+  )
+`);
+if (
+  Number(
+    await scalar(`
+      select count(*)
+        from public.group_notification_events
+       where event_type = 'social_reaction'
+         and target_type = 'metric_entry'
+         and target_id = '${entryId}'
+    `),
+  ) !== metricReactionEventCount ||
+  Number(
+    await scalar(`
+      select count(*)
+        from public.push_dispatch_events
+       where event_type = 'social_reaction'
+         and data ->> 'targetType' = 'metric_entry'
+         and data ->> 'targetId' = '${entryId}'
+    `),
+  ) !== metricReactionPushCount
+)
+  throw new Error(
+    "Replaying an unchanged reaction created a duplicate recipient event or push.",
+  );
+
 await db.exec(`
   insert into public.group_social_comments (
     group_id, target_type, target_id, user_id, content
@@ -296,12 +374,23 @@ if (
   )) !== entryId
 )
   throw new Error("Metric comment did not canonicalize before storage.");
+if (
+  (await scalar(
+    `select event_type from public.group_notification_events where target_id = '${entryId}' and event_type = 'social_comment' limit 1`,
+  )) !== "social_comment"
+)
+  throw new Error("A feed comment did not create a durable recipient notification.");
+if (
+  (await scalar(
+    `select data ->> 'route' from public.push_dispatch_events where event_type = 'social_comment' limit 1`,
+  )) !== "/recapfeed"
+)
+  throw new Error("A feed comment push did not route back to the exact feed screen.");
 
 for (const [type, id] of [
   ["photo_update", photoId],
   ["group_todo", todoId],
-  ["recap_feed", "leader:2026-08-28"],
-  ["badge", `${ownerId}:first-log:2026-08-28`],
+  ["recap_feed", `leader:${ownerId}:2026-08-28`],
   ["group_challenge", `${challengeId}:2026-08-28:started`],
 ]) {
   const accepted = await scalar(`
@@ -312,6 +401,94 @@ for (const [type, id] of [
   if (accepted !== id)
     throw new Error(`${type} feed target was rejected or rewritten unexpectedly.`);
 }
+
+// A badge target currently has no server-owned earned-badge row. Whether the
+// mutation is rejected or merely kept as non-notifying social state, its
+// client-supplied member UUID must never become a notification recipient.
+try {
+  await db.query(`
+    select public.set_group_social_reaction(
+      '${groupId}', 'badge', '${forgedBadgeTarget}', 'thumbs_up'
+    )
+  `);
+} catch {
+  // Rejection is an equally safe outcome until badges gain canonical rows.
+}
+if (
+  Number(
+    await scalar(`
+      select count(*)
+        from public.group_notification_events
+       where target_type = 'badge'
+         and target_id = '${forgedBadgeTarget}'
+    `),
+  ) !== 0 ||
+  Number(
+    await scalar(`
+      select count(*)
+        from public.push_dispatch_events
+       where data ->> 'targetType' = 'badge'
+         and data ->> 'targetId' = '${forgedBadgeTarget}'
+    `),
+  ) !== 0
+)
+  throw new Error("A forged badge target selected a notification recipient.");
+
+await db.exec(`
+  insert into public.daily_metric_status values
+    ('${groupId}', '${metricId}', '${ownerId}', date '2026-08-29', 'group', 100),
+    ('${groupId}', '${metricId}', '${otherOwnerId}', date '2026-08-29', 'group', 100);
+`);
+await db.query(`
+  select public.set_group_social_reaction(
+    '${groupId}', 'recap_feed', 'leader:${ownerId}:2026-08-29', 'thumbs_up'
+  )
+`);
+if (
+  Number(
+    await scalar(`
+      select count(*)
+        from public.group_notification_events
+       where target_type = 'recap_feed'
+         and target_id = 'leader:${ownerId}:2026-08-29'
+    `),
+  ) !== 0 ||
+  Number(
+    await scalar(`
+      select count(*)
+        from public.push_dispatch_events
+       where data ->> 'targetType' = 'recap_feed'
+         and data ->> 'targetId' = 'leader:${ownerId}:2026-08-29'
+    `),
+  ) !== 0
+)
+  throw new Error("A tied daily-leader target guessed a notification recipient.");
+if (
+  Number(
+    await scalar(`
+      select count(distinct target_type)
+        from public.group_notification_events
+       where event_type = 'social_reaction'
+         and recipient_id = '${ownerId}'
+    `),
+  ) !== 5
+)
+  throw new Error(
+    "A privacy-authorized feed target did not resolve its canonical owner notification.",
+  );
+if (
+  Number(
+    await scalar(`
+      select count(*)
+        from public.push_dispatch_events
+       where event_type = 'social_reaction'
+         and data ->> 'route' = '/recapfeed'
+         and data ? 'targetType'
+         and data ? 'targetId'
+    `),
+  ) !== 5
+)
+  throw new Error("A feed reaction push lost its exact target deep link.");
 
 await db.exec(`
   insert into public.metric_privacy_cache_fences values
@@ -350,5 +527,5 @@ if (
   throw new Error("An ambiguous legacy client id was guessed instead of rejected.");
 
 console.log(
-  "Group social PostgreSQL validation passed: Cheer, canonical and UUID-shaped legacy identities, mixed-version comments, all feed targets, collision rejection, and privacy fences.",
+  "Group social PostgreSQL validation passed: canonical identities, comment and reaction delivery, unchanged-reaction idempotency, forged-badge and tied-leader suppression, collision rejection, and privacy fences.",
 );
