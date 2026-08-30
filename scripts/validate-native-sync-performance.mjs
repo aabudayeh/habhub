@@ -42,7 +42,7 @@ const replaceStateCalls = [
 ].map((match) => match[0]);
 assert.equal(
   replaceStateCalls.length,
-  35,
+  36,
   "update the source-classification fixture when replaceState calls change",
 );
 replaceStateCalls.forEach((call, index) =>
@@ -86,13 +86,48 @@ assert.ok(
   (groupCloud.match(/abortSignal\(signal\)/g)?.length ?? 0) >= 17,
   "every account/group response branch must stop before parsing after a touch",
 );
+const authorizedActivityPersistenceStart = cloudProvider.indexOf(
+  "const persistAuthorizedActivity = async () =>",
+);
+const authorizedActivityPersistenceEnd = cloudProvider.indexOf(
+  "const mustPersistBeforeSettle",
+  authorizedActivityPersistenceStart,
+);
 assert.ok(
-  [
-    ...cloudProvider.matchAll(
-      /writeGroupActivityCache\([\s\S]{0,900}minimumUserQuietMs: 1_600/g,
-    ),
-  ].length >= 2,
-  "large SQLite group-cache serialization must wait for real-touch quiet",
+  authorizedActivityPersistenceStart >= 0 &&
+    authorizedActivityPersistenceEnd > authorizedActivityPersistenceStart,
+  "authorized activity persistence fixture must remain discoverable",
+);
+const authorizedActivityPersistence = cloudProvider.slice(
+  authorizedActivityPersistenceStart,
+  authorizedActivityPersistenceEnd,
+);
+assert.match(
+  authorizedActivityPersistence,
+  /Platform\.OS !== "web"[\s\S]{0,120}await waitForCloudCacheWriteTurn\(\);[\s\S]{0,120}if \(!cacheWriteIsCurrent\(\)\) return;[\s\S]{0,120}writeGroupActivityCache\(/,
+  "large native activity-cache serialization must wait for real-touch quiet and recheck authorization",
+);
+
+const backgroundActivityPersistenceStart = cloudProvider.indexOf(
+  "const cachePayload = cachedGroupActivity",
+  authorizedActivityPersistenceEnd,
+);
+const backgroundActivityPersistenceEnd = cloudProvider.indexOf(
+  "minimumUserQuietMs: 1_600",
+  backgroundActivityPersistenceStart,
+);
+assert.ok(
+  backgroundActivityPersistenceStart >= 0 &&
+    backgroundActivityPersistenceEnd > backgroundActivityPersistenceStart,
+  "background activity persistence fixture must remain discoverable",
+);
+assert.match(
+  cloudProvider.slice(
+    backgroundActivityPersistenceStart,
+    backgroundActivityPersistenceEnd + 40,
+  ),
+  /scheduleResponsiveWork\([\s\S]*writeGroupActivityCache\([\s\S]*minimumUserQuietMs: 1_600/,
+  "background SQLite group-cache serialization must wait for real-touch quiet",
 );
 assert.match(
   cloudProvider,

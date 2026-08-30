@@ -1,5 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Image } from "expo-image";
+import * as ImagePicker from "expo-image-picker";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import * as Notifications from "expo-notifications";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -7,6 +9,8 @@ import {
   Animated,
   AppState as NativeAppState,
   BackHandler,
+  Keyboard,
+  KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
@@ -40,10 +44,12 @@ import {
   ExerciseCategory,
   MUSCLE_LABELS,
   catalogExercise,
+  catalogExerciseTrackingFields,
   exerciseKey,
 } from "@/src/domain/exerciseCatalog";
 import {
   completedGymSets,
+  completedGymDistanceKm,
   completeGymWorkout,
   averageGymRestSeconds,
   estimateGymActiveCalories,
@@ -54,6 +60,7 @@ import {
   type GymExercisePerformanceComparison,
   exerciseTrend,
   formatGymDuration,
+  gymExerciseTrackingFields,
   gymSessionClockBounds,
   gymSessionTimeBreakdown,
   gymRecap,
@@ -63,6 +70,7 @@ import {
   totalGymRestSeconds,
   totalGymSetWorkSeconds,
   trainingVolumeKg,
+  workoutTrackingModeForFields,
 } from "@/src/domain/gym";
 import {
   customPerformancePeriod,
@@ -104,6 +112,7 @@ import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { readableTextColor } from "@/src/domain/colors";
 import {
   AppLanguage,
+  CustomGymExerciseDefinition,
   GymCalorieCalculationMode,
   GymExercise,
   GymIntensity,
@@ -113,7 +122,7 @@ import {
   GymTimerMode,
   MuscleGroup,
   Visibility,
-  WorkoutExerciseTrackingMode,
+  WorkoutExerciseTrackingField,
 } from "@/src/types";
 
 const uniqueId = (prefix: string) =>
@@ -138,15 +147,27 @@ type WorkoutTimer = {
 type GymMode = "workout" | "progress" | "performance";
 type GymPerformancePriority = "all" | "gaining" | "steady" | "focus" | "learning";
 
-const CUSTOM_EXERCISE_MODES: {
-  id: WorkoutExerciseTrackingMode;
+const CUSTOM_EXERCISE_FIELDS: {
+  id: WorkoutExerciseTrackingField;
   label: string;
   hint: string;
 }[] = [
   { id: "duration", label: "Minutes", hint: "Time only" },
   { id: "reps", label: "Reps", hint: "Count only" },
-  { id: "load_reps", label: "kg + reps", hint: "Weight and count" },
+  { id: "weight", label: "kg", hint: "Weight and count" },
+  { id: "distance", label: "Distance", hint: "km" },
 ];
+
+function defaultCustomExerciseMet(category: ExerciseCategory) {
+  if (
+    category === "strength" ||
+    category === "conditioning" ||
+    category === "combat"
+  )
+    return 5;
+  if (category === "mobility" || category === "mind_body") return 3;
+  return 3.5;
+}
 
 const GYM_PERFORMANCE_RANGES: { id: PerformanceRange; label: string }[] = [
   { id: "day", label: "Daily" },
@@ -186,6 +207,8 @@ type StoredWorkoutDraft = {
   calorieCalculationMode: GymCalorieCalculationMode;
   intensity: GymIntensity;
   sessionNotes: string;
+  sessionImageUri?: string;
+  sessionImageStoragePath?: string;
   visibility: Visibility;
   selectedPlanId: string | null;
   setStartDelaySeconds: number;
@@ -230,22 +253,25 @@ function workoutNotificationSteps(
   const addWork = (exercise: GymExercise, set: GymSet) => {
     const setIndex = exercise.sets.findIndex((item) => item.id === set.id);
     const exerciseName = localizeExerciseName(language, exercise);
-    const trackingMode =
-      exercise.trackingMode ??
-      catalogExercise(exercise.exerciseKey)?.trackingMode ??
-      "load_reps";
+    const trackingFields = gymExerciseTrackingFields(exercise);
     const paired = set.superset
       ? ` + ${localizeExerciseName(language, set.superset)} ${set.superset.weightKg || 0} kg × ${set.superset.reps}`
       : "";
-    const target =
-      trackingMode === "duration"
-        ? `${Math.round(((set.workSeconds ?? 0) / 60) * 10) / 10} min`
-        : trackingMode === "reps"
-          ? `${set.reps} reps`
-          : `${set.weightKg || 0} kg × ${set.reps} reps${paired}`;
+    const target = [
+      ...(trackingFields.includes("duration")
+        ? [`${Math.round(((set.workSeconds ?? 0) / 60) * 10) / 10} min`]
+        : []),
+      ...(trackingFields.includes("reps") ? [`${set.reps} reps`] : []),
+      ...(trackingFields.includes("weight")
+        ? [`${set.weightKg || 0} kg`]
+        : []),
+      ...(trackingFields.includes("distance")
+        ? [`${Math.round(Math.max(0, set.distanceKm ?? 0) * 100) / 100} km`]
+        : []),
+    ].join(" · ");
     steps.push({
       title: translate(`${exerciseName} · Set ${setIndex + 1}/${exercise.sets.length}`),
-      body: translate(`${target} · use Next when the set is done`),
+      body: translate(`${target}${paired} · use Next when the set is done`),
       phase: "work",
     });
   };
@@ -335,21 +361,29 @@ function gymPerformanceScoreText(
 }
 
 function fromCatalog(item: ExerciseCatalogItem, previous?: GymExercise): GymExercise {
+  const trackingFields = catalogExerciseTrackingFields(item);
   return {
     id: uniqueId("exercise"),
     exerciseKey: item.key,
     name: item.name,
     muscleGroups: item.muscles,
+    exerciseCategory: item.category,
     customMet: item.met,
     trackingMode: item.trackingMode,
+    trackingFields,
     notes: previous?.notes,
     completed: false,
     sets: previous?.sets.length
       ? previous.sets.map((set) => ({ ...set, id: uniqueId("set"), completed: false }))
       : [
-          item.trackingMode === "duration"
-            ? { ...blankSet(0, 0), workSeconds: 0 }
-            : blankSet(),
+          {
+            ...blankSet(
+              trackingFields.includes("reps") ? 10 : 0,
+              0,
+            ),
+            workSeconds: trackingFields.includes("duration") ? 0 : undefined,
+            distanceKm: trackingFields.includes("distance") ? 0 : undefined,
+          },
         ],
   };
 }
@@ -369,7 +403,11 @@ function cloneExercises(exercises: GymExercise[], preserveCompletion = false) {
       ...set,
       id: uniqueId("set"),
       completed: preserveCompletion ? set.completed : false,
-      workSeconds: preserveCompletion ? set.workSeconds : undefined,
+      workSeconds:
+        preserveCompletion ||
+        gymExerciseTrackingFields(exercise).includes("duration")
+          ? set.workSeconds
+          : undefined,
       restSeconds: preserveCompletion ? set.restSeconds : undefined,
       restTargetSeconds: preserveCompletion ? set.restTargetSeconds : undefined,
       superset: set.superset
@@ -530,6 +568,11 @@ function GymScreen() {
     useState<GymCalorieCalculationMode>("session_met");
   const [intensity, setIntensity] = useState<GymIntensity>("moderate");
   const [sessionNotes, setSessionNotes] = useState("");
+  const [sessionImage, setSessionImage] = useState<{
+    uri?: string;
+    storagePath?: string;
+  } | null>(null);
+  const sessionImageDirty = useRef(false);
   const [visibility, setVisibility] = useState<Visibility>("group");
   const [setStartDelaySeconds, setSetStartDelaySeconds] = useState(0);
   const [timerSettingsOpen, setTimerSettingsOpen] = useState(false);
@@ -542,12 +585,22 @@ function GymScreen() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerSearch, setPickerSearch] = useState("");
   const [customExerciseName, setCustomExerciseName] = useState("");
-  const [customExerciseTrackingMode, setCustomExerciseTrackingMode] =
-    useState<WorkoutExerciseTrackingMode>("load_reps");
-  const [pickerMuscle, setPickerMuscle] = useState<MuscleGroup | "all">("all");
-  const [pickerCategory, setPickerCategory] = useState<ExerciseCategory | "all">(
-    "strength",
+  const [customExerciseTrackingFields, setCustomExerciseTrackingFields] =
+    useState<WorkoutExerciseTrackingField[]>(["reps", "weight"]);
+  const [customTrackingOpen, setCustomTrackingOpen] = useState(false);
+  const [customExerciseCategory, setCustomExerciseCategory] =
+    useState<ExerciseCategory>("strength");
+  const [customExerciseMuscles, setCustomExerciseMuscles] =
+    useState<MuscleGroup[]>(["full_body"]);
+  const [pickerExerciseFilters, setPickerExerciseFilters] = useState<
+    ExerciseCategory[]
+  >([]);
+  const [pickerMuscleFilters, setPickerMuscleFilters] = useState<MuscleGroup[]>(
+    [],
   );
+  const pickerListRef = useRef<ScrollView>(null);
+  const customExerciseInputRef =
+    useRef<React.ElementRef<typeof TextInput>>(null);
   const [supersetTarget, setSupersetTarget] = useState<{
     exerciseId: string;
     setId: string;
@@ -856,10 +909,17 @@ function GymScreen() {
     const catalogByKey = new Map(
       EXERCISE_CATALOG.map((item) => [item.key, item]),
     );
+    const customByKey = new Map(
+      (state.settings.customGymExercises ?? []).map((item) => [item.key, item]),
+    );
     const sharedExercises = new Map(
       sharedPlans
         .flatMap((plan) => plan.exercises)
-        .map((exercise) => [exercise.exerciseKey, exercise]),
+        .flatMap((exercise) =>
+          exercise.exerciseKey
+            ? ([[exercise.exerciseKey, exercise]] as const)
+            : [],
+        ),
     );
     const mapped = new Map<
       string,
@@ -888,35 +948,96 @@ function GymScreen() {
       if (mapped.has(mapping.exerciseKey)) return;
       const catalog = catalogByKey.get(mapping.exerciseKey);
       const shared = sharedExercises.get(mapping.exerciseKey);
+      const custom = customByKey.get(mapping.exerciseKey);
       mapped.set(mapping.exerciseKey, {
           key: mapping.exerciseKey,
           name:
             shared?.name ??
+            custom?.name ??
             catalog?.name ??
             metric.name.replace(/\s+(strength|volume|reps|duration)$/i, ""),
           muscles:
             metric.gymMuscleGroups ??
             shared?.muscleGroups ??
+            custom?.muscles ??
             catalog?.muscles ??
             ["full_body"],
           equipment: catalog?.equipment ?? ("other" as const),
-          category: catalog?.category ?? "strength",
+          category:
+            shared?.exerciseCategory ??
+            custom?.category ??
+            catalog?.category ??
+            "strength",
           trackingMode:
+            custom?.trackingMode ??
             catalog?.trackingMode ??
             (mapping.kind === "exercise_duration"
               ? "duration"
               : mapping.kind === "exercise_reps"
                 ? "reps"
                 : "load_reps"),
+          trackingFields:
+            shared?.trackingFields ??
+            custom?.trackingFields ??
+            catalog?.trackingFields,
           aliases: catalog?.aliases ?? [],
           health: catalog?.health,
-          supportsDistance: catalog?.supportsDistance,
-          met: shared?.customMet ?? catalog?.met ?? 3.5,
+          supportsDistance:
+            custom?.supportsDistance ?? catalog?.supportsDistance,
+          met: shared?.customMet ?? custom?.met ?? catalog?.met ?? 3.5,
           groupExercise,
         });
     });
+    for (const custom of customByKey.values()) {
+      if (mapped.has(custom.key)) continue;
+      mapped.set(custom.key, {
+        ...custom,
+        equipment: "other",
+        aliases: [],
+        groupExercise: false,
+      });
+    }
+    for (const plan of plans) {
+      const groupExercise = plan.userId.startsWith("group:");
+      for (const exercise of plan.exercises) {
+        const key = exerciseKey(exercise.name, exercise.exerciseKey);
+        if (catalogByKey.has(key)) continue;
+        const existing = mapped.get(key);
+        if (existing) {
+          if (groupExercise && !existing.groupExercise)
+            mapped.set(key, { ...existing, groupExercise: true });
+          continue;
+        }
+        const custom = customByKey.get(key);
+        mapped.set(key, {
+          key,
+          name: exercise.name,
+          muscles:
+            exercise.muscleGroups ?? custom?.muscles ?? ["full_body"],
+          equipment: "other",
+          category:
+            exercise.exerciseCategory ?? custom?.category ?? "strength",
+          trackingMode:
+            exercise.trackingMode ?? custom?.trackingMode ?? "load_reps",
+          trackingFields:
+            exercise.trackingFields ?? custom?.trackingFields,
+          aliases: [],
+          supportsDistance:
+            custom?.supportsDistance ??
+            exercise.trackingFields?.includes("distance"),
+          met: exercise.customMet ?? custom?.met ?? 3.5,
+          groupExercise,
+        });
+      }
+    }
     return [...mapped.values()];
-  }, [sharedPlans, state.group.metricConfiguration, state.metrics]);
+  }, [
+    plans,
+    sharedPlans,
+    state.group.metricConfiguration,
+    state.metrics,
+    state.settings.customGymExercises,
+  ]);
   const currentMember = state.group.members.find(
     (member) => member.id === state.currentUserId,
   );
@@ -947,6 +1068,38 @@ function GymScreen() {
         ),
     [state.currentUserId, state.gymSessions],
   );
+  const workoutImageBySessionId = useMemo(() => {
+    const result = new Map<
+      string,
+      { uri?: string; storagePath?: string }
+    >();
+    const prefix = "gym-sync:";
+    const linkedMetrics = new Set([
+      "workout",
+      "workout_duration",
+      "workout_distance",
+      "exercise",
+    ]);
+    for (const entry of state.entries) {
+      if (
+        entry.userId !== state.currentUserId ||
+        !entry.id.startsWith(prefix) ||
+        !linkedMetrics.has(entry.metricId) ||
+        (!entry.imageUri && !entry.imageStoragePath)
+      )
+        continue;
+      const identity = entry.id.slice(prefix.length);
+      const metricSeparator = identity.lastIndexOf(":");
+      if (metricSeparator <= 0) continue;
+      const saved = result.get(identity.slice(0, metricSeparator));
+      if (!saved?.uri || entry.imageUri)
+        result.set(identity.slice(0, metricSeparator), {
+          uri: entry.imageUri,
+          storagePath: entry.imageStoragePath,
+        });
+    }
+    return result;
+  }, [state.currentUserId, state.entries]);
   const selectedPerformancePeriod = useMemo(() => {
     if (performanceComparisonMode === "overall")
       return overallPerformancePeriod(state, defaultPerformancePeriod);
@@ -979,6 +1132,16 @@ function GymScreen() {
         ),
       ),
     [sessions],
+  );
+  const exerciseHistories = useMemo(
+    () =>
+      new Map(
+        [...performanceExerciseMap.keys()].map((key) => [
+          key,
+          exerciseHistory(sessions, state.currentUserId, key),
+        ]),
+      ),
+    [performanceExerciseMap, sessions, state.currentUserId],
   );
   const performanceFilterItems = useMemo(
     () => [
@@ -1144,6 +1307,36 @@ function GymScreen() {
   const selectedSession = sessionsForDate.find(
     (session) => session.id === sessionId,
   );
+  const selectedSessionImage = useMemo(
+    () =>
+      selectedSession
+        ? (workoutImageBySessionId.get(selectedSession.id) ??
+          (selectedSession.imageUri || selectedSession.imageStoragePath
+            ? {
+                uri: selectedSession.imageUri,
+                storagePath: selectedSession.imageStoragePath,
+              }
+            : undefined))
+        : undefined,
+    [selectedSession, workoutImageBySessionId],
+  );
+  useEffect(() => {
+    if (
+      sessionImageDirty.current ||
+      !selectedSession ||
+      loadedSavedSessionId.current !== selectedSession.id
+    )
+      return;
+    setSessionImage((current) =>
+      current?.uri === selectedSessionImage?.uri &&
+      current?.storagePath === selectedSessionImage?.storagePath
+        ? current
+        : selectedSessionImage ?? null,
+    );
+  }, [
+    selectedSession,
+    selectedSessionImage,
+  ]);
   const loggedSessionsForDate = useMemo(
     () =>
       sessionsForDate.filter(
@@ -1269,13 +1462,36 @@ function GymScreen() {
       )
       .flatMap((session) => session.exercises),
   );
+  const previousExerciseIndex = useMemo(() => {
+    const exercisesByKey = new Map<string, GymExercise>();
+    const weightByKey = new Map<string, number>();
+    for (const session of sessions) {
+      if (
+        session.id === sessionId ||
+        session.localDate > localDate ||
+        (session.localDate === localDate &&
+          selectedSession &&
+          session.recordedAt >= selectedSession.recordedAt)
+      )
+        continue;
+      for (const exercise of expandedGymExercises(session.exercises)) {
+        const key = exerciseIdentity(exercise);
+        if (!exercisesByKey.has(key)) exercisesByKey.set(key, exercise);
+        if (weightByKey.has(key)) continue;
+        const previousWeight = Math.max(
+          0,
+          ...exercise.sets
+            .filter((set) => set.completed)
+            .map((set) => Math.max(0, set.weightKg)),
+        );
+        if (previousWeight > 0) weightByKey.set(key, previousWeight);
+      }
+    }
+    return { exercisesByKey, weightByKey };
+  }, [localDate, selectedSession, sessionId, sessions]);
   const latestExercise = useCallback(
-    (key: string) =>
-      sessions
-        .filter((session) => session.localDate < localDate)
-        .flatMap((session) => session.exercises)
-        .find((exercise) => exerciseIdentity(exercise) === key),
-    [localDate, sessions],
+    (key: string) => previousExerciseIndex.exercisesByKey.get(key),
+    [previousExerciseIndex],
   );
   const instantiatePlan = useCallback(
     (plan: GymPlan) =>
@@ -1283,15 +1499,27 @@ function GymScreen() {
         const key = exerciseKey(exercise.name, exercise.exerciseKey);
         const latest = latestExercise(key);
         const latestSet = latest?.sets.filter((set) => set.completed).at(-1);
+        const trackingFields = exercise.trackingFields?.length
+          ? exercise.trackingFields
+          : catalogExercise(key)?.trackingFields;
+        const resolvedTrackingFields = gymExerciseTrackingFields({
+          exerciseKey: key,
+          trackingFields,
+          trackingMode:
+            exercise.trackingMode ?? catalogExercise(key)?.trackingMode,
+        });
         return {
           id: uniqueId("exercise"),
           exerciseKey: key,
           name: exercise.name,
           muscleGroups: exercise.muscleGroups,
+          exerciseCategory:
+            exercise.exerciseCategory ?? catalogExercise(key)?.category,
           notes: exercise.notes,
           customMet: exercise.customMet,
           trackingMode:
             exercise.trackingMode ?? catalogExercise(key)?.trackingMode,
+          trackingFields: resolvedTrackingFields,
           sets: Array.from({ length: exercise.targetSets }, (_, index) => {
             const prior = latest?.sets[index] ?? latestSet;
             return {
@@ -1300,9 +1528,14 @@ function GymScreen() {
                 prior?.weightKg ?? exercise.startingWeightKg ?? 0,
               ),
               workSeconds:
-                prior?.workSeconds ??
-                (exercise.trackingMode === "duration"
-                  ? Math.max(0, exercise.targetDurationMinutes ?? 0) * 60
+                resolvedTrackingFields.includes("duration")
+                  ? (prior?.workSeconds ??
+                    Math.max(0, exercise.targetDurationMinutes ?? 0) * 60)
+                  : undefined,
+              distanceKm:
+                prior?.distanceKm ??
+                (resolvedTrackingFields.includes("distance")
+                  ? Math.max(0, exercise.targetDistanceKm ?? 0)
                   : undefined),
               superset:
                 exercise.supersets?.find((item) => item.setIndex === index)
@@ -1351,11 +1584,22 @@ function GymScreen() {
     setIntensity(session.intensity ?? "moderate");
     setSetStartDelaySeconds(session.setStartDelaySeconds ?? 0);
     setSessionNotes(session.notes ?? "");
+    sessionImageDirty.current = false;
+    const savedImage = workoutImageBySessionId.get(session.id);
+    setSessionImage(
+      savedImage ??
+        (session.imageUri || session.imageStoragePath
+          ? {
+              uri: session.imageUri,
+              storagePath: session.imageStoragePath,
+            }
+          : null),
+    );
     setVisibility(session.visibility);
     setSelectedPlanId(session.planId ?? null);
     setExercises(cloneExercises(session.exercises, true));
     setOpenExerciseId(null);
-  }, []);
+  }, [workoutImageBySessionId]);
 
   const seedNewSession = useCallback(() => {
     loadedSavedSessionId.current = null;
@@ -1367,6 +1611,8 @@ function GymScreen() {
     setIntensity("moderate");
     setSetStartDelaySeconds(0);
     setSessionNotes("");
+    sessionImageDirty.current = false;
+    setSessionImage(null);
     setVisibility("group");
     setOpenExerciseId(null);
     setSessionDetailsOpen(false);
@@ -1499,6 +1745,15 @@ function GymScreen() {
         setCalorieCalculationMode(draft.calorieCalculationMode);
         setIntensity(draft.intensity);
         setSessionNotes(draft.sessionNotes);
+        sessionImageDirty.current = false;
+        setSessionImage(
+          draft.sessionImageUri || draft.sessionImageStoragePath
+            ? {
+                uri: draft.sessionImageUri,
+                storagePath: draft.sessionImageStoragePath,
+              }
+            : null,
+        );
         setVisibility(draft.visibility);
         setSelectedPlanId(draft.selectedPlanId);
         setSetStartDelaySeconds(draft.setStartDelaySeconds ?? 0);
@@ -1545,6 +1800,8 @@ function GymScreen() {
         calorieCalculationMode,
         intensity,
         sessionNotes,
+        sessionImageUri: sessionImage?.uri,
+        sessionImageStoragePath: sessionImage?.storagePath,
         visibility,
         selectedPlanId,
         setStartDelaySeconds,
@@ -1572,6 +1829,7 @@ function GymScreen() {
     pendingNativeTimerActionAcks,
     selectedPlanId,
     sessionId,
+    sessionImage,
     sessionName,
     sessionNotes,
     setStartDelaySeconds,
@@ -1821,11 +2079,25 @@ function GymScreen() {
       current.map((exercise) => {
         if (exercise.id !== exerciseId) return exercise;
         const previous = exercise.sets.at(-1);
+        const trackingFields = gymExerciseTrackingFields(exercise);
         return {
           ...exercise,
           sets: [
             ...exercise.sets,
-            blankSet(previous?.reps ?? 10, previous?.weightKg ?? 0),
+            {
+              ...blankSet(
+                trackingFields.includes("reps") ? (previous?.reps ?? 10) : 0,
+                trackingFields.includes("weight")
+                  ? (previous?.weightKg ?? 0)
+                  : 0,
+              ),
+              workSeconds: trackingFields.includes("duration")
+                ? (previous?.workSeconds ?? 0)
+                : undefined,
+              distanceKm: trackingFields.includes("distance")
+                ? (previous?.distanceKm ?? 0)
+                : undefined,
+            },
           ],
         };
       }),
@@ -1867,7 +2139,11 @@ function GymScreen() {
 
   function addCatalogExercise(item: ExerciseCatalogItem) {
     if (supersetTarget) {
-      if (item.trackingMode === "duration") {
+      const trackingFields = catalogExerciseTrackingFields(item);
+      if (
+        trackingFields.includes("duration") ||
+        trackingFields.includes("distance")
+      ) {
         Alert.alert(
           "Choose a set-based exercise",
           "Duration activities are logged as their own workout exercise and cannot be used as a superset.",
@@ -1909,21 +2185,76 @@ function GymScreen() {
     setPickerSearch("");
   }
 
+  function focusCustomExerciseCreator() {
+    Keyboard.dismiss();
+    requestAnimationFrame(() => {
+      pickerListRef.current?.scrollToEnd({ animated: true });
+      customExerciseInputRef.current?.focus();
+      requestAnimationFrame(() =>
+        pickerListRef.current?.scrollToEnd({ animated: true }),
+      );
+    });
+  }
+
+  function changeCustomExerciseName(nextName: string) {
+    const hadName = Boolean(customExerciseName.trim());
+    const hasName = Boolean(nextName.trim());
+    setCustomExerciseName(nextName);
+    if (!hasName) setCustomTrackingOpen(false);
+    else if (!hadName) setCustomTrackingOpen(true);
+  }
+
+  function toggleCustomTrackingField(field: WorkoutExerciseTrackingField) {
+    setCustomExerciseTrackingFields((current) => {
+      if (!current.includes(field)) return [...current, field];
+      return current.length > 1
+        ? current.filter((candidate) => candidate !== field)
+        : current;
+    });
+  }
+
   function addCustomExercise() {
     const name = customExerciseName.trim();
     if (!name) return;
+    const trackingFields = [...customExerciseTrackingFields];
+    const trackingMode = workoutTrackingModeForFields(trackingFields);
     const item: ExerciseCatalogItem = {
       key: exerciseKey(name),
       name,
-      muscles: [pickerMuscle === "all" ? "full_body" : pickerMuscle],
+      muscles: customExerciseMuscles.length
+        ? customExerciseMuscles
+        : ["full_body"],
       equipment: "other",
-      category:
-        customExerciseTrackingMode === "duration" ? "cardio" : "strength",
-      trackingMode: customExerciseTrackingMode,
+      category: customExerciseCategory,
+      trackingMode,
+      trackingFields,
+      supportsDistance: trackingFields.includes("distance"),
       aliases: [],
-      met: 3.5,
+      met: defaultCustomExerciseMet(customExerciseCategory),
     };
+    const definition: CustomGymExerciseDefinition = {
+      key: item.key,
+      name: item.name,
+      category: item.category,
+      muscles: item.muscles,
+      trackingMode: item.trackingMode,
+      trackingFields,
+      supportsDistance: item.supportsDistance,
+      met: item.met,
+    };
+    updateSettings({
+      customGymExercises: [
+        definition,
+        ...(state.settings.customGymExercises ?? []).filter(
+          (candidate) => candidate.key !== definition.key,
+        ),
+      ],
+    });
     setCustomExerciseName("");
+    setCustomTrackingOpen(false);
+    setCustomExerciseTrackingFields(["reps", "weight"]);
+    setCustomExerciseCategory("strength");
+    setCustomExerciseMuscles(["full_body"]);
     addCatalogExercise(item);
   }
 
@@ -2001,7 +2332,65 @@ function GymScreen() {
       calories: recalculatedCalories,
       calorieCalculationMode: nextMode,
       caloriesManual: false,
+      imageUri: sessionImage?.uri,
+      imageStoragePath: sessionImage?.storagePath,
     });
+  }
+
+  function storeWorkoutImage(result: ImagePicker.ImagePickerResult) {
+    if (result.canceled) return;
+    const asset = result.assets[0];
+    const uri = asset.base64
+      ? `data:${asset.mimeType ?? "image/jpeg"};base64,${asset.base64}`
+      : asset.uri;
+    if (!uri) return;
+    sessionImageDirty.current = true;
+    setSessionImage({ uri });
+  }
+
+  async function takeWorkoutImage() {
+    if (tutorialSandbox) return;
+    const permission = await ImagePicker.requestCameraPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert(
+        "Camera permission needed",
+        "Allow camera access to take a photo for this workout.",
+      );
+      return;
+    }
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ["images"],
+      quality: 0.8,
+    });
+    storeWorkoutImage(result);
+  }
+
+  async function chooseWorkoutImage() {
+    if (tutorialSandbox) return;
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      quality: 0.8,
+      base64: Platform.OS === "web",
+    });
+    storeWorkoutImage(result);
+  }
+
+  function pickWorkoutImage() {
+    if (tutorialSandbox) return;
+    if (Platform.OS === "web") {
+      void chooseWorkoutImage();
+      return;
+    }
+    Alert.alert("Attach workout photo", "Choose how to add it.", [
+      { text: "Camera", onPress: () => void takeWorkoutImage() },
+      { text: "Photo library", onPress: () => void chooseWorkoutImage() },
+      { text: "Cancel", style: "cancel" },
+    ]);
+  }
+
+  function removeWorkoutImage() {
+    sessionImageDirty.current = true;
+    setSessionImage(null);
   }
 
   function persistSession(
@@ -2056,8 +2445,9 @@ function GymScreen() {
           ? new Date(completedAtMs - preciseDuration * 60_000).toISOString()
           : undefined)
       : selectedSession?.startedAt;
+    const savedSessionId = selectedSession?.id ?? sessionId;
     saveGymSession({
-      id: selectedSession?.id ?? sessionId,
+      id: savedSessionId,
       userId: state.currentUserId,
       planId: selectedPlanId ?? undefined,
       name: sessionName.trim() || "Workout",
@@ -2068,14 +2458,19 @@ function GymScreen() {
       pausedSeconds: timing?.pausedSeconds ?? selectedSession?.pausedSeconds,
       setStartDelaySeconds,
       durationMinutes: preciseDuration,
+      distanceKm: completedGymDistanceKm(sessionExercises),
       calories: sessionCompletedSets ? sessionCalories : undefined,
       calorieCalculationMode,
       caloriesManual: manualCalories !== undefined,
       intensity,
       notes: sessionNotes.trim() || undefined,
+      imageUri: sessionImage?.uri,
+      imageStoragePath: sessionImage?.storagePath,
       exercises: sessionExercises,
       visibility,
     });
+    loadedSavedSessionId.current = savedSessionId;
+    sessionImageDirty.current = false;
     setExercises(sessionExercises);
     setDuration(
       preciseDuration ? String(Math.round(preciseDuration * 10) / 10) : "",
@@ -2234,32 +2629,40 @@ function GymScreen() {
       id: existing?.id ?? uniqueId("plan"),
       userId: state.currentUserId,
       name: sessionName.trim() || "My workout",
-      exercises: exercises.map((exercise) => ({
-        id: uniqueId("plan-exercise"),
-        exerciseKey: exerciseIdentity(exercise),
-        name: exercise.name,
-        muscleGroups: exercise.muscleGroups,
-        targetSets: exercise.sets.length,
-        targetReps: exercise.sets[0]?.reps ?? 10,
-        startingWeightKg: exercise.sets[0]?.weightKg || undefined,
-        targetDurationMinutes:
-          exercise.trackingMode === "duration"
+      exercises: exercises.map((exercise) => {
+        const trackingFields = gymExerciseTrackingFields(exercise);
+        return {
+          id: uniqueId("plan-exercise"),
+          exerciseKey: exerciseIdentity(exercise),
+          name: exercise.name,
+          muscleGroups: exercise.muscleGroups,
+          exerciseCategory: exercise.exerciseCategory,
+          targetSets: exercise.sets.length,
+          targetReps: exercise.sets[0]?.reps ?? 10,
+          startingWeightKg: exercise.sets[0]?.weightKg || undefined,
+          targetDurationMinutes: trackingFields.includes("duration")
             ? Math.round(((exercise.sets[0]?.workSeconds ?? 0) / 60) * 10) / 10
             : undefined,
-        notes: exercise.notes,
-        customMet: exercise.customMet,
-        trackingMode: exercise.trackingMode,
-        supersets: exercise.sets.flatMap((set, setIndex) =>
-          set.superset
-            ? [
-                {
-                  setIndex,
-                  superset: { ...set.superset, workSeconds: undefined },
-                },
-              ]
-            : [],
-        ),
-      })),
+          targetDistanceKm: trackingFields.includes("distance")
+            ? Math.round(Math.max(0, exercise.sets[0]?.distanceKm ?? 0) * 100) /
+              100
+            : undefined,
+          notes: exercise.notes,
+          customMet: exercise.customMet,
+          trackingMode: exercise.trackingMode,
+          trackingFields,
+          supersets: exercise.sets.flatMap((set, setIndex) =>
+            set.superset
+              ? [
+                  {
+                    setIndex,
+                    superset: { ...set.superset, workSeconds: undefined },
+                  },
+                ]
+              : [],
+          ),
+        };
+      }),
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     };
@@ -2361,32 +2764,40 @@ function GymScreen() {
       id: groupPlanId,
       userId: `group:${state.group.id}`,
       name: sessionName.trim() || "Group workout",
-      exercises: exercises.map((exercise) => ({
-        id: uniqueId("plan-exercise"),
-        exerciseKey: exerciseIdentity(exercise),
-        name: exercise.name,
-        muscleGroups: exercise.muscleGroups,
-        targetSets: exercise.sets.length,
-        targetReps: exercise.sets[0]?.reps ?? 10,
-        startingWeightKg: exercise.sets[0]?.weightKg || undefined,
-        targetDurationMinutes:
-          exercise.trackingMode === "duration"
+      exercises: exercises.map((exercise) => {
+        const trackingFields = gymExerciseTrackingFields(exercise);
+        return {
+          id: uniqueId("plan-exercise"),
+          exerciseKey: exerciseIdentity(exercise),
+          name: exercise.name,
+          muscleGroups: exercise.muscleGroups,
+          exerciseCategory: exercise.exerciseCategory,
+          targetSets: exercise.sets.length,
+          targetReps: exercise.sets[0]?.reps ?? 10,
+          startingWeightKg: exercise.sets[0]?.weightKg || undefined,
+          targetDurationMinutes: trackingFields.includes("duration")
             ? Math.round(((exercise.sets[0]?.workSeconds ?? 0) / 60) * 10) / 10
             : undefined,
-        notes: exercise.notes,
-        customMet: exercise.customMet,
-        trackingMode: exercise.trackingMode,
-        supersets: exercise.sets.flatMap((set, setIndex) =>
-          set.superset
-            ? [
-                {
-                  setIndex,
-                  superset: { ...set.superset, workSeconds: undefined },
-                },
-              ]
-            : [],
-        ),
-      })),
+          targetDistanceKm: trackingFields.includes("distance")
+            ? Math.round(Math.max(0, exercise.sets[0]?.distanceKm ?? 0) * 100) /
+              100
+            : undefined,
+          notes: exercise.notes,
+          customMet: exercise.customMet,
+          trackingMode: exercise.trackingMode,
+          trackingFields,
+          supersets: exercise.sets.flatMap((set, setIndex) =>
+            set.superset
+              ? [
+                  {
+                    setIndex,
+                    superset: { ...set.superset, workSeconds: undefined },
+                  },
+                ]
+              : [],
+          ),
+        };
+      }),
       createdAt: selectedShared?.createdAt ?? now,
       updatedAt: now,
     });
@@ -2405,28 +2816,59 @@ function GymScreen() {
       .filter((item) => item.groupExercise)
       .map((item) => item.key),
   );
-  const pickerItems = [
-    ...trackerExerciseItems,
-    ...EXERCISE_CATALOG.filter(
-      (item) =>
-        item.key !== "custom" && !trackerExerciseKeys.has(item.key),
-    ),
-  ].filter((item) => {
-    const query = pickerSearch.trim().toLowerCase();
-    return (
-      (!supersetTarget || item.trackingMode !== "duration") &&
-      (query || pickerCategory === "all" || item.category === pickerCategory) &&
-      (pickerMuscle === "all" || item.muscles.includes(pickerMuscle)) &&
-      (!query ||
-        item.name.toLowerCase().includes(query) ||
-        item.aliases.some((alias) => alias.toLowerCase().includes(query)) ||
-        EXERCISE_CATEGORY_LABELS[item.category].toLowerCase().includes(query) ||
-        localizeExerciseName(language, item).toLowerCase().includes(query) ||
-        item.muscles.some((muscle) =>
-          localizeMuscleLabel(language, muscle).toLowerCase().includes(query),
-        ))
-    );
-  });
+  const pickerExerciseFilterItems = (
+    Object.keys(EXERCISE_CATEGORY_LABELS) as ExerciseCategory[]
+  ).map((category) => ({
+    id: category,
+    label: EXERCISE_CATEGORY_LABELS[category],
+    group: "Exercise types",
+    icon: "fitness-outline" as const,
+  }));
+  const pickerMuscleFilterItems = (
+    Object.keys(MUSCLE_LABELS) as MuscleGroup[]
+  ).map((muscle) => ({
+    id: muscle,
+    label: localizeMuscleLabel(language, muscle),
+    group: "Muscles",
+    icon: "body-outline" as const,
+  }));
+  const selectedPickerCategories = new Set(pickerExerciseFilters);
+  const selectedPickerMuscles = new Set(pickerMuscleFilters);
+  const pickerItems = pickerOpen
+    ? [
+        ...trackerExerciseItems,
+        ...EXERCISE_CATALOG.filter(
+          (item) =>
+            item.key !== "custom" && !trackerExerciseKeys.has(item.key),
+        ),
+      ].filter((item) => {
+        const query = pickerSearch.trim().toLowerCase();
+        return (
+          (!supersetTarget ||
+            !catalogExerciseTrackingFields(item).some(
+              (field) => field === "duration" || field === "distance",
+            )) &&
+          (!selectedPickerCategories.size ||
+            selectedPickerCategories.has(item.category)) &&
+          (!selectedPickerMuscles.size ||
+            item.muscles.some((muscle) => selectedPickerMuscles.has(muscle))) &&
+          (!query ||
+            item.name.toLowerCase().includes(query) ||
+            item.aliases.some((alias) => alias.toLowerCase().includes(query)) ||
+            EXERCISE_CATEGORY_LABELS[item.category]
+              .toLowerCase()
+              .includes(query) ||
+            localizeExerciseName(language, item)
+              .toLowerCase()
+              .includes(query) ||
+            item.muscles.some((muscle) =>
+              localizeMuscleLabel(language, muscle)
+                .toLowerCase()
+                .includes(query),
+            ))
+        );
+      })
+    : [];
   const timerExercise = workoutTimer
     ? exercises.find((exercise) => exercise.id === workoutTimer.exerciseId)
     : undefined;
@@ -2914,31 +3356,33 @@ function GymScreen() {
         keyboardShouldPersistTaps="handled"
         refreshEnabled={!exerciseEditMode}
       >
-        <PageHeader
-          title="Workout"
-          tutorialId="gym-header"
-          action={
-            <View style={styles.headerTools}>
-              {gymReminderMetric ? (
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={`${t("Reminders")}: ${gymReminderMetric.name}`}
-                  onPress={openGymReminders}
-                  style={({ pressed }) => [
-                    styles.reminderShortcut,
-                    {
-                      backgroundColor: colors.card,
-                      borderColor: colors.border,
-                    },
-                    pressed && styles.modeChoicePressed,
-                  ]}
-                >
-                  <Ionicons name="alarm-outline" size={15} color={accent} />
-                </Pressable>
-              ) : null}
-            </View>
-          }
-        />
+        <View style={styles.compactHeaderSpacing}>
+          <PageHeader
+            title="Workout"
+            tutorialId="gym-header"
+            action={
+              <View style={styles.headerTools}>
+                {gymReminderMetric ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`${t("Reminders")}: ${gymReminderMetric.name}`}
+                    onPress={openGymReminders}
+                    style={({ pressed }) => [
+                      styles.reminderShortcut,
+                      {
+                        backgroundColor: colors.card,
+                        borderColor: colors.border,
+                      },
+                      pressed && styles.modeChoicePressed,
+                    ]}
+                  >
+                    <Ionicons name="alarm-outline" size={15} color={accent} />
+                  </Pressable>
+                ) : null}
+              </View>
+            }
+          />
+        </View>
         <TutorialTarget id="workout-modes">
         <View
           accessibilityRole="tablist"
@@ -3473,6 +3917,63 @@ function GymScreen() {
                 multiline
                 style={[styles.notes, { color: colors.ink, borderColor: colors.border }]}
               />
+              <View
+                style={[
+                  styles.workoutPhotoEditor,
+                  { borderColor: colors.border },
+                ]}
+              >
+                {sessionImage?.uri ? (
+                  <Image
+                    source={sessionImage.uri}
+                    contentFit="cover"
+                    style={styles.workoutPhotoPreview}
+                  />
+                ) : (
+                  <View
+                    style={[
+                      styles.workoutPhotoPlaceholder,
+                      { backgroundColor: colors.primarySoft },
+                    ]}
+                  >
+                    <Ionicons
+                      name="camera-outline"
+                      size={18}
+                      color={accent}
+                    />
+                  </View>
+                )}
+                <View style={styles.grow}>
+                  <Text style={[styles.label, { color: colors.ink }]}>Workout photo</Text>
+                  <Text style={[styles.meta, { color: colors.muted }]}>
+                    {sessionImage
+                      ? "Attached to this workout log."
+                      : "Optional · visible wherever this log is shared."}
+                  </Text>
+                </View>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={sessionImage ? "Change workout photo" : "Attach workout photo"}
+                  onPress={pickWorkoutImage}
+                  style={[styles.photoAction, { borderColor: colors.border }]}
+                >
+                  <Ionicons
+                    name={sessionImage ? "images-outline" : "add"}
+                    size={15}
+                    color={accent}
+                  />
+                </Pressable>
+                {sessionImage ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Remove workout photo"
+                    onPress={removeWorkoutImage}
+                    style={[styles.photoAction, { borderColor: colors.border }]}
+                  >
+                    <Ionicons name="trash-outline" size={14} color={palette.red} />
+                  </Pressable>
+                ) : null}
+              </View>
                 </>
               ) : null}
             </Card>
@@ -3626,14 +4127,18 @@ function GymScreen() {
             />
             {exercises.map((exercise, exerciseIndex) => {
               const open = openExerciseId === exercise.id;
-              const trackingMode =
-                exercise.trackingMode ??
-                catalogExercise(exercise.exerciseKey)?.trackingMode ??
-                "load_reps";
+              const trackingFields = gymExerciseTrackingFields(exercise);
+              const identity = exerciseIdentity(exercise);
               const active = workoutTimer?.exerciseId === exercise.id;
               const activeExerciseRest =
                 active && workoutTimer?.phase === "exercise_rest";
-              const history = exerciseHistory(sessions, state.currentUserId, exerciseIdentity(exercise));
+              const history = exerciseHistories.get(identity) ?? [];
+              const previousWeight = trackingFields.includes("weight")
+                ? previousExerciseIndex.weightByKey.get(identity)
+                : undefined;
+              const exerciseAverageRestSeconds = averageGymRestSeconds([
+                exercise,
+              ]);
               const trend = exerciseTrend(history);
               const statusColor =
                 trend === "building"
@@ -3722,8 +4227,11 @@ function GymScreen() {
                       <Text translate={false} style={[styles.exerciseName, { color: colors.ink }]}>{localizeExerciseName(language, exercise)}</Text>
                       <Text style={[styles.meta, { color: colors.muted }]}>
                         {(exercise.muscleGroups ?? ["full_body"]).map((muscle) => localizeMuscleLabel(language, muscle)).join(" · ")}
-                        {averageGymRestSeconds([exercise])
-                          ? ` · ${averageGymRestSeconds([exercise])}s avg rest`
+                        {exerciseAverageRestSeconds
+                          ? ` · ${exerciseAverageRestSeconds}s avg rest`
+                          : ""}
+                        {previousWeight
+                          ? ` · Last ${previousWeight.toLocaleString(locale, { maximumFractionDigits: 1 })} kg`
                           : ""}
                       </Text>
                     </View>
@@ -3741,7 +4249,7 @@ function GymScreen() {
                       onPress={() =>
                         router.push({
                           pathname: "/gym-exercise" as never,
-                          params: { key: exerciseIdentity(exercise), name: exercise.name },
+                          params: { key: identity, name: exercise.name },
                         })
                       }
                       style={[styles.miniAction, { borderColor: colors.border }]}
@@ -3784,12 +4292,20 @@ function GymScreen() {
                       </View>
                       <View style={styles.setHeader}>
                         <Text style={[styles.setSmall, { color: colors.muted }]}>Done</Text>
-                        {trackingMode === "load_reps" ? (
-                          <Text style={[styles.setLabel, { color: colors.muted }]}>kg</Text>
-                        ) : null}
-                        <Text style={[styles.setLabel, { color: colors.muted }]}>
-                          {trackingMode === "duration" ? "minutes" : "reps"}
-                        </Text>
+                        {trackingFields.map((field) => (
+                          <Text
+                            key={field}
+                            style={[styles.setLabel, { color: colors.muted }]}
+                          >
+                            {field === "duration"
+                              ? "minutes"
+                              : field === "weight"
+                                ? "kg"
+                                : field === "distance"
+                                  ? "km"
+                                  : "reps"}
+                          </Text>
+                        ))}
                         <View style={styles.closeSpace} />
                       </View>
                       {exercise.sets.map((set, setIndex) => (
@@ -3827,39 +4343,62 @@ function GymScreen() {
                                 />
                               </Pressable>
                             )}
-                            {trackingMode === "load_reps" ? (
+                            {trackingFields.map((field) => (
                               <DraftNumberInput
-                                value={set.weightKg}
-                                onCommit={(value) => updateSet(exercise.id, set.id, { weightKg: value })}
-                                keyboardType="decimal-pad"
-                                style={[styles.setInput, { color: colors.ink, borderColor: colors.border }]}
+                                key={field}
+                                value={
+                                  field === "duration"
+                                    ? Math.round(
+                                        ((set.workSeconds ?? 0) / 60) * 10,
+                                      ) / 10
+                                    : field === "weight"
+                                      ? set.weightKg
+                                      : field === "distance"
+                                        ? Math.round(
+                                            Math.max(0, set.distanceKm ?? 0) *
+                                              100,
+                                          ) / 100
+                                        : set.reps
+                                }
+                                onCommit={(value) =>
+                                  updateSet(
+                                    exercise.id,
+                                    set.id,
+                                    field === "duration"
+                                      ? { workSeconds: Math.max(0, value) * 60 }
+                                      : field === "weight"
+                                        ? { weightKg: Math.max(0, value) }
+                                        : field === "distance"
+                                          ? { distanceKm: Math.max(0, value) }
+                                          : {
+                                              reps: Math.max(
+                                                0,
+                                                Math.round(value),
+                                              ),
+                                            },
+                                  )
+                                }
+                                keyboardType={
+                                  field === "reps" ? "number-pad" : "decimal-pad"
+                                }
+                                style={[
+                                  styles.setInput,
+                                  {
+                                    color: colors.ink,
+                                    borderColor: colors.border,
+                                  },
+                                ]}
                               />
-                            ) : null}
-                            <DraftNumberInput
-                              value={
-                                trackingMode === "duration"
-                                  ? Math.round(((set.workSeconds ?? 0) / 60) * 10) / 10
-                                  : set.reps
-                              }
-                              onCommit={(value) =>
-                                updateSet(
-                                  exercise.id,
-                                  set.id,
-                                  trackingMode === "duration"
-                                    ? { workSeconds: Math.max(0, value) * 60 }
-                                    : { reps: Math.max(0, Math.round(value)) },
-                                )
-                              }
-                              keyboardType={trackingMode === "duration" ? "decimal-pad" : "number-pad"}
-                              style={[styles.setInput, { color: colors.ink, borderColor: colors.border }]}
-                            />
+                            ))}
                             <Pressable
                               onPress={() => removeSetSafely(exercise, set)}
                             >
                               <Ionicons name="close" size={19} color={colors.faint} />
                             </Pressable>
                           </View>
-                          {trackingMode !== "duration" && set.superset ? (
+                          {!trackingFields.includes("duration") &&
+                          !trackingFields.includes("distance") &&
+                          set.superset ? (
                             <View
                               style={[
                                 styles.supersetRow,
@@ -3934,7 +4473,8 @@ function GymScreen() {
                                 </View>
                               </View>
                             </View>
-                          ) : trackingMode !== "duration" ? (
+                          ) : !trackingFields.includes("duration") &&
+                            !trackingFields.includes("distance") ? (
                             <Pressable
                               onPress={() => openSupersetPicker(exercise.id, set.id)}
                               style={styles.addSuperset}
@@ -4275,8 +4815,8 @@ function GymScreen() {
                 sessions.flatMap((session) =>
                   expandedGymExercises(session.exercises).map((exercise) => [exerciseIdentity(exercise), exercise] as const),
                 ),
-              ).entries()].map(([key, exercise], index) => {
-                const history = exerciseHistory(sessions, state.currentUserId, key);
+               ).entries()].map(([key, exercise], index) => {
+                const history = exerciseHistories.get(key) ?? [];
                 const trend = exerciseTrend(history);
                 return (
                   <Pressable
@@ -4706,141 +5246,291 @@ function GymScreen() {
 
       <Modal transparent animationType="slide" visible={pickerOpen} onRequestClose={closeExercisePicker}>
         <View style={styles.modalBackdrop}>
-          <View style={[styles.pickerSheet, { backgroundColor: colors.card }]}>
-            <View style={styles.pickerHeader}>
-              <View style={styles.grow}>
-                <Text style={[styles.progressTitle, { color: colors.ink }]}>
-                  {supersetTarget ? "Add superset exercise" : "Add exercise"}
-                </Text>
-                <Text style={[styles.meta, { color: colors.muted }]}>
-                  {supersetTarget
-                    ? "The paired movement shares this set and is tracked separately in progress."
-                    : "Standard names keep progress history together."}
-                </Text>
+          <KeyboardAvoidingView
+            behavior={
+              Platform.OS === "ios"
+                ? "padding"
+                : Platform.OS === "android"
+                  ? "height"
+                  : undefined
+            }
+            style={styles.pickerKeyboardAvoider}
+          >
+            <View style={[styles.pickerSheet, { backgroundColor: colors.card }]}>
+              <View style={styles.pickerHeader}>
+                <View style={styles.grow}>
+                  <Text style={[styles.progressTitle, { color: colors.ink }]}>
+                    {supersetTarget ? "Add superset exercise" : "Add exercise"}
+                  </Text>
+                  <Text style={[styles.meta, { color: colors.muted }]}>
+                    {supersetTarget
+                      ? "The paired movement shares this set and is tracked separately in progress."
+                      : "Standard names keep progress history together."}
+                  </Text>
+                </View>
+                <View style={styles.pickerHeaderActions}>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Add custom exercise"
+                    onPress={focusCustomExerciseCreator}
+                    style={[
+                      styles.pickerHeaderAction,
+                      { backgroundColor: colors.primarySoft },
+                    ]}
+                  >
+                    <Ionicons name="add" size={20} color={accent} />
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Close"
+                    onPress={closeExercisePicker}
+                    style={styles.pickerHeaderAction}
+                  >
+                    <Ionicons name="close" size={23} color={colors.ink} />
+                  </Pressable>
+                </View>
               </View>
-              <Pressable onPress={closeExercisePicker}>
-                <Ionicons name="close" size={23} color={colors.ink} />
-              </Pressable>
-            </View>
-            <TextInput
-              value={pickerSearch}
-              onChangeText={setPickerSearch}
-              placeholder="Search exercise or muscle"
-              placeholderTextColor={colors.faint}
-              style={[styles.search, { color: colors.ink, borderColor: colors.border }]}
-            />
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              style={styles.pickerCategoryScroller}
-              contentContainerStyle={styles.pickerCategories}
-            >
-              <Chip
-                label="All"
-                selected={pickerCategory === "all"}
-                onPress={() => setPickerCategory("all")}
+              <TextInput
+                value={pickerSearch}
+                onChangeText={setPickerSearch}
+                placeholder="Search exercise or muscle"
+                placeholderTextColor={colors.faint}
+                style={[
+                  styles.search,
+                  { color: colors.ink, borderColor: colors.border },
+                ]}
               />
-              {(Object.keys(EXERCISE_CATEGORY_LABELS) as ExerciseCategory[]).map(
-                (category) => (
-                  <Chip
-                    key={category}
-                    label={EXERCISE_CATEGORY_LABELS[category]}
-                    selected={pickerCategory === category}
-                    onPress={() => setPickerCategory(category)}
-                  />
-                ),
-              )}
-            </ScrollView>
-            <View style={styles.pickerMuscles}>
-              <Chip label="All" selected={pickerMuscle === "all"} onPress={() => setPickerMuscle("all")} />
-              {(["chest", "back", "shoulders", "quadriceps", "hamstrings", "abs"] as MuscleGroup[]).map((muscle) => (
-                <Chip key={muscle} label={localizeMuscleLabel(language, muscle)} selected={pickerMuscle === muscle} onPress={() => setPickerMuscle(muscle)} />
-              ))}
-            </View>
-            <View style={[styles.customExerciseCreator, { borderColor: colors.border }]}>
-              <View style={styles.customRow}>
-                <TextInput
-                  value={customExerciseName}
-                  onChangeText={setCustomExerciseName}
-                  placeholder="Can't find it? Name a custom exercise"
-                  placeholderTextColor={colors.faint}
-                  style={[styles.customInput, { color: colors.ink, borderColor: colors.border }]}
-                  onSubmitEditing={addCustomExercise}
-                />
-                <Pressable
-                  disabled={!customExerciseName.trim()}
-                  onPress={addCustomExercise}
-                  style={[styles.customAdd, { backgroundColor: customExerciseName.trim() ? accent : colors.border }]}
-                >
-                  <Ionicons name="add" size={21} color={palette.white} />
-                </Pressable>
-              </View>
-              <Text style={[styles.customModeLabel, { color: colors.muted }]}>TRACK EACH SET BY</Text>
-              <View style={styles.customModeRow}>
-                {CUSTOM_EXERCISE_MODES.map((option) => {
-                  const selected = customExerciseTrackingMode === option.id;
-                  return (
-                    <Pressable
-                      key={option.id}
-                      accessibilityRole="radio"
-                      accessibilityState={{ selected }}
-                      accessibilityLabel={`${option.label}, ${option.hint}`}
-                      onPress={() => setCustomExerciseTrackingMode(option.id)}
+              <ScrollView
+                ref={pickerListRef}
+                style={styles.pickerList}
+                contentContainerStyle={styles.pickerListContent}
+                keyboardDismissMode={
+                  Platform.OS === "ios" ? "interactive" : "on-drag"
+                }
+                keyboardShouldPersistTaps="handled"
+              >
+                {pickerItems.map((item) => (
+                  <Pressable
+                    key={item.key}
+                    onPress={() => addCatalogExercise(item)}
+                    style={[styles.pickerItem, { borderColor: colors.border }]}
+                  >
+                    <View
                       style={[
-                        styles.customModeChoice,
+                        styles.catalogIcon,
+                        { backgroundColor: colors.primarySoft },
+                      ]}
+                    >
+                      <Ionicons name="barbell-outline" size={17} color={accent} />
+                    </View>
+                    <View style={styles.grow}>
+                      <Text
+                        translate={
+                          EXERCISE_CATALOG.some(
+                            (catalogItem) =>
+                              catalogItem.key === item.key &&
+                              catalogItem.name === item.name,
+                          )
+                        }
+                        style={[styles.exerciseName, { color: colors.ink }]}
+                      >
+                        {localizeExerciseName(language, item)}
+                      </Text>
+                      <Text style={[styles.meta, { color: colors.muted }]}>
+                        {groupExerciseKeys.has(item.key)
+                          ? "Group exercise · "
+                          : ""}
+                        {EXERCISE_CATEGORY_LABELS[item.category]} · {" "}
+                        {item.muscles
+                          .map((muscle) =>
+                            localizeMuscleLabel(language, muscle),
+                          )
+                          .join(" · ")}
+                      </Text>
+                    </View>
+                    <Ionicons name="add" size={20} color={accent} />
+                  </Pressable>
+                ))}
+                <View
+                  style={[
+                    styles.customExerciseCreator,
+                    { borderColor: colors.border },
+                  ]}
+                >
+                  <View style={styles.customRow}>
+                    <TextInput
+                      ref={customExerciseInputRef}
+                      value={customExerciseName}
+                      onChangeText={changeCustomExerciseName}
+                      placeholder="Can't find it? Name a custom exercise"
+                      placeholderTextColor={colors.faint}
+                      style={[
+                        styles.customInput,
+                        { color: colors.ink, borderColor: colors.border },
+                      ]}
+                      onSubmitEditing={addCustomExercise}
+                    />
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Add custom exercise"
+                      accessibilityState={{
+                        disabled: !customExerciseName.trim(),
+                      }}
+                      disabled={!customExerciseName.trim()}
+                      onPress={addCustomExercise}
+                      style={[
+                        styles.customAdd,
                         {
-                          borderColor: selected ? accent : colors.border,
-                          backgroundColor: selected ? colors.primarySoft : colors.canvas,
+                          backgroundColor: customExerciseName.trim()
+                            ? accent
+                            : colors.border,
                         },
                       ]}
                     >
-                      <Text style={[styles.customModeTitle, { color: selected ? accent : colors.ink }]}>
-                        {option.label}
-                      </Text>
-                      <Text style={[styles.customModeHint, { color: colors.muted }]}>
-                        {option.hint}
-                      </Text>
+                      <Ionicons name="add" size={23} color={palette.white} />
                     </Pressable>
-                  );
-                })}
+                  </View>
+                  <View style={styles.customClassificationRow}>
+                    <View style={styles.customClassificationMenu}>
+                      <SelectionMenu
+                        title="Exercise type"
+                        items={pickerExerciseFilterItems}
+                        selectedIds={[customExerciseCategory]}
+                        onChange={(ids) =>
+                          setCustomExerciseCategory(
+                            (ids[0] as ExerciseCategory | undefined) ??
+                              "strength",
+                          )
+                        }
+                        multiple={false}
+                        minimumSelected={1}
+                        emptyLabel="Strength"
+                      />
+                    </View>
+                    <View style={styles.customClassificationMenu}>
+                      <SelectionMenu
+                        title="Muscles"
+                        items={pickerMuscleFilterItems}
+                        selectedIds={customExerciseMuscles}
+                        onChange={(ids) =>
+                          setCustomExerciseMuscles(ids as MuscleGroup[])
+                        }
+                        minimumSelected={1}
+                        emptyLabel="Full body"
+                      />
+                    </View>
+                  </View>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityState={{
+                      disabled: !customExerciseName.trim(),
+                      expanded: customTrackingOpen,
+                    }}
+                    disabled={!customExerciseName.trim()}
+                    onPress={() => setCustomTrackingOpen((open) => !open)}
+                    style={styles.customModeHeader}
+                  >
+                    <Text
+                      style={[
+                        styles.customModeLabel,
+                        {
+                          color: customExerciseName.trim()
+                            ? colors.muted
+                            : colors.faint,
+                        },
+                      ]}
+                    >
+                      TRACK EACH SET BY
+                    </Text>
+                    <Ionicons
+                      name={customTrackingOpen ? "chevron-up" : "chevron-down"}
+                      size={14}
+                      color={
+                        customExerciseName.trim()
+                          ? colors.muted
+                          : colors.faint
+                      }
+                    />
+                  </Pressable>
+                  {customExerciseName.trim() && customTrackingOpen ? (
+                    <View style={styles.customModeRow}>
+                      {CUSTOM_EXERCISE_FIELDS.map((option) => {
+                        const selected = customExerciseTrackingFields.includes(
+                          option.id,
+                        );
+                        return (
+                          <Pressable
+                            key={option.id}
+                            accessibilityRole="checkbox"
+                            accessibilityState={{ selected }}
+                            accessibilityLabel={`${option.label}, ${option.hint}`}
+                            onPress={() =>
+                              toggleCustomTrackingField(option.id)
+                            }
+                            style={[
+                              styles.customModeChoice,
+                              {
+                                borderColor: selected
+                                  ? accent
+                                  : colors.border,
+                                backgroundColor: selected
+                                  ? colors.primarySoft
+                                  : colors.canvas,
+                              },
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.customModeTitle,
+                                { color: selected ? accent : colors.ink },
+                              ]}
+                            >
+                              {option.label}
+                            </Text>
+                            <Text
+                              style={[
+                                styles.customModeHint,
+                                { color: colors.muted },
+                              ]}
+                            >
+                              {option.hint}
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  ) : null}
+                </View>
+              </ScrollView>
+              <View
+                onTouchStart={Keyboard.dismiss}
+                style={styles.pickerFilterRow}
+              >
+                <View style={styles.pickerFilterMenu}>
+                  <SelectionMenu
+                    title="Exercise"
+                    items={pickerExerciseFilterItems}
+                    selectedIds={pickerExerciseFilters}
+                    onChange={(ids) =>
+                      setPickerExerciseFilters(ids as ExerciseCategory[])
+                    }
+                    emptyLabel="All exercise types"
+                  />
+                </View>
+                <View style={styles.pickerFilterMenu}>
+                  <SelectionMenu
+                    title="Muscle"
+                    items={pickerMuscleFilterItems}
+                    selectedIds={pickerMuscleFilters}
+                    onChange={(ids) =>
+                      setPickerMuscleFilters(ids as MuscleGroup[])
+                    }
+                    emptyLabel="All muscles"
+                  />
+                </View>
               </View>
             </View>
-            <ScrollView style={styles.pickerList} keyboardShouldPersistTaps="handled">
-              {pickerItems.map((item) => (
-                <Pressable
-                  key={item.key}
-                  onPress={() => addCatalogExercise(item)}
-                  style={[styles.pickerItem, { borderColor: colors.border }]}
-                >
-                  <View style={[styles.catalogIcon, { backgroundColor: colors.primarySoft }]}>
-                    <Ionicons name="barbell-outline" size={17} color={accent} />
-                  </View>
-                  <View style={styles.grow}>
-                    <Text
-                      translate={
-                        EXERCISE_CATALOG.some(
-                          (catalogItem) =>
-                            catalogItem.key === item.key &&
-                            catalogItem.name === item.name,
-                        )
-                      }
-                      style={[styles.exerciseName, { color: colors.ink }]}
-                    >
-                      {localizeExerciseName(language, item)}
-                    </Text>
-                    <Text style={[styles.meta, { color: colors.muted }]}>
-                      {groupExerciseKeys.has(item.key)
-                        ? "Group exercise · "
-                        : ""}
-                      {EXERCISE_CATEGORY_LABELS[item.category]} · {" "}
-                      {item.muscles.map((muscle) => localizeMuscleLabel(language, muscle)).join(" · ")}
-                    </Text>
-                  </View>
-                  <Ionicons name="add" size={20} color={accent} />
-                </Pressable>
-              ))}
-            </ScrollView>
-          </View>
+          </KeyboardAvoidingView>
         </View>
       </Modal>
 
@@ -4905,6 +5595,7 @@ function TimeSummaryItem({
 const styles = StyleSheet.create({
   pageGesture: { flex: 1 },
   page: { paddingBottom: 18 },
+  compactHeaderSpacing: { marginBottom: -5 },
   workoutTimer: {
     minHeight: 58,
     borderWidth: 1,
@@ -5138,6 +5829,31 @@ const styles = StyleSheet.create({
   },
   calorieMethodBody: { gap: 6, paddingTop: 7 },
   notes: { borderWidth: 1, borderRadius: 10, minHeight: 42, maxHeight: 70, padding: 9, fontSize: 9, textAlignVertical: "top" },
+  workoutPhotoEditor: {
+    minHeight: 52,
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 6,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+  workoutPhotoPreview: { width: 40, height: 40, borderRadius: 8 },
+  workoutPhotoPlaceholder: {
+    width: 40,
+    height: 40,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  photoAction: {
+    width: 30,
+    height: 30,
+    borderWidth: 1,
+    borderRadius: 9,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   restCard: { paddingVertical: 8, paddingHorizontal: 10 },
   restMain: { flexDirection: "row", alignItems: "center", gap: 7 },
   restAdjust: { minWidth: 38, height: 32, paddingHorizontal: 5, borderWidth: 1, borderRadius: 9, alignItems: "center", justifyContent: "center" },
@@ -5388,35 +6104,59 @@ const styles = StyleSheet.create({
   },
   historyValue: { fontSize: 9, fontWeight: "900" },
   modalBackdrop: { flex: 1, backgroundColor: "#0008", justifyContent: "flex-end" },
-  pickerSheet: { maxHeight: "88%", borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 16, gap: 10 },
+  pickerKeyboardAvoider: { flex: 1, justifyContent: "flex-end" },
+  pickerSheet: {
+    height: "88%",
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 16,
+    gap: 10,
+  },
   pickerHeader: { flexDirection: "row", alignItems: "center", gap: 9 },
-  search: { height: 42, borderWidth: 1, borderRadius: 11, paddingHorizontal: 11, fontSize: 10 },
-  pickerCategoryScroller: { flexGrow: 0, minHeight: 40, maxHeight: 40 },
-  pickerCategories: {
-    minHeight: 40,
+  pickerHeaderActions: { flexDirection: "row", alignItems: "center", gap: 5 },
+  pickerHeaderAction: {
+    width: 36,
+    height: 36,
+    borderRadius: 11,
     alignItems: "center",
-    columnGap: 5,
-    paddingRight: 8,
-    paddingVertical: 2,
+    justifyContent: "center",
   },
-  pickerMuscles: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    alignItems: "center",
-    columnGap: 5,
-    rowGap: 6,
-    paddingVertical: 2,
+  search: {
+    minHeight: 52,
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 14,
   },
-  customExerciseCreator: { borderWidth: 1, borderRadius: 12, padding: 8, gap: 7 },
+  customExerciseCreator: {
+    borderWidth: 1,
+    borderRadius: 13,
+    padding: 9,
+    gap: 7,
+    marginTop: 10,
+    marginBottom: 2,
+  },
   customRow: { flexDirection: "row", gap: 7 },
-  customInput: { flex: 1, height: 40, borderWidth: 1, borderRadius: 11, paddingHorizontal: 11, fontSize: 10 },
-  customAdd: { width: 40, height: 40, borderRadius: 11, alignItems: "center", justifyContent: "center" },
+  customClassificationRow: { flexDirection: "row", gap: 7 },
+  customClassificationMenu: { flex: 1, minWidth: 0 },
+  customInput: { flex: 1, minHeight: 44, borderWidth: 1, borderRadius: 11, paddingHorizontal: 12, paddingVertical: 9, fontSize: 12 },
+  customAdd: { width: 44, height: 44, borderRadius: 11, alignItems: "center", justifyContent: "center" },
+  customModeHeader: {
+    minHeight: 24,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
   customModeLabel: { fontSize: 6, fontWeight: "900", letterSpacing: 0.7 },
-  customModeRow: { flexDirection: "row", gap: 5 },
-  customModeChoice: { flex: 1, minHeight: 39, borderWidth: 1, borderRadius: 9, alignItems: "center", justifyContent: "center", paddingHorizontal: 3 },
+  customModeRow: { flexDirection: "row", flexWrap: "wrap", gap: 5 },
+  customModeChoice: { flexGrow: 1, flexBasis: "22%", minHeight: 39, borderWidth: 1, borderRadius: 9, alignItems: "center", justifyContent: "center", paddingHorizontal: 3 },
   customModeTitle: { fontSize: 7.5, fontWeight: "900" },
   customModeHint: { fontSize: 5.7, fontWeight: "700", marginTop: 1 },
-  pickerList: { maxHeight: 390 },
+  pickerList: { flex: 1, minHeight: 0 },
+  pickerListContent: { paddingBottom: 2 },
+  pickerFilterRow: { flexDirection: "row", gap: 8 },
+  pickerFilterMenu: { flex: 1, minWidth: 0 },
   pickerItem: { minHeight: 48, borderBottomWidth: 1, flexDirection: "row", alignItems: "center", gap: 8 },
   catalogIcon: { width: 34, height: 34, borderRadius: 10, alignItems: "center", justifyContent: "center" },
   recapSheet: { margin: 14, marginBottom: 30, borderRadius: 22, padding: 14, gap: 8 },

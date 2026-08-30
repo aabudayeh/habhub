@@ -22,6 +22,8 @@ import {
   unregisterOrphanedDevicePushToken,
 } from '@/src/notifications/push';
 import { deleteGoogleHealthStepCheckpoint } from '@/src/storage/googleHealthStepCheckpoint';
+import { deleteGoogleHealthGroupCheckpointsForAccount } from '@/src/storage/googleHealthGroupCheckpoint';
+import { clearGroupActivityCaches } from '@/src/storage/groupActivityCache';
 import { clearHomeScreenWidgetSnapshot } from '@/src/widgets';
 
 const DEMO_MODE_KEY = 'paceboard-explicit-demo-mode-v1';
@@ -30,6 +32,14 @@ const NATIVE_SESSION_WAIT_MS = 1200;
 const SUPABASE_SESSION_STORAGE_KEY = supabaseAuthStorageKey(
   process.env.EXPO_PUBLIC_SUPABASE_URL,
 );
+
+async function purgeSignedOutAccountCaches(accountId: string) {
+  await Promise.allSettled([
+    deleteGoogleHealthStepCheckpoint(accountId),
+    deleteGoogleHealthGroupCheckpointsForAccount(accountId),
+    clearGroupActivityCaches(),
+  ]);
+}
 
 type AuthStatus = 'loading' | 'signedOut' | 'signedIn' | 'demo';
 
@@ -141,6 +151,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
     const rememberSession = (nextSession: Session) => {
       const previousUserId = previousUserIdRef.current;
       beginIdentityTransitionCleanup(previousUserId, nextSession.user.id);
+      if (previousUserId && previousUserId !== nextSession.user.id)
+        void purgeSignedOutAccountCaches(previousUserId);
       previousUserIdRef.current = nextSession.user.id;
       cachedBootstrapUser = nextSession.user;
       setOfflineUser(null);
@@ -158,6 +170,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
     const confirmSignedOut = (demoMode: boolean) => {
       const previousUserId = previousUserIdRef.current;
       beginIdentityTransitionCleanup(previousUserId, null);
+      if (previousUserId)
+        void purgeSignedOutAccountCaches(previousUserId);
       previousUserIdRef.current = null;
       cachedBootstrapUser = null;
       setSession(null);
@@ -316,6 +330,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     const cachedUserId = offlineUser.id;
     const queuePriorIdentityCleanup = () => {
       void clearHomeScreenWidgetSnapshot().catch(() => false);
+      void purgeSignedOutAccountCaches(cachedUserId);
       // Append the push identity barrier before publishing another account or
       // signed-out state. This mirrors the auth-event path above and prevents
       // an old account cleanup from unregistering a newly restored token.
@@ -531,7 +546,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
         const { error } = await client.auth.signOut();
         if (error) throw error;
         if (userId)
-          await deleteGoogleHealthStepCheckpoint(userId).catch(() => undefined);
+          await purgeSignedOutAccountCaches(userId);
         setSession(null);
         setStatus('signedOut');
       } finally {

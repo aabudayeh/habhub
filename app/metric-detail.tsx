@@ -25,6 +25,7 @@ import { FastingClockEditor } from "@/src/components/FastingClockEditor";
 import { FastingProgressBar } from "@/src/components/FastingProgressBar";
 import { InfoPopover } from "@/src/components/InfoPopover";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
+import { PhotoComparisonStudio } from "@/src/components/PhotoComparisonStudio";
 import { SelectionMenu } from "@/src/components/SelectionMenu";
 import { TimeInput } from "@/src/components/TimeInput";
 import { TutorialTarget } from "@/src/components/TutorialSpotlight";
@@ -88,6 +89,7 @@ import {
   GymSession,
   MetricChartStyle,
   MetricDefinition,
+  MetricEntry,
 } from "@/src/types";
 import { cycleForecast } from "@/src/domain/cycle";
 import { isVacationDate } from "@/src/domain/vacation";
@@ -127,9 +129,30 @@ import {
   isFoodNutrientTrackerId,
 } from "@/src/domain/food";
 import { trackerPresets } from "@/src/domain/trackerCatalog";
+import {
+  metricLoggingDestination,
+  metricLoggingTargetId,
+} from "@/src/domain/metricLogging";
 import { isGoogleHealthEntry } from "@/src/domain/googleHealthLocalPrivacy";
+import { authoritativeStepEntries } from "@/src/domain/healthDedup";
 import { totalEnergyBurnedBreakdownEntries } from "@/src/domain/energyBreakdown";
-import { isFitbitRestingEnergyEntry } from "@/src/domain/health";
+import {
+  isDailyActiveEnergyAggregateEntry,
+  isCalculatedStepFallback,
+  isFitbitRestingEnergyEntry,
+  unrecordedStepActivity,
+} from "@/src/domain/health";
+import {
+  inferStepCoverageActivityFromGymSession,
+  listStepCoverageActivities,
+  resolveStepCoverageActivity,
+  resolveStepCoverageChoice,
+  stepCoverageGymSessionId,
+  stepCoverageSessionIdentity,
+  stepCoverageSourceEntryId,
+  withStepCoverageActivityOverride,
+  withStepCoverageActivitySelection,
+} from "@/src/domain/stepCoveragePreferences";
 import {
   GoogleHealthClientError,
   invokeGoogleHealth,
@@ -143,6 +166,22 @@ const DETAIL_PERIODS: { id: Exclude<LeaderboardPeriod, "custom">; label: string 
   { id: "year", label: "Year" },
   { id: "overall", label: "All time" },
 ];
+
+const STEP_COVERAGE_EDIT_METRICS = new Set([
+  "workout",
+  "workout_duration",
+  "workout_distance",
+  "exercise",
+  "energy_burned",
+]);
+
+// Keep restored accounts controllable even when an older saved default metric
+// predates its Health mapping. Custom mapped workout trackers are added below.
+const STEP_COVERAGE_SESSION_METRICS = new Set([
+  "workout",
+  "workout_duration",
+  "workout_distance",
+]);
 
 function OptionalTutorialTarget({
   enabled,
@@ -175,6 +214,7 @@ export default function TrackerDetail() {
     deleteEntry,
     deleteGymSession,
     purgeGoogleHealthEntry,
+    updateSettings,
     updateFoodEntryTime,
     deletePhoto,
     skipGoal,
@@ -196,16 +236,30 @@ export default function TrackerDetail() {
     if (date) setDay(date);
     if (requestedPeriod) setPeriod(requestedPeriod);
   }, [date, requestedPeriod, todoFocusAt]);
+  useEffect(() => {
+    setStepCoveragePickerEntry(undefined);
+    setStepActivityChoicesOpen(false);
+    lastCoverageTapRef.current = undefined;
+  }, [trackerId]);
   const [dateNavigatorOpen, setDateNavigatorOpen] = useState(true);
   const [calendarOpen, setCalendarOpen] = useState(false);
-  const [photoCompareOpen, setPhotoCompareOpen] = useState(false);
   const [recordsOpen, setRecordsOpen] = useState(false);
+  const [entriesOpenOverride, setEntriesOpenOverride] = useState<boolean>();
   const [collapsedEntryDates, setCollapsedEntryDates] = useState<string[]>([]);
   const [editingFoodEntryId, setEditingFoodEntryId] = useState<string>();
   const [foodTimeDraft, setFoodTimeDraft] = useState("12:00");
   const [foodTimeSaving, setFoodTimeSaving] = useState(false);
   const [dismissingGoogleEntryId, setDismissingGoogleEntryId] =
     useState<string>();
+  const [stepCoveragePickerEntry, setStepCoveragePickerEntry] =
+    useState<MetricEntry>();
+  const [stepActivityChoicesOpen, setStepActivityChoicesOpen] = useState(false);
+  const lastCoverageTapRef = useRef<
+    { entryId: string; at: number } | undefined
+  >(undefined);
+  const lastCoverageLongPressRef = useRef<
+    { entryId: string; at: number } | undefined
+  >(undefined);
   const lastFoodTapRef = useRef<{ entryId: string; at: number } | undefined>(
     undefined,
   );
@@ -280,12 +334,14 @@ export default function TrackerDetail() {
     () => periodDates(period, day, state.settings.weekStartsOn ?? 1),
     [day, period, state.settings.weekStartsOn],
   );
+  const entryRangeView = ["week", "month", "year", "overall"].includes(
+    period,
+  );
+  const entriesSectionOpen = entriesOpenOverride ?? !entryRangeView;
   useEffect(() => {
-    const collapsedByDefault = ["week", "month", "year", "overall"].includes(
-      period,
-    );
-    setCollapsedEntryDates(collapsedByDefault ? dates : []);
-  }, [dates, period]);
+    setEntriesOpenOverride(undefined);
+    setCollapsedEntryDates([]);
+  }, [day, period, trackerId]);
   function shiftRange(direction: number) {
     const next = shiftedPeriodAnchor(
       period,
@@ -383,7 +439,7 @@ export default function TrackerDetail() {
         b.localDate.localeCompare(a.localDate) ||
         b.recordedAt.localeCompare(a.recordedAt),
     );
-  const entries =
+  const baseEntries =
     tracker.id === "energy_burned"
       ? totalEnergyBurnedBreakdownEntries(
           state,
@@ -391,6 +447,305 @@ export default function TrackerDetail() {
           dates,
         )
       : trackerEntries;
+  const entries = (() => {
+    if (!tracker.stepFallback) return baseEntries;
+    const stepMetric = state.metrics.find(
+      (metric) =>
+        metric.healthMapping?.dataType === "steps" &&
+        metric.healthMapping.field === "value",
+    );
+    if (!stepMetric) return baseEntries;
+    const withoutStoredFallback = baseEntries.filter(
+      (entry) => !isCalculatedStepFallback(entry),
+    );
+    const storedFallbackByDate = new Map(
+      baseEntries
+        .filter(isCalculatedStepFallback)
+        .map((entry) => [entry.localDate, entry] as const),
+    );
+    const requestedDates = new Set(dates);
+    const fallbackMetricIds = new Set([
+      stepMetric.id,
+      ...state.metrics
+        .filter(
+          (metric) =>
+            metric.healthMapping?.dataType === "workouts" ||
+            (metric.healthMapping?.dataType === "active_energy" &&
+              metric.healthMapping.field === "value"),
+        )
+        .map((metric) => metric.id),
+    ]);
+    const currentUserEntriesByDate = new Map<string, MetricEntry[]>();
+    state.entries.forEach((entry) => {
+      if (
+        entry.userId !== state.currentUserId ||
+        !requestedDates.has(entry.localDate) ||
+        !fallbackMetricIds.has(entry.metricId)
+      )
+        return;
+      const dayEntries = currentUserEntriesByDate.get(entry.localDate);
+      if (dayEntries) dayEntries.push(entry);
+      else currentUserEntriesByDate.set(entry.localDate, [entry]);
+    });
+    const liveFallbacks = dates.flatMap((localDate): MetricEntry[] => {
+      const dayEntries = currentUserEntriesByDate.get(localDate) ?? [];
+      const steps = authoritativeStepEntries(
+        dayEntries.filter((entry) => entry.metricId === stepMetric.id),
+      ).reduce(
+        (sum, entry) =>
+          sum + (Number.isFinite(Number(entry.value)) ? Number(entry.value) : 0),
+        0,
+      );
+      if (!(steps > 0)) return [];
+      const estimate = unrecordedStepActivity(
+        dayEntries,
+        state.metrics,
+        steps,
+        state.energyProfiles?.[state.currentUserId] ??
+          state.settings.energyProfile,
+        state.settings.stepCoveragePreferences,
+      );
+      const mapping = tracker.healthMapping;
+      const hasDailyActiveEnergyAggregate = dayEntries.some(
+        (entry) =>
+          entry.metricId === tracker.id &&
+          isDailyActiveEnergyAggregateEntry(entry),
+      );
+      const liveValue =
+        mapping?.dataType === "active_energy" && mapping.field === "value"
+          ? hasDailyActiveEnergyAggregate
+            ? 0
+            : estimate.estimatedCalories
+          : mapping?.dataType === "workouts" &&
+              mapping.field === "distance_km"
+            ? estimate.distanceKm
+            : mapping?.dataType === "workouts" &&
+                mapping.field === "duration_minutes"
+              ? estimate.durationMinutes
+              : 0;
+      if (!(liveValue > 0)) return [];
+      const stored = storedFallbackByDate.get(localDate);
+      const stepSource = dayEntries
+        .filter((entry) => entry.metricId === stepMetric.id)
+        .sort((left, right) =>
+          right.recordedAt.localeCompare(left.recordedAt),
+        )[0];
+      const liveEntry: MetricEntry = {
+        ...(stored ?? {
+          id: `live-step-fallback:${localDate}:${tracker.id}`,
+          metricId: tracker.id,
+          userId: state.currentUserId,
+          localDate,
+          recordedAt:
+            stepSource?.recordedAt ?? `${localDate}T12:00:00.000Z`,
+          visibility: tracker.defaultVisibility,
+          source: "calculated" as const,
+          label: "Estimated unrecorded walking from steps",
+          sourceProvider: stepSource?.sourceProvider,
+          sourceRecordId: `step-fallback:${localDate}`,
+          sourceOrigin: stepSource?.sourceOrigin,
+        }),
+        value: Math.round(liveValue * 10) / 10,
+        note: `Uses ${Math.round(estimate.uncoveredSteps).toLocaleString(locale)} steps not already explained by workouts included in Step coverage.`,
+      };
+      return [liveEntry];
+    });
+    return [...withoutStoredFallback, ...liveFallbacks].sort(
+      (left, right) =>
+        right.localDate.localeCompare(left.localDate) ||
+        right.recordedAt.localeCompare(left.recordedAt),
+    );
+  })();
+  const supportsStepCoverageEditing = STEP_COVERAGE_EDIT_METRICS.has(
+    tracker.id,
+  );
+  // Build the entry/session indexes once per detail render. Entry cards can then
+  // resolve their linked workout and preference with O(1) lookups instead of
+  // repeatedly scanning a potentially large health history.
+  const stepCoverageEntryByOwnerAndId = new Map<string, MetricEntry>();
+  const stepCoverageEntryByOwnerAndGymSession = new Map<string, MetricEntry>();
+  const stepCoverageWorkoutSessionIds = new Set<string>();
+  const stepCoverageActiveEnergyMetricIds = new Set(
+    state.metrics
+      .filter(
+        (metric) =>
+          metric.healthMapping?.dataType === "active_energy" &&
+          metric.healthMapping.field === "value",
+      )
+      .map((metric) => metric.id),
+  );
+  const gymSessionByOwnerAndId = new Map<string, GymSession>();
+  if (supportsStepCoverageEditing) {
+    const detailDates = new Set(dates);
+    for (const session of state.gymSessions ?? []) {
+      if (
+        session.userId === state.currentUserId &&
+        detailDates.has(session.localDate)
+      )
+        gymSessionByOwnerAndId.set(
+          `${session.userId}\u0000${session.id}`,
+          session,
+        );
+    }
+    const workoutMetricIds = new Set([
+      ...STEP_COVERAGE_SESSION_METRICS,
+      ...state.metrics
+        .filter((metric) => metric.healthMapping?.dataType === "workouts")
+        .map((metric) => metric.id),
+    ]);
+    for (const entry of state.entries) {
+      if (
+        entry.userId !== state.currentUserId ||
+        !detailDates.has(entry.localDate)
+      )
+        continue;
+      stepCoverageEntryByOwnerAndId.set(
+        `${entry.userId}\u0000${entry.id}`,
+        entry,
+      );
+      const gymSessionId = stepCoverageGymSessionId(entry.id);
+      if (gymSessionId) {
+        const gymKey = `${entry.userId}\u0000${gymSessionId}`;
+        const indexed = stepCoverageEntryByOwnerAndGymSession.get(gymKey);
+        if (!indexed || entry.metricId === "workout")
+          stepCoverageEntryByOwnerAndGymSession.set(gymKey, entry);
+      }
+      if (!workoutMetricIds.has(entry.metricId)) continue;
+      const identity = stepCoverageSessionIdentity(entry);
+      if (identity) stepCoverageWorkoutSessionIds.add(identity);
+    }
+  }
+  const stepCoverageSourceForEntry = (entry: MetricEntry) => {
+    const sourceId = stepCoverageSourceEntryId(entry);
+    if (sourceId !== entry.id)
+      return stepCoverageEntryByOwnerAndId.get(
+        `${entry.userId}\u0000${sourceId}`,
+      );
+    return entry;
+  };
+  const stepCoverageEntryIsWorkout = (entry: MetricEntry) => {
+    const source = stepCoverageSourceForEntry(entry);
+    if (!source || source.source === "calculated") return false;
+    if (
+      source.sourceRecordId?.startsWith("step-fallback:") ||
+      source.label === "Estimated unrecorded walking from steps"
+    )
+      return false;
+    if (
+      source.label === "Resting energy (BMR)" ||
+      source.id.startsWith("energy-breakdown:bmr:")
+    )
+      return false;
+    const identity = stepCoverageSessionIdentity(source);
+    const standaloneSyncedActiveEnergy =
+      source.source === "imported" &&
+      stepCoverageActiveEnergyMetricIds.has(source.metricId) &&
+      !isFitbitRestingEnergyEntry(source) &&
+      !isDailyActiveEnergyAggregateEntry(source);
+    return Boolean(
+      identity &&
+        (stepCoverageWorkoutSessionIds.has(identity) ||
+          standaloneSyncedActiveEnergy),
+    );
+  };
+  const gymSessionForStepCoverageEntry = (entry: MetricEntry) => {
+    const source = stepCoverageSourceForEntry(entry);
+    if (!source) return undefined;
+    const sessionId = stepCoverageGymSessionId(source.id);
+    return sessionId
+      ? gymSessionByOwnerAndId.get(
+          `${source.userId}\u0000${sessionId}`,
+        )
+      : undefined;
+  };
+  const selectedStepCoverageActivity = stepCoveragePickerEntry
+    ? resolveStepCoverageActivity(
+        stepCoverageSourceForEntry(stepCoveragePickerEntry) ??
+          stepCoveragePickerEntry,
+        state.settings.stepCoveragePreferences,
+      ) ??
+      (() => {
+        const session = gymSessionForStepCoverageEntry(stepCoveragePickerEntry);
+        return session
+          ? inferStepCoverageActivityFromGymSession(session)
+          : undefined;
+      })()
+    : undefined;
+  const selectedStepCoverageResolution = stepCoveragePickerEntry
+    ? resolveStepCoverageChoice(
+        stepCoverageSourceForEntry(stepCoveragePickerEntry) ??
+          stepCoveragePickerEntry,
+        state.settings.stepCoveragePreferences,
+      )
+    : undefined;
+  const stepCoverageActivities = listStepCoverageActivities();
+  const closeStepCoveragePicker = () => {
+    setStepCoveragePickerEntry(undefined);
+    setStepActivityChoicesOpen(false);
+  };
+  const openStepCoveragePicker = (entry: MetricEntry) => {
+    setStepActivityChoicesOpen(false);
+    setStepCoveragePickerEntry(entry);
+  };
+  const applyStepCoverageActivity = (
+    activityKey: string,
+    scope: "session" | "all_activity",
+  ) => {
+    if (!stepCoveragePickerEntry) return;
+    const source =
+      stepCoverageSourceForEntry(stepCoveragePickerEntry) ??
+      stepCoveragePickerEntry;
+    updateSettings({
+      stepCoveragePreferences: withStepCoverageActivitySelection(
+        state.settings.stepCoveragePreferences,
+        source,
+        activityKey,
+        scope,
+      ),
+    });
+    closeStepCoveragePicker();
+  };
+  const chooseStepCoverageActivity = (activityKey: string) => {
+    const activity = stepCoverageActivities.find(
+      (candidate) => candidate.key === activityKey,
+    );
+    if (!activity) return;
+    if (activity.mode === "direct") {
+      applyStepCoverageActivity(activity.key, "session");
+      return;
+    }
+    Alert.alert(
+      "Use this Step estimate?",
+      `${activity.label} uses an activity-equivalent estimate. Apply it only to this workout or to matching ${activity.label.toLocaleLowerCase()} history and future workouts?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "This workout",
+          onPress: () => applyStepCoverageActivity(activity.key, "session"),
+        },
+        {
+          text: "All matching",
+          onPress: () => applyStepCoverageActivity(activity.key, "all_activity"),
+        },
+      ],
+    );
+  };
+  const excludeStepCoverageEntry = () => {
+    if (!stepCoveragePickerEntry) return;
+    const source =
+      stepCoverageSourceForEntry(stepCoveragePickerEntry) ??
+      stepCoveragePickerEntry;
+    if (!selectedStepCoverageActivity) return;
+    updateSettings({
+      stepCoveragePreferences: withStepCoverageActivityOverride(
+        state.settings.stepCoveragePreferences,
+        source,
+        selectedStepCoverageActivity.key,
+        "exclude",
+      ),
+    });
+    closeStepCoveragePicker();
+  };
   const editingFoodEntry = editingFoodEntryId
     ? entries.find((entry) => entry.id === editingFoodEntryId)
     : undefined;
@@ -539,6 +894,30 @@ export default function TrackerDetail() {
       ],
     );
   }
+  function handleStepCoverageEntryTap(entry: MetricEntry) {
+    if (!supportsStepCoverageEditing || !stepCoverageEntryIsWorkout(entry))
+      return;
+    const source = stepCoverageSourceForEntry(entry);
+    if (!source || source.source === "calculated") return;
+    const now = Date.now();
+    const held = lastCoverageLongPressRef.current;
+    if (held?.entryId === source.id && now - held.at < 700) return;
+    const previous = lastCoverageTapRef.current;
+    lastCoverageTapRef.current = { entryId: source.id, at: now };
+    if (!previous || previous.entryId !== source.id || now - previous.at > 360)
+      return;
+    lastCoverageTapRef.current = undefined;
+    openStepCoveragePicker(entry);
+  }
+  function promptStepCoverageEntryRemoval(entry: MetricEntry) {
+    const session = gymSessionForStepCoverageEntry(entry);
+    if (session) {
+      promptGymSessionRemoval(session);
+      return;
+    }
+    const source = stepCoverageSourceForEntry(entry);
+    if (source && source.source !== "calculated") promptEntryRemoval(source);
+  }
   function promptGymSessionRemoval(session: GymSession) {
     Alert.alert(
       "Delete workout?",
@@ -552,6 +931,26 @@ export default function TrackerDetail() {
         },
       ],
     );
+  }
+  function stepCoverageEntryForGymSession(session: GymSession) {
+    return stepCoverageEntryByOwnerAndGymSession.get(
+      `${session.userId}\u0000${session.id}`,
+    );
+  }
+  function handleGymSessionEditTap(session: GymSession) {
+    if (!supportsStepCoverageEditing) return;
+    const coverageEntry = stepCoverageEntryForGymSession(session);
+    if (!coverageEntry || !stepCoverageEntryIsWorkout(coverageEntry)) return;
+    const now = Date.now();
+    const key = `gym:${session.id}`;
+    const held = lastCoverageLongPressRef.current;
+    if (held?.entryId === key && now - held.at < 700) return;
+    const previous = lastCoverageTapRef.current;
+    lastCoverageTapRef.current = { entryId: key, at: now };
+    if (!previous || previous.entryId !== key || now - previous.at > 360)
+      return;
+    lastCoverageTapRef.current = undefined;
+    openStepCoveragePicker(coverageEntry);
   }
   const gymSourceSessions = tracker.gymMapping
     ? (state.gymSessions ?? [])
@@ -623,15 +1022,10 @@ export default function TrackerDetail() {
             photo.userId === state.currentUserId && dates.includes(photo.localDate),
         )
       : [];
-  const olderPhoto =
-    tracker.dataType === "photo"
-      ? [...state.photos]
-          .filter(
-            (photo) =>
-              photo.userId === state.currentUserId && photo.localDate < day,
-          )
-          .sort((a, b) => b.localDate.localeCompare(a.localDate))[0]
-      : undefined;
+  const allUserPhotos =
+    tracker.id === "progress_photo"
+      ? state.photos.filter((photo) => photo.userId === state.currentUserId)
+      : [];
   const periodStats = metricPeriodStats(
     state,
     tracker,
@@ -905,9 +1299,7 @@ export default function TrackerDetail() {
           ? palette.red
           : colors.border;
   const canSkipToday =
-    Boolean(persistedTracker) &&
-    day === dateKey() &&
-    tracker.goalEnabled !== false;
+    Boolean(persistedTracker) && tracker.goalEnabled !== false;
   const isFasting = Boolean(tracker.fastingSettings);
   const automaticFasting =
     isFasting && tracker.fastingSettings?.automaticFoodBreak === true;
@@ -922,14 +1314,38 @@ export default function TrackerDetail() {
     : undefined;
   const canControlFast =
     isFasting && dates.length === 1 && day === dateKey();
-  const canAddEntry =
-    Boolean(persistedTracker) &&
-    tracker.id !== "todo_completion" &&
-    tracker.id !== "steps" &&
-    !isFasting &&
-    tracker.manualEntry !== false &&
-    tracker.dataType !== "calculated";
-  const canOpenWorkout = tracker.id === "workout";
+  const loggingDestination = metricLoggingDestination(tracker);
+  const loggingTargetId = metricLoggingTargetId(tracker);
+  const canAddEntry = Boolean(
+    loggingTargetId &&
+      state.metrics.some(
+        (metric) =>
+          metric.id === loggingTargetId &&
+          (metric.manualEntry !== false || metric.id === "steps"),
+      ),
+  );
+  const canOpenWorkout = loggingDestination === "workout";
+  const canUseActivityTimer =
+    tracker.timerEnabled && loggingDestination === "direct" && !isFasting;
+  const addActionLabel =
+    loggingDestination === "food"
+      ? "Log food"
+      : loggingDestination === "weight"
+        ? "Weigh-in"
+        : "Add";
+  const addActionIcon: keyof typeof Ionicons.glyphMap =
+    loggingDestination === "food"
+      ? "restaurant-outline"
+      : loggingDestination === "weight"
+        ? "scale-outline"
+        : "add";
+  const skippingToday = day === dateKey();
+  const skipActionLabel = canOpenWorkout
+    ? "Skip"
+    : skippingToday
+      ? "Skip today"
+      : "Skip day";
+  const skipActionDate = skippingToday ? "today" : friendlyDate(day, locale);
   return (
     <Screen scrollRef={detailScrollRef}>
       <PageHeader
@@ -1157,18 +1573,18 @@ export default function TrackerDetail() {
           </Card>
         ) : null}
       </View>
-      {canSkipToday || canAddEntry || canOpenWorkout || tracker.timerEnabled || isFasting ? (
+      {canSkipToday || canAddEntry || canOpenWorkout || canUseActivityTimer || isFasting ? (
         <OptionalTutorialTarget enabled={isFasting} id="fasting-controls">
           <View style={styles.detailQuickActions}>
           {canSkipToday ? (
             <Pressable
               onPress={() =>
                 Alert.alert(
-                  `Skip ${tracker.name} today?`,
-                  "This counts today as complete and records a visible skip entry that you can delete later.",
+                  `Skip ${tracker.name} for ${skipActionDate}?`,
+                  `This counts ${skipActionDate} as complete and records a visible skip entry that you can delete later.`,
                   [
                     { text: "Cancel", style: "cancel" },
-                    { text: "Skip today", onPress: () => skipGoal(tracker.id, day) },
+                    { text: skipActionLabel, onPress: () => skipGoal(tracker.id, day) },
                   ],
                 )
               }
@@ -1178,7 +1594,9 @@ export default function TrackerDetail() {
               ]}
             >
               <Ionicons name="play-skip-forward-outline" size={16} color={accent} />
-              <Text style={[styles.skipTodayText, { color: accent }]}>Skip today</Text>
+              <Text style={[styles.skipTodayText, { color: accent }]}>
+                {skipActionLabel}
+              </Text>
             </Pressable>
           ) : null}
           {canAddEntry ? (
@@ -1186,7 +1604,12 @@ export default function TrackerDetail() {
               onPress={() =>
                 router.navigate({
                   pathname: "/(tabs)/log",
-                  params: { metric: tracker.id, date: day },
+                  params: {
+                    metric: loggingTargetId!,
+                    date: day,
+                    focusMetric:
+                      loggingTargetId === tracker.id ? undefined : tracker.id,
+                  },
                 })
               }
               style={[
@@ -1194,8 +1617,8 @@ export default function TrackerDetail() {
                 { borderColor: accent, backgroundColor: accent },
               ]}
             >
-              <Ionicons name="add" size={16} color={palette.white} />
-              <Text style={styles.quickAddText}>Add</Text>
+              <Ionicons name={addActionIcon} size={16} color={palette.white} />
+              <Text style={styles.quickAddText}>{addActionLabel}</Text>
             </Pressable>
           ) : null}
           {canOpenWorkout ? (
@@ -1215,7 +1638,7 @@ export default function TrackerDetail() {
               <Text style={[styles.skipTodayText, { color: accent }]}>Workout</Text>
             </Pressable>
           ) : null}
-          {tracker.timerEnabled && !isFasting ? (
+          {canUseActivityTimer ? (
             <Pressable
               onPress={() =>
                 router.navigate({
@@ -2012,6 +2435,15 @@ export default function TrackerDetail() {
             </>
         </Card>
       ) : null}
+      {tracker.id === "progress_photo" && allUserPhotos.length ? (
+        <PhotoComparisonStudio
+          photos={allUserPhotos}
+          entries={state.entries}
+          userId={state.currentUserId}
+          locale={locale}
+          onDeletePhoto={deletePhoto}
+        />
+      ) : null}
       {tracker.id === "todo_completion" ? (
         <TodoTrackerEntries
           state={state}
@@ -2021,17 +2453,29 @@ export default function TrackerDetail() {
           onRequestScroll={scrollToTodo}
         />
       ) : null}
-      {tracker.id !== "todo_completion" ? <View style={styles.logHeader}>
-        <Text style={[styles.section, { color: colors.ink }]}>
-          Entries
-        </Text>
-        {tracker.id === "food" ? (
-          <Text style={[styles.entryEditHint, { color: colors.faint }]}>Double-tap a meal to edit its time</Text>
-        ) : gymSourceSessions.length ? (
-          <Text style={[styles.entryEditHint, { color: colors.faint }]}>Hold a saved workout to delete it</Text>
-        ) : null}
-      </View> : null}
-      <View style={styles.entries}>
+      {tracker.id !== "todo_completion" ? <>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded: entriesSectionOpen }}
+        accessibilityLabel={`${entriesSectionOpen ? "Collapse" : "Expand"} entries`}
+        onPress={() => setEntriesOpenOverride(!entriesSectionOpen)}
+        style={styles.logHeader}
+      >
+        <Text style={[styles.section, { color: colors.ink }]}>Entries</Text>
+        <View style={styles.entryHeaderMeta}>
+          {tracker.id === "food" ? (
+            <Text style={[styles.entryEditHint, { color: colors.faint }]}>Double-tap a meal to edit its time</Text>
+          ) : gymSourceSessions.length ? (
+            <Text style={[styles.entryEditHint, { color: colors.faint }]}>Hold a saved workout to delete it</Text>
+          ) : null}
+          <Ionicons
+            name={entriesSectionOpen ? "chevron-up" : "chevron-down"}
+            size={17}
+            color={accent}
+          />
+        </View>
+      </Pressable>
+      {entriesSectionOpen ? <View style={styles.entries}>
         {gymSourceSessions.map((session, index) => {
           const contribution = gymSessionMetricValue(
             session,
@@ -2042,6 +2486,7 @@ export default function TrackerDetail() {
             index === 0 ||
             gymSourceSessions[index - 1].localDate !== session.localDate;
           const collapsed = collapsedEntryDates.includes(session.localDate);
+          const coverageEntry = stepCoverageEntryForGymSession(session);
           return (
             <React.Fragment key={`gym:${session.id}`}>
             {dates.length > 1 && firstOnDate ? (
@@ -2070,8 +2515,45 @@ export default function TrackerDetail() {
             ) : null}
             {!collapsed ? (
             <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={formatLocalizedTemplate(
+                t,
+                "{value}. Double-tap to choose its Step activity; hold to delete.",
+                { value: session.name || "Workout" },
+              )}
+              accessibilityHint={t(
+                "Choose the activity used to explain measured steps",
+              )}
+              accessibilityActions={[
+                { name: "activate", label: t("Choose Step activity") },
+                { name: "delete", label: t("Delete workout") },
+              ]}
+              onAccessibilityAction={(event) => {
+                if (event.nativeEvent.actionName === "delete") {
+                  promptGymSessionRemoval(session);
+                  return;
+                }
+                if (
+                  event.nativeEvent.actionName === "activate" &&
+                  coverageEntry
+                )
+                  openStepCoveragePicker(coverageEntry);
+              }}
               delayLongPress={450}
-              onLongPress={() => promptGymSessionRemoval(session)}
+              onPress={
+                supportsStepCoverageEditing
+                  ? () => handleGymSessionEditTap(session)
+                  : undefined
+              }
+              onLongPress={() => {
+                const key = `gym:${session.id}`;
+                lastCoverageLongPressRef.current = {
+                  entryId: key,
+                  at: Date.now(),
+                };
+                lastCoverageTapRef.current = undefined;
+                promptGymSessionRemoval(session);
+              }}
             >
             <Card style={styles.entry}>
               <View style={styles.entryTop}>
@@ -2090,7 +2572,7 @@ export default function TrackerDetail() {
                   <Text style={[styles.entryValue, { color: tracker.color }]}>
                     {formatMetricValue(tracker, contribution)}
                   </Text>
-                  <Pressable
+                  {!supportsStepCoverageEditing ? <Pressable
                     accessibilityRole="button"
                     accessibilityLabel={t(`Delete ${session.name || "Workout"}`)}
                     onPress={() => promptGymSessionRemoval(session)}
@@ -2101,7 +2583,7 @@ export default function TrackerDetail() {
                     ]}
                   >
                     <Ionicons name="trash-outline" size={14} color={palette.red} />
-                  </Pressable>
+                  </Pressable> : null}
                 </View>
               </View>
               <Text style={[styles.note, { color: colors.muted }]}>
@@ -2139,6 +2621,14 @@ export default function TrackerDetail() {
             : undefined;
           const canEditFoodTime =
             tracker.id === "food" && entry.source !== "calculated";
+          const coverageSource = supportsStepCoverageEditing
+            ? stepCoverageSourceForEntry(entry)
+            : undefined;
+          const canDeleteCoverageEntry = Boolean(
+            coverageSource && coverageSource.source !== "calculated",
+          );
+          const canClassifyStepCoverage =
+            supportsStepCoverageEditing && stepCoverageEntryIsWorkout(entry);
           return (
           <React.Fragment key={`${entry.userId}:${entry.id}`}>
           {dates.length > 1 && firstOnDate && !gymEntryDates.has(entry.localDate) ? (
@@ -2165,7 +2655,9 @@ export default function TrackerDetail() {
           ) : null}
           {!collapsed ? (
           <Pressable
-            accessibilityRole={canEditFoodTime ? "button" : undefined}
+            accessibilityRole={
+              canEditFoodTime || canClassifyStepCoverage ? "button" : undefined
+            }
             accessibilityLabel={
               canEditFoodTime
                 ? `${entry.label || tracker.name}, ${formatClockTime(
@@ -2173,16 +2665,33 @@ export default function TrackerDetail() {
                     state.settings.timeFormat,
                     locale,
                   )}`
+                : canClassifyStepCoverage
+                  ? formatLocalizedTemplate(
+                      t,
+                      "{value}. Double-tap to choose its Step activity; hold to delete.",
+                      { value: entry.label || tracker.name },
+                    )
                 : undefined
             }
             accessibilityHint={
               canEditFoodTime
                 ? t("Opens the meal time editor")
+                : canClassifyStepCoverage
+                  ? t("Choose the activity used to explain measured steps")
                 : undefined
             }
             accessibilityActions={
               canEditFoodTime
                 ? [{ name: "activate", label: t("Edit meal time") }]
+                : supportsStepCoverageEditing && canDeleteCoverageEntry
+                  ? [
+                      ...(canClassifyStepCoverage
+                        ? [{ name: "activate", label: t("Choose Step activity") }]
+                        : []),
+                      ...(canDeleteCoverageEntry
+                        ? [{ name: "delete", label: t("Delete entry") }]
+                        : []),
+                    ]
                 : undefined
             }
             onAccessibilityAction={
@@ -2191,21 +2700,47 @@ export default function TrackerDetail() {
                     if (event.nativeEvent.actionName === "activate")
                       openFoodTimeEditor(entry);
                   }
+                : supportsStepCoverageEditing
+                  ? (event) => {
+                      if (event.nativeEvent.actionName === "delete") {
+                        if (canDeleteCoverageEntry)
+                          promptStepCoverageEntryRemoval(entry);
+                        return;
+                      }
+                      if (event.nativeEvent.actionName !== "activate") return;
+                      if (canClassifyStepCoverage)
+                        openStepCoveragePicker(entry);
+                    }
                 : undefined
             }
             onAccessibilityTap={
               canEditFoodTime
                 ? () => openFoodTimeEditor(entry)
+                : canClassifyStepCoverage
+                  ? () => openStepCoveragePicker(entry)
                 : undefined
             }
             onPress={
               canEditFoodTime
                 ? () => handleFoodEntryTap(entry)
+                : canClassifyStepCoverage
+                  ? () => handleStepCoverageEntryTap(entry)
                 : undefined
             }
             delayLongPress={450}
             onLongPress={
-              entry.source !== "calculated"
+              supportsStepCoverageEditing
+                ? () => {
+                    if (!canDeleteCoverageEntry) return;
+                    const sourceId = coverageSource?.id ?? entry.id;
+                    lastCoverageLongPressRef.current = {
+                      entryId: sourceId,
+                      at: Date.now(),
+                    };
+                    lastCoverageTapRef.current = undefined;
+                    promptStepCoverageEntryRemoval(entry);
+                  }
+                : entry.source !== "calculated"
                 ? () => promptEntryRemoval(entry)
                 : undefined
             }
@@ -2246,8 +2781,9 @@ export default function TrackerDetail() {
                   const pair = pairedBloodPressure(entry);
                   if (pair?.diastolic)
                     return `${Math.round(Number(entry.value))}/${Math.round(Number(pair.diastolic.value))} mmHg${pair.pulse ? ` · ${Math.round(Number(pair.pulse.value))} bpm` : ""}`;
-                  return typeof entry.value === "number"
-                    ? formatMetricValue(tracker, entry.value)
+                  return typeof entry.value === "number" ||
+                    typeof entry.value === "boolean"
+                    ? formatMetricValue(tracker, Number(entry.value))
                     : String(entry.value);
                 })()}
               </Text>
@@ -2336,7 +2872,7 @@ export default function TrackerDetail() {
           >
           <Card style={styles.entry}>
             <Text style={[styles.entryTitle, { color: colors.ink }]}>
-              {photo.caption || "Progress photo"}
+              {photo.caption || "Photo"}
             </Text>
             <Text style={[styles.time, { color: colors.faint }]}>
               {friendlyDate(photo.localDate, locale)}
@@ -2346,61 +2882,218 @@ export default function TrackerDetail() {
               containerStyle={styles.photoImageFrame}
               thumbnailStyle={styles.photoImage}
             />
-            {olderPhoto ? (
-              <>
-                <Pressable
-                  onPress={() => setPhotoCompareOpen((open) => !open)}
-                  style={styles.photoToggle}
-                >
-                  <Text style={[styles.note, { color: colors.muted }]}>
-                    Compare with {friendlyDate(olderPhoto.localDate, locale)}
-                  </Text>
-                  <Ionicons
-                    name={photoCompareOpen ? "chevron-up" : "chevron-down"}
-                    size={16}
-                    color={accent}
-                  />
-                </Pressable>
-                {photoCompareOpen ? (
-                  <>
-                    <View style={styles.photoCompare}>
-                      <ExpandableImage
-                        uri={photo.uri}
-                        containerStyle={styles.compareImageFrame}
-                        thumbnailStyle={styles.compareImage}
-                      />
-                      <ExpandableImage
-                        uri={olderPhoto.uri}
-                        containerStyle={styles.compareImageFrame}
-                        thumbnailStyle={styles.compareImage}
-                      />
-                    </View>
-                    <Pressable
-                      onPress={() =>
-                        router.navigate({
-                          pathname: "/day/[date]",
-                          params: { date: day, metrics: tracker.id },
-                        } as never)
-                      }
-                      style={[styles.compareButton, { borderColor: accent }]}
-                    >
-                      <Ionicons
-                        name="download-outline"
-                        size={16}
-                        color={accent}
-                      />
-                      <Text style={[styles.compareText, { color: accent }]}>
-                        Open comparison & export
-                      </Text>
-                    </Pressable>
-                  </>
-                ) : null}
-              </>
-            ) : null}
           </Card>
           </Pressable>
         ))}
-      </View>
+      </View> : null}
+      </> : null}
+      <Modal
+        transparent
+        visible={Boolean(stepCoveragePickerEntry)}
+        animationType="fade"
+        statusBarTranslucent
+        onRequestClose={closeStepCoveragePicker}
+      >
+        <Pressable
+          style={styles.stepActivityBackdrop}
+          onPress={closeStepCoveragePicker}
+        >
+          <Pressable
+            onPress={(event) => event.stopPropagation()}
+            style={[
+              styles.stepActivitySheet,
+              { backgroundColor: colors.card },
+            ]}
+          >
+            <View
+              style={[styles.stepActivityHandle, { backgroundColor: colors.border }]}
+            />
+            <View style={styles.stepActivityHeading}>
+              <View style={styles.grow}>
+                <Text style={[styles.stepActivityTitle, { color: colors.ink }]}>Step activity</Text>
+                <Text
+                  translate={false}
+                  numberOfLines={1}
+                  style={[styles.stepActivityWorkout, { color: colors.muted }]}
+                >
+                  {stepCoveragePickerEntry
+                    ? gymSessionForStepCoverageEntry(stepCoveragePickerEntry)
+                        ?.name ||
+                      stepCoverageSourceForEntry(stepCoveragePickerEntry)
+                        ?.label ||
+                      state.metrics.find(
+                        (metric) =>
+                          metric.id ===
+                          stepCoverageSourceForEntry(stepCoveragePickerEntry)
+                            ?.metricId,
+                      )?.name ||
+                      "Activity"
+                    : "Activity"}
+                </Text>
+              </View>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={t("Close")}
+                hitSlop={8}
+                onPress={closeStepCoveragePicker}
+                style={styles.stepActivityClose}
+              >
+                <Ionicons name="close" size={20} color={colors.ink} />
+              </Pressable>
+            </View>
+            <Text style={[styles.stepActivityHelp, { color: colors.muted }]}>Choose what best matches this workout or synced active-energy entry. HabHub uses it only to avoid counting the same measured movement twice.</Text>
+            <ScrollView
+              nestedScrollEnabled
+              keyboardShouldPersistTaps="handled"
+              style={styles.stepActivityList}
+              contentContainerStyle={styles.stepActivityListContent}
+            >
+              {selectedStepCoverageActivity ? <Pressable
+                accessibilityRole="switch"
+                accessibilityState={{
+                  checked: selectedStepCoverageResolution?.included !== false,
+                }}
+                accessibilityLabel={t("Use for Step coverage")}
+                onPress={() => {
+                  if (selectedStepCoverageResolution?.included === false)
+                    chooseStepCoverageActivity(selectedStepCoverageActivity.key);
+                  else excludeStepCoverageEntry();
+                }}
+                style={[
+                  styles.stepActivityRow,
+                  { borderColor: colors.border },
+                  selectedStepCoverageResolution?.included !== false && {
+                    backgroundColor: colors.primarySoft,
+                  },
+                ]}
+              >
+                <View style={[styles.stepActivityIcon, { backgroundColor: colors.canvas }]}>
+                  <Ionicons name="remove" size={16} color={colors.muted} />
+                </View>
+                <View style={styles.grow}>
+                  <Text style={[styles.stepActivityName, { color: colors.ink }]}>Use for Step coverage</Text>
+                  <Text style={[styles.stepActivityMeta, { color: colors.muted }]}>Use this workout to explain measured steps</Text>
+                </View>
+                <Ionicons
+                  name={
+                    selectedStepCoverageResolution?.included !== false
+                      ? "checkbox"
+                      : "square-outline"
+                  }
+                  size={18}
+                  color={
+                    selectedStepCoverageResolution?.included !== false
+                      ? accent
+                      : colors.faint
+                  }
+                />
+              </Pressable> : null}
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ expanded: stepActivityChoicesOpen }}
+                accessibilityLabel={t(
+                  selectedStepCoverageActivity
+                    ? "Change Step activity"
+                    : "Choose Step activity",
+                )}
+                onPress={() =>
+                  setStepActivityChoicesOpen((open) => !open)
+                }
+                style={[
+                  styles.stepActivityRow,
+                  { borderColor: colors.border },
+                ]}
+              >
+                <View
+                  style={[
+                    styles.stepActivityIcon,
+                    { backgroundColor: `${accent}14` },
+                  ]}
+                >
+                  <Ionicons name="list-outline" size={16} color={accent} />
+                </View>
+                <View style={styles.grow}>
+                  <Text
+                    translate={false}
+                    style={[styles.stepActivityName, { color: colors.ink }]}
+                  >
+                    {selectedStepCoverageActivity
+                      ? translateDomainText(
+                          language,
+                          selectedStepCoverageActivity.label,
+                        )
+                      : t("Choose activity")}
+                  </Text>
+                  <Text
+                    style={[styles.stepActivityMeta, { color: colors.muted }]}
+                  >
+                    {selectedStepCoverageActivity
+                      ? "Tap to choose a different activity"
+                      : "Open the workout activity list"}
+                  </Text>
+                </View>
+                <Ionicons
+                  name={
+                    stepActivityChoicesOpen ? "chevron-up" : "chevron-down"
+                  }
+                  size={18}
+                  color={colors.muted}
+                />
+              </Pressable>
+              {stepActivityChoicesOpen ? stepCoverageActivities.map((activity) => {
+                const selected =
+                  selectedStepCoverageActivity?.key === activity.key;
+                return (
+                  <Pressable
+                    key={activity.key}
+                    accessibilityRole="radio"
+                    accessibilityState={{ checked: selected }}
+                    accessibilityLabel={translateDomainText(
+                      language,
+                      activity.label,
+                    )}
+                    onPress={() => chooseStepCoverageActivity(activity.key)}
+                    style={[
+                      styles.stepActivityRow,
+                      { borderColor: colors.border },
+                      selected && { backgroundColor: colors.primarySoft },
+                    ]}
+                  >
+                    <View style={[styles.stepActivityIcon, { backgroundColor: `${accent}14` }]}>
+                      <Ionicons
+                        name={
+                          activity.mode === "direct"
+                            ? "walk-outline"
+                            : "fitness-outline"
+                        }
+                        size={16}
+                        color={accent}
+                      />
+                    </View>
+                    <View style={styles.grow}>
+                      <Text translate={false} style={[styles.stepActivityName, { color: colors.ink }]}>{translateDomainText(language, activity.label)}</Text>
+                      <Text style={[styles.stepActivityMeta, { color: colors.muted }]}>
+                        {activity.mode === "direct"
+                          ? "Uses measured distance, pace and duration"
+                          : formatLocalizedTemplate(
+                              t,
+                              "{value} step-equivalent/min",
+                              { value: String(activity.stepsPerMinute ?? 0) },
+                            )}
+                      </Text>
+                    </View>
+                    <Ionicons
+                      name={selected ? "radio-button-on" : "radio-button-off"}
+                      size={18}
+                      color={selected ? accent : colors.faint}
+                    />
+                  </Pressable>
+                );
+              }) : null}
+            </ScrollView>
+          </Pressable>
+        </Pressable>
+      </Modal>
       <Modal
         transparent
         visible={Boolean(editingFoodEntry)}
@@ -3459,6 +4152,12 @@ function WeeklyDetail({
 }) {
   const locale = useLocale();
   const { t } = useLocalization();
+  const [entriesOpenOverride, setEntriesOpenOverride] = useState<boolean>();
+  const entryRangeView = ["week", "month", "year", "overall"].includes(
+    period,
+  );
+  const entriesOpen = entriesOpenOverride ?? !entryRangeView;
+  useEffect(() => setEntriesOpenOverride(undefined), [day, period]);
   const tracker = state.metrics.find(
     (metric) => metric.id === "weekly_deficit_balance",
   );
@@ -3809,87 +4508,6 @@ function WeeklyDetail({
           />
         </View>
       </Card>
-      <Card style={styles.weeklyEntriesCard}>
-        <View style={styles.weeklyEntriesHeading}>
-          <View
-            style={[
-              styles.weeklyReportIcon,
-              { backgroundColor: `${trackerColor}18` },
-            ]}
-          >
-            <Ionicons name="list-outline" size={18} color={trackerColor} />
-          </View>
-          <View style={styles.grow}>
-            <Text style={[styles.entryTitle, { color: colors.ink }]}>Entries</Text>
-            <Text style={[styles.time, { color: colors.muted }]}>
-              End-of-day balances from food-logged days
-            </Text>
-          </View>
-        </View>
-        {report.dailyBalances.length ? (
-          [...report.dailyBalances].reverse().map((entry, index) => (
-            <View
-              key={entry.id}
-              style={[
-                styles.weeklyEntryRow,
-                index > 0
-                  ? { borderTopColor: colors.border, borderTopWidth: 1 }
-                  : null,
-              ]}
-            >
-              <View
-                style={[
-                  styles.weeklyEntryIcon,
-                  {
-                    backgroundColor:
-                      entry.balance >= 0
-                        ? `${trackerColor}18`
-                        : `${palette.red}18`,
-                  },
-                ]}
-              >
-                <Ionicons
-                  name={entry.balance >= 0 ? "trending-up" : "trending-down"}
-                  size={15}
-                  color={entry.balance >= 0 ? trackerColor : palette.red}
-                />
-              </View>
-              <View style={styles.grow}>
-                <Text style={[styles.entryTitle, { color: colors.ink }]}>
-                  {friendlyDate(entry.startDate, locale)}
-                </Text>
-                <Text style={[styles.time, { color: colors.muted }]}>
-                  {formatLocalizedTemplate(
-                    t,
-                    "{actual} kcal actual · {target} kcal target",
-                    {
-                      actual: Math.round(entry.actual).toLocaleString(locale),
-                      target: Math.round(entry.target).toLocaleString(locale),
-                    },
-                  )}
-                </Text>
-              </View>
-              <Text
-                numberOfLines={2}
-                adjustsFontSizeToFit
-                minimumFontScale={0.72}
-                style={[
-                  styles.weeklyEntryValue,
-                  {
-                    color: entry.balance >= 0 ? trackerColor : palette.red,
-                  },
-                ]}
-              >
-                {bucketBalanceLabel(entry.balance)}
-              </Text>
-            </View>
-          ))
-        ) : (
-          <Text style={[styles.empty, { color: colors.muted }]}>
-            No completed food-logged days in this period yet.
-          </Text>
-        )}
-      </Card>
       <Card style={styles.weeklyReportCard}>
         <View style={styles.weeklyReportHeading}>
           <View
@@ -3926,6 +4544,62 @@ function WeeklyDetail({
           />
         </View>
       </Card>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded: entriesOpen }}
+        accessibilityLabel={`${entriesOpen ? "Collapse" : "Expand"} entries`}
+        onPress={() => setEntriesOpenOverride(!entriesOpen)}
+        style={styles.logHeader}
+      >
+        <Text style={[styles.section, { color: colors.ink }]}>Entries</Text>
+        <View style={styles.entryHeaderMeta}>
+          <Text style={[styles.entryEditHint, { color: colors.faint }]}>End-of-day balances from food-logged days</Text>
+          <Ionicons name={entriesOpen ? "chevron-up" : "chevron-down"} size={17} color={accent} />
+        </View>
+      </Pressable>
+      {entriesOpen ? <View style={styles.entries}>
+        {report.dailyBalances.length ? (
+          [...report.dailyBalances].reverse().map((entry) => (
+            <Card key={entry.id} style={styles.entry}>
+              <View style={styles.entryTop}>
+                <View style={styles.grow}>
+                  <Text style={[styles.entryTitle, { color: colors.ink }]}>
+                    {friendlyDate(entry.startDate, locale)}
+                  </Text>
+                  <Text style={[styles.time, { color: colors.muted }]}>
+                    {formatLocalizedTemplate(
+                      t,
+                      "{actual} kcal actual · {target} kcal target",
+                      {
+                        actual: Math.round(entry.actual).toLocaleString(locale),
+                        target: Math.round(entry.target).toLocaleString(locale),
+                      },
+                    )}
+                  </Text>
+                </View>
+                <Text
+                  numberOfLines={2}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.72}
+                  style={[
+                    styles.entryValue,
+                    {
+                      color: entry.balance >= 0 ? trackerColor : palette.red,
+                      textAlign: "right",
+                    },
+                  ]}
+                >
+                  {bucketBalanceLabel(entry.balance)}
+                </Text>
+              </View>
+            </Card>
+          ))
+        ) : (
+          <Text style={[styles.empty, { color: colors.muted }]}>
+            No completed food-logged days in this period yet.
+          </Text>
+        )}
+      </View> : null}
     </Screen>
   );
 }
@@ -5400,6 +6074,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
   },
+  entryHeaderMeta: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 7, flex: 1 },
   entryEditHint: { maxWidth: "62%", fontSize: 7.5, fontWeight: "700", textAlign: "right" },
   logActions: { flexDirection: "row", alignItems: "center", gap: 6 },
   section: { fontSize: 13, fontWeight: "900" },
@@ -5453,6 +6128,57 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  stepActivityBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,.46)",
+    justifyContent: "flex-end",
+    padding: 12,
+  },
+  stepActivitySheet: {
+    maxHeight: "82%",
+    borderRadius: 22,
+    padding: 14,
+    gap: 7,
+  },
+  stepActivityHandle: {
+    width: 36,
+    height: 4,
+    borderRadius: 3,
+    alignSelf: "center",
+  },
+  stepActivityHeading: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  stepActivityTitle: { fontSize: 14, fontWeight: "900" },
+  stepActivityWorkout: { fontSize: 8.5, marginTop: 1 },
+  stepActivityClose: {
+    width: 32,
+    height: 32,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  stepActivityHelp: { fontSize: 8, lineHeight: 12 },
+  stepActivityList: { flexGrow: 0 },
+  stepActivityListContent: { paddingBottom: 3 },
+  stepActivityRow: {
+    minHeight: 47,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 4,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  stepActivityIcon: {
+    width: 31,
+    height: 31,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  stepActivityName: { fontSize: 9.5, fontWeight: "800" },
+  stepActivityMeta: { fontSize: 7, marginTop: 1 },
   foodTimeBackdrop: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,.46)",
@@ -5480,26 +6206,6 @@ const styles = StyleSheet.create({
   image: { width: 92, height: 66, borderRadius: 10, marginTop: 8 },
   photoImageFrame: { width: "100%", height: 230, marginTop: 8 },
   photoImage: { width: "100%", height: "100%", borderRadius: 13 },
-  photoToggle: {
-    minHeight: 38,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  photoCompare: { flexDirection: "row", gap: 7, marginTop: 7 },
-  compareImageFrame: { flex: 1, height: 150 },
-  compareImage: { width: "100%", height: "100%", borderRadius: 11 },
-  compareButton: {
-    height: 38,
-    borderWidth: 1,
-    borderRadius: 12,
-    marginTop: 8,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-  },
-  compareText: { fontSize: 9, fontWeight: "900" },
   empty: { fontSize: 10, textAlign: "center" },
   weeklyBalanceChartWrap: { marginTop: 14, gap: 4 },
   weeklyBalanceChart: { height: 126, position: "relative" },
@@ -5551,29 +6257,6 @@ const styles = StyleSheet.create({
   },
   weeklyBalanceScale: { fontSize: 7, fontWeight: "700", textAlign: "center" },
   weeklyReportCard: { gap: 8 },
-  weeklyEntriesCard: { gap: 8 },
-  weeklyEntriesHeading: { flexDirection: "row", alignItems: "center", gap: 9 },
-  weeklyEntryRow: {
-    minHeight: 52,
-    paddingVertical: 8,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 9,
-  },
-  weeklyEntryIcon: {
-    width: 30,
-    height: 30,
-    borderRadius: 10,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  weeklyEntryValue: {
-    width: "35%",
-    fontSize: 10,
-    lineHeight: 13,
-    fontWeight: "900",
-    textAlign: "right",
-  },
   weeklyReportHeading: { flexDirection: "row", alignItems: "center", gap: 9 },
   weeklyReportIcon: {
     width: 34,

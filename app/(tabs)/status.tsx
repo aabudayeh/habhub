@@ -34,6 +34,10 @@ import { Card, PageHeader, Screen } from "@/src/components/ui";
 import { GOAL_COMPLETE_COLOR } from "@/src/domain/colors";
 import { dateKey, dateWithOffsetFrom } from "@/src/domain/date";
 import {
+  metricLoggingDestination,
+  metricLoggingTargetId,
+} from "@/src/domain/metricLogging";
+import {
   periodDates,
   shiftedPeriodAnchor,
   type LeaderboardPeriod,
@@ -127,13 +131,11 @@ function GoalOrbit({
   const met = opportunities > 0 && completed === opportunities;
   const lastTapRef = useRef(0);
   const tapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const loggingDestination = metricLoggingDestination(metric);
+  const loggingTargetId = metricLoggingTargetId(metric);
   const canLog =
-    metric.dataType !== "calculated" &&
-    !metric.fastingSettings &&
-    metric.id !== "screen_time" &&
-    metric.id !== "blood_pressure_diastolic" &&
-    !(metric.id === "pulse" && bloodPressureComposite) &&
-    (metric.manualEntry !== false || metric.id === "steps");
+    loggingDestination !== "none" &&
+    !(metric.id === "pulse" && bloodPressureComposite);
   const openDetails = useCallback(() => {
     router.navigate({
       pathname: "/metric-detail",
@@ -145,11 +147,30 @@ function GoalOrbit({
       openDetails();
       return;
     }
+    if (loggingDestination === "workout") {
+      router.navigate("/gym" as never);
+      return;
+    }
+    if (!loggingTargetId) {
+      openDetails();
+      return;
+    }
     router.navigate({
       pathname: "/log",
-      params: { metric: metric.id, date: anchor },
+      params: {
+        metric: loggingTargetId,
+        date: anchor,
+        focusMetric: loggingTargetId === metric.id ? undefined : metric.id,
+      },
     } as never);
-  }, [anchor, canLog, metric.id, openDetails]);
+  }, [
+    anchor,
+    canLog,
+    loggingDestination,
+    loggingTargetId,
+    metric.id,
+    openDetails,
+  ]);
   const handlePress = useCallback(() => {
     if (!canLog) {
       openDetails();

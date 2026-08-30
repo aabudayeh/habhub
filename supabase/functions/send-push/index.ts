@@ -1,5 +1,14 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import {
+  createClient,
+  type SupabaseClient,
+} from "https://esm.sh/@supabase/supabase-js@2";
 import webpush from "npm:web-push@3.6.7";
+
+// This server function intentionally touches several internal tables without
+// a generated database schema. An explicit untyped admin client prevents
+// ReturnType from collapsing generic table results to `never` as the Supabase
+// client type definitions evolve.
+type AdminClient = SupabaseClient<any>;
 
 type PushCategory =
   | "chat"
@@ -114,7 +123,7 @@ Deno.serve(async (request) => {
 
   let claimedEvent: string | undefined;
   let canonical: CanonicalEvent | undefined;
-  let admin: ReturnType<typeof createClient> | undefined;
+  let admin: AdminClient | undefined;
   try {
     const url = Deno.env.get("SUPABASE_URL")!;
     const service = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -186,7 +195,9 @@ Deno.serve(async (request) => {
       // is defensive; canonical legacy bridges still derive every field from
       // committed base tables and never accept client copy or audiences.
       if (storedError && !isMissingOutboxError(storedError)) throw storedError;
-      let stored = exactStored;
+      let stored: StoredPushEvent | null = exactStored
+        ? (exactStored as StoredPushEvent)
+        : null;
       if (
         stored &&
         !internalServiceRequest &&
@@ -209,7 +220,7 @@ Deno.serve(async (request) => {
           // Old remove/leave clients invoke before their membership mutation.
           // Their bounded retry will find the trigger-owned row post-commit.
           return json({ sent: 0, retryable: true, accepted: false });
-        stored = legacy.row;
+        stored = legacy.row ?? null;
         if (!legacy.recognized) {
           const committed = await legacyCommittedCanonicalEvent(
             admin,
@@ -219,7 +230,7 @@ Deno.serve(async (request) => {
           );
           if (committed.recognized && !committed.row)
             return json({ sent: 0, retryable: true, accepted: false });
-          stored = committed.row;
+          stored = committed.row ?? null;
           if (!committed.recognized) {
             const derived = await legacyCompetitionCanonicalEvent(
               admin,
@@ -229,7 +240,7 @@ Deno.serve(async (request) => {
             );
             if (derived.recognized && !derived.row)
               return json({ sent: 0, retryable: true, accepted: false });
-            stored = derived.row;
+            stored = derived.row ?? null;
           }
         }
       }
@@ -719,7 +730,7 @@ Deno.serve(async (request) => {
 });
 
 async function canonicalChatEvent(
-  admin: ReturnType<typeof createClient>,
+  admin: AdminClient,
   senderId: string,
   groupId: string,
   clientMessageId: string,
@@ -742,7 +753,7 @@ async function canonicalChatEvent(
   const { data: stored, error: messageError } = await admin
     .from("messages")
     .select(
-      "created_at, content, conversation_id, recipient_id, image_path, push_dispatched_at",
+      "created_at, content, conversation_id, recipient_id, image_path, metadata, push_dispatched_at",
     )
     .eq("group_id", groupId)
     .eq("sender_id", senderId)
@@ -771,7 +782,18 @@ async function canonicalChatEvent(
   const senderName = profile?.display_name?.trim() || "A friend";
   const groupName = group?.name?.trim() || "Your group";
   const direct = Boolean(stored.recipient_id);
-  const text = stored.content?.trim() || "Sent an image";
+  const preview = canonicalChatPreview(stored.content, stored.metadata);
+  const text = preview.text;
+  const fallbackBodies = preview.fallback
+    ? Object.fromEntries(
+        Object.entries(localizedChatFallback(preview.fallback)).map(
+          ([language, value]) => [
+            language,
+            direct ? value : `${senderName}: ${value}`,
+          ],
+        ),
+      )
+    : undefined;
   return {
     event: {
       eventKey,
@@ -787,6 +809,7 @@ async function canonicalChatEvent(
         120,
       ),
       body: pushPreview(direct ? text : `${senderName}: ${text}`, 220),
+      bodies: fallbackBodies,
       data: {
         route: "/chat",
         category: "chat",
@@ -804,7 +827,7 @@ async function canonicalChatEvent(
 }
 
 async function legacyMembershipCanonicalEvent(
-  admin: ReturnType<typeof createClient>,
+  admin: AdminClient,
   dispatcherId: string,
   eventKey: string,
   requestedGroupId: unknown,
@@ -1000,7 +1023,7 @@ async function legacyMembershipCanonicalEvent(
 }
 
 async function legacyCommittedCanonicalEvent(
-  admin: ReturnType<typeof createClient>,
+  admin: AdminClient,
   dispatcherId: string,
   eventKey: string,
   requestedGroupId: unknown,
@@ -1139,7 +1162,7 @@ async function legacyCommittedCanonicalEvent(
           ? `${acceptingName} accepted your challenge.`
           : "A friend accepted your challenge.",
       data: {
-        route: "/group",
+        route: "/challenges",
         groupId,
         challengeId,
         challengeEvent: started ? "started" : "accepted",
@@ -1151,7 +1174,7 @@ async function legacyCommittedCanonicalEvent(
 }
 
 async function legacyCompetitionCanonicalEvent(
-  admin: ReturnType<typeof createClient>,
+  admin: AdminClient,
   dispatcherId: string,
   eventKey: string,
   requestedGroupId: unknown,
@@ -1320,7 +1343,7 @@ async function legacyCompetitionCanonicalEvent(
 }
 
 async function storeCanonicalLegacyEvent(
-  admin: ReturnType<typeof createClient>,
+  admin: AdminClient,
   input: Record<string, unknown>,
 ) {
   const boundedInput = {
@@ -1585,7 +1608,7 @@ function syntheticStoredEvent(input: Record<string, unknown>): StoredPushEvent {
 }
 
 async function canDispatchStoredEvent(
-  admin: ReturnType<typeof createClient>,
+  admin: AdminClient,
   event: StoredPushEvent,
   userId: string,
 ) {
@@ -1602,7 +1625,7 @@ async function canDispatchStoredEvent(
 }
 
 async function recipientChatNicknames(
-  admin: ReturnType<typeof createClient>,
+  admin: AdminClient,
   event: CanonicalEvent,
   recipientIds: string[],
 ) {
@@ -1645,21 +1668,30 @@ function eventForPushRecipient(
     !direct && profilePrefix && event.body.startsWith(profilePrefix)
       ? `${nickname}:${event.body.slice(profilePrefix.length)}`
       : event.body;
+  const bodies = event.bodies
+    ? Object.fromEntries(
+        Object.entries(event.bodies).map(([language, value]) => [
+          language,
+          !direct && profilePrefix && value.startsWith(profilePrefix)
+            ? `${nickname}:${value.slice(profilePrefix.length)}`
+            : value,
+        ]),
+      )
+    : undefined;
   return {
     ...event,
     title: direct ? `Direct message from ${nickname}` : event.title,
     body,
-    // Canonical chat copy is English user-authored content rather than an app
-    // phrase catalogue. Clearing optional localized fallbacks ensures the
-    // recipient-specific alias remains the final visible sender identity.
+    // User-authored copy has no localized variants. Attachment/image fallbacks
+    // do, and their sender prefix is rewritten for this recipient's nickname.
     titles: undefined,
-    bodies: undefined,
+    bodies,
     data: { ...event.data, senderName: nickname },
   };
 }
 
 async function canonicalRecipients(
-  admin: ReturnType<typeof createClient>,
+  admin: AdminClient,
   event: CanonicalEvent,
   senderId: string,
 ) {
@@ -1714,7 +1746,7 @@ async function canonicalRecipients(
 }
 
 async function markCanonicalEventAccepted(
-  admin: ReturnType<typeof createClient>,
+  admin: AdminClient,
   event: CanonicalEvent,
   outcome: string,
 ) {
@@ -1742,7 +1774,7 @@ async function markCanonicalEventAccepted(
 }
 
 async function markMessageAccepted(
-  admin: ReturnType<typeof createClient>,
+  admin: AdminClient,
   groupId: string,
   senderId: string,
   messageId: string,
@@ -1757,7 +1789,7 @@ async function markMessageAccepted(
 }
 
 async function releaseClaim(
-  admin: ReturnType<typeof createClient>,
+  admin: AdminClient,
   eventKey: string,
 ) {
   const released = await admin
@@ -1799,6 +1831,12 @@ function preferenceAllowed(
     return false;
   if (event.category === "winner" && settings.badgesAndWinners === false)
     return false;
+  if (
+    event.eventType === "social_reaction" &&
+    (groupPreference.socialReactions ?? settings.socialReactions ?? true) ===
+      false
+  )
+    return false;
   if (event.category === "challenge") {
     // Legacy token rows used the badges/winners switch for challenges. Once a
     // new client writes the dedicated field it becomes fully independent.
@@ -1833,6 +1871,7 @@ function preferenceAllowed(
   }
   if (
     event.category === "metric" &&
+    event.eventType !== "social_reaction" &&
     (groupPreference.trackerUpdates ??
       groupPreference.progressUpdates ??
       settings.groupMetricActivity ??
@@ -1947,6 +1986,54 @@ function pushPreview(value: string, maxLength: number) {
   const normalized = value.replace(/\s+/g, " ").trim();
   if (normalized.length <= maxLength) return normalized;
   return `${normalized.slice(0, Math.max(1, maxLength - 1)).trimEnd()}…`;
+}
+
+function canonicalChatPreview(content: unknown, metadata: unknown): {
+  text: string;
+  fallback?: "attachment" | "image";
+} {
+  const source = typeof content === "string" ? content : "";
+  const attachmentLinks = source.match(
+    /habhub:\/\/(?:recap|challenge|metric-log)\?[^\s]*/gi,
+  );
+  const visibleText = source
+    .replace(/habhub:\/\/(?:recap|challenge|metric-log)\?[^\s]*/gi, "")
+    .trim();
+  const messageMetadata = objectRecord(metadata);
+  const hasAttachment =
+    Boolean(attachmentLinks?.length) ||
+    Boolean(messageMetadata.todoAttachment);
+  if (visibleText)
+    return {
+      text: `${visibleText}${hasAttachment ? " · Attachment" : ""}`,
+    };
+  return hasAttachment
+    ? { text: "Shared an attachment", fallback: "attachment" }
+    : { text: "Sent an image", fallback: "image" };
+}
+
+function localizedChatFallback(kind: "attachment" | "image") {
+  if (kind === "attachment")
+    return {
+      en: "Shared an attachment",
+      ar: "شارك مرفقًا",
+      es: "Compartió un archivo adjunto",
+      "zh-Hans": "分享了一个附件",
+      sv: "Delade en bilaga",
+      de: "Hat einen Anhang geteilt",
+      ru: "Поделился вложением",
+      fr: "A partagé une pièce jointe",
+    };
+  return {
+    en: "Sent an image",
+    ar: "أرسل صورة",
+    es: "Envió una imagen",
+    "zh-Hans": "发送了一张图片",
+    sv: "Skickade en bild",
+    de: "Hat ein Bild gesendet",
+    ru: "Отправлено изображение",
+    fr: "A envoyé une image",
+  };
 }
 
 function normalizedUuid(value: unknown) {

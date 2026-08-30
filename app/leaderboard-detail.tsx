@@ -70,15 +70,43 @@ import {
   sharedWorkoutBreakdownEntries,
 } from "@/src/domain/sharedLeaderboardLogs";
 import { useCloudSyncActions } from "@/src/cloud/CloudSyncProvider";
-import { GroupSocialTarget } from "@/src/cloud/groupSocial";
+import {
+  GroupSocialReactionKind,
+  GroupSocialTarget,
+  metricEntrySocialTarget,
+} from "@/src/cloud/groupSocial";
 import { useGroupSocialEngagement } from "@/src/cloud/useGroupSocialEngagement";
 import { isCloudGroupId } from "@/src/cloud/groupCloud";
 import { useApp } from "@/src/state/AppProvider";
+import { stageChatShareImage } from "@/src/storage/chatShareImageStaging";
 import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { AppState, MetricEntry, PhotoUpdate } from "@/src/types";
 
 const SCORE_ID = "__score";
+const LEADERBOARD_PERIODS = new Set<LeaderboardPeriod>([
+  "today",
+  "yesterday",
+  "week",
+  "month",
+  "year",
+  "overall",
+  "custom",
+]);
+
+function routePeriod(value: string | undefined): LeaderboardPeriod | undefined {
+  return value && LEADERBOARD_PERIODS.has(value as LeaderboardPeriod)
+    ? (value as LeaderboardPeriod)
+    : undefined;
+}
+
+function routeDate(value: string | undefined): string | undefined {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return undefined;
+  const parsed = new Date(`${value}T12:00:00`);
+  return Number.isNaN(parsed.getTime()) || dateKey(parsed) !== value
+    ? undefined
+    : value;
+}
 
 export default function LeaderboardDetail() {
   const params = useLocalSearchParams<{
@@ -98,10 +126,12 @@ export default function LeaderboardDetail() {
   const colors = useAppColors();
   const accent = useGroupAccent();
   const scrollRef = useRef<ScrollView>(null);
+  const requestedPeriod = routePeriod(params.period);
+  const requestedAnchor = routeDate(params.anchor);
   const [period, setPeriod] = useState<LeaderboardPeriod>(
-    (params.period as LeaderboardPeriod) || "today",
+    requestedPeriod || "today",
   );
-  const [anchor, setAnchor] = useState(params.anchor || dateKey());
+  const [anchor, setAnchor] = useState(requestedAnchor || dateKey());
   const dateNavigatorOpen =
     state.settings.leaderboardDetailDateNavigatorCollapsed === false;
   const [showCalendar, setShowCalendar] = useState(false);
@@ -115,6 +145,13 @@ export default function LeaderboardDetail() {
   const [detailsRefreshAttempt, setDetailsRefreshAttempt] = useState(0);
   const [highlightedEntryId, setHighlightedEntryId] = useState<string>();
   const handledLogFocus = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    // Expo Router can reuse this mounted detail screen for another alert/chat
+    // deep link. Keep the view range aligned with that new route instead of
+    // continuing to refresh the date that happened to mount first.
+    if (requestedPeriod) setPeriod(requestedPeriod);
+    if (requestedAnchor) setAnchor(requestedAnchor);
+  }, [requestedAnchor, requestedPeriod]);
   useEffect(() => {
     let active = true;
     // Paint the route shell first, then calculate details on the next task.
@@ -138,7 +175,14 @@ export default function LeaderboardDetail() {
   // The main Leaderboard hydrates compact all-time statuses. Detail requests
   // then use the earliest real date represented by those statuses so raw item
   // pagination never starts at an artificial 2000 sentinel.
-  const targetedActivitySince = dates[0];
+  const targetedActivitySince =
+    period === "overall"
+      ? periodDates(
+          "overall",
+          anchor,
+          state.settings.weekStartsOn ?? 1,
+        )[0]
+      : dates[0];
   useEffect(() => {
     if (
       !detailsReady ||
@@ -202,12 +246,10 @@ export default function LeaderboardDetail() {
   const socialTargets = useMemo<GroupSocialTarget[]>(
     () =>
       visibleEntries
-        .filter(
-          (entry) =>
-            entry.source !== "calculated" &&
-            !entry.id.startsWith("shared-total:"),
-        )
-        .map((entry) => ({ type: "metric_entry", id: entry.id })),
+        .flatMap((entry) => {
+          const target = metricEntrySocialTarget(entry);
+          return target ? [target] : [];
+        }),
     [visibleEntries],
   );
   const social = useGroupSocialEngagement(state.group.id, socialTargets);
@@ -218,11 +260,24 @@ export default function LeaderboardDetail() {
       ),
     [state.group.metricConfiguration],
   );
-  const requested = (params.metrics || "").split(",").filter(Boolean);
-  const requestedAvailable = requested.filter(
-    (id) =>
-      id === SCORE_ID || available.some((metric) => metric.id === id),
+  const requestedMetricsParam = params.metrics?.trim() ?? "";
+  const requested = useMemo(
+    () => requestedMetricsParam.split(",").filter(Boolean),
+    [requestedMetricsParam],
   );
+  const requestedAvailable = useMemo(
+    () =>
+      requested.filter(
+        (id) =>
+          id === SCORE_ID || available.some((metric) => metric.id === id),
+      ),
+    [available, requested],
+  );
+  const requestedAvailableKey = requestedAvailable.join("\u0000");
+  const loggedIdsKey = loggedIds.join("\u0000");
+  const metricSelectionEditedRef = useRef(false);
+  const lastMetricsParamRef = useRef(requestedMetricsParam);
+  const appliedMetricRouteRef = useRef("");
   const [selectedIds, setSelectedIds] = useState<string[]>(
     requestedAvailable.length
       ? requestedAvailable
@@ -232,12 +287,67 @@ export default function LeaderboardDetail() {
   );
 
   useEffect(() => {
+    const routeChanged = lastMetricsParamRef.current !== requestedMetricsParam;
+    if (routeChanged) {
+      lastMetricsParamRef.current = requestedMetricsParam;
+      metricSelectionEditedRef.current = false;
+    }
+    if (!requestedMetricsParam) {
+      if (routeChanged) {
+        appliedMetricRouteRef.current = "";
+        setSelectedIds(loggedIds.length ? loggedIds : [SCORE_ID]);
+      }
+      return;
+    }
+    if (!requestedAvailableKey) return;
+    const requestKey = `${requestedMetricsParam}\u0001${requestedAvailableKey}`;
+    if (appliedMetricRouteRef.current === requestKey) return;
+    appliedMetricRouteRef.current = requestKey;
+    metricSelectionEditedRef.current = false;
+    setSelectedIds(requestedAvailableKey.split("\u0000").filter(Boolean));
+  }, [loggedIds, requestedAvailableKey, requestedMetricsParam]);
+
+  useEffect(() => {
+    if (
+      requestedMetricsParam ||
+      metricSelectionEditedRef.current ||
+      !loggedIdsKey
+    )
+      return;
+    // Score is only a provisional cold-start choice. When the durable group
+    // cache hydrates, select the item metrics it actually restored unless the
+    // user or a route has already made an explicit choice.
+    setSelectedIds((current) =>
+      current.length === 1 && current[0] === SCORE_ID
+        ? loggedIdsKey.split("\u0000").filter(Boolean)
+        : current,
+    );
+  }, [loggedIdsKey, requestedMetricsParam]);
+
+  const targetMemberId =
+    params.memberId &&
+    state.group.members.some((member) => member.id === params.memberId)
+      ? params.memberId
+      : undefined;
+  useEffect(() => {
+    if (!targetMemberId) return;
+    setOpenLogs((current) =>
+      current[targetMemberId]
+        ? current
+        : { ...current, [targetMemberId]: true },
+    );
+  }, [params.logFocusAt, targetMemberId]);
+
+  useEffect(() => {
     if (!params.entryId || !visibleEntries.length) return;
     const focusKey = `${params.entryId}:${params.logFocusAt ?? "initial"}`;
     if (handledLogFocus.current === focusKey) return;
-    const entry = visibleEntries.find((item) => item.id === params.entryId);
+    const entry = visibleEntries.find(
+      (item) => item.id === params.entryId || item.cloudId === params.entryId,
+    );
     if (!entry) return;
     handledLogFocus.current = focusKey;
+    metricSelectionEditedRef.current = true;
     setSelectedIds((current) =>
       current.includes(entry.metricId) ? current : [entry.metricId],
     );
@@ -527,7 +637,7 @@ export default function LeaderboardDetail() {
         {detailsRefreshFailed ? (
           <Card style={styles.detailRefreshCard}>
             <Text style={[styles.metricSub, { color: colors.muted }]}>
-              Could not refresh individual logs. Daily totals are still shown.
+              Could not refresh individual logs. Saved logs are still shown.
             </Text>
             <Button
               label="Retry individual logs"
@@ -846,7 +956,10 @@ export default function LeaderboardDetail() {
           title="What to show"
           items={options}
           selectedIds={selectedIds}
-          onChange={setSelectedIds}
+          onChange={(nextSelectedIds) => {
+            metricSelectionEditedRef.current = true;
+            setSelectedIds(nextSelectedIds);
+          }}
           emptyLabel="No shared logs in this range"
         />
       </View>
@@ -896,17 +1009,14 @@ function LogRow({
       (item) => item.id === entry.metricId,
     ) ?? state.metrics.find((item) => item.id === entry.metricId);
   const socialTarget = useMemo<GroupSocialTarget | undefined>(
-    () =>
-      entry.source === "calculated" || entry.id.startsWith("shared-total:")
-        ? undefined
-        : { type: "metric_entry", id: entry.id },
-    [entry.id, entry.source],
+    () => metricEntrySocialTarget(entry),
+    [entry],
   );
   const targetKey = socialTarget ? social.targetKey(socialTarget) : undefined;
   const reactions = targetKey
     ? social.reactionsByTarget.get(targetKey) ?? []
     : [];
-  const react = (reaction: "heart" | "thumbs_up" | "thumbs_down") => {
+  const react = (reaction: GroupSocialReactionKind) => {
     if (!socialTarget) return;
     void social.react(socialTarget, reaction).catch((reason) =>
       Alert.alert(
@@ -914,6 +1024,34 @@ function LogRow({
         reason instanceof Error ? reason.message : "Please try again.",
       ),
     );
+  };
+  const share = () => {
+    if (!socialTarget) return;
+    const attachment = {
+      kind: "metric_log" as const,
+      entryId: entry.id,
+      metricId: entry.metricId,
+      localDate: entry.localDate,
+      memberId: entry.userId,
+      title: entry.label?.trim() || metric?.name || "Shared log",
+    };
+    stageChatShareImage(
+      state.currentUserId,
+      state.group.id,
+      attachment,
+      entry.imageUri,
+    );
+    router.navigate({
+      pathname: "/(tabs)/chat",
+      params: {
+        metricLogEntryId: entry.id,
+        metricLogMetricId: entry.metricId,
+        metricLogLocalDate: entry.localDate,
+        metricLogMemberId: entry.userId,
+        metricLogTitle: entry.label?.trim() || metric?.name || "Shared log",
+        metricLogShareAt: Date.now().toString(),
+      },
+    } as never);
   };
   useEffect(() => {
     if (!highlighted) return;
@@ -1023,6 +1161,7 @@ function LogRow({
                 ["thumbs_up", "thumbs-up-outline"],
                 ["thumbs_down", "thumbs-down-outline"],
                 ["heart", "heart-outline"],
+                ["cheer", "megaphone-outline"],
               ] as const
             ).map(([reaction, icon]) => {
               const selected = reactions.some(
@@ -1049,7 +1188,13 @@ function LogRow({
                   ]}
                 >
                   <Ionicons
-                    name={selected && reaction === "heart" ? "heart" : icon}
+                    name={
+                      selected && reaction === "heart"
+                        ? "heart"
+                        : selected && reaction === "cheer"
+                          ? "megaphone"
+                          : icon
+                    }
                     size={14}
                     color={selected ? metric.color : colors.muted}
                   />
@@ -1061,6 +1206,18 @@ function LogRow({
                 </Pressable>
               );
             })}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Share this log in chat"
+              onPress={share}
+              style={[
+                styles.socialAction,
+                { borderColor: colors.border, backgroundColor: colors.card },
+              ]}
+            >
+              <Ionicons name="paper-plane-outline" size={14} color={colors.muted} />
+              <Text style={[styles.socialCount, { color: colors.muted }]}>Share</Text>
+            </Pressable>
           </View>
         ) : null}
       </View>

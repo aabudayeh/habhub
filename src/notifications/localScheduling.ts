@@ -235,8 +235,13 @@ export function scheduleImmediateManagedLocalNotification(
 /** Sign-out fence: remove every alarm/banner before another account can load. */
 export function clearAllLocalNotifications(storageKeys: readonly string[]) {
   return managedLocalNotificationGate.suspendAndRun(async () => {
-    await Notifications.cancelAllScheduledNotificationsAsync();
-    await Notifications.dismissAllNotificationsAsync();
+    // expo-notifications intentionally omits these native scheduling methods
+    // on Web. Account cleanup must still clear HabHub's persisted schedule
+    // ownership without turning a successful Supabase sign-out into an error.
+    if (Platform.OS !== "web") {
+      await Notifications.cancelAllScheduledNotificationsAsync();
+      await Notifications.dismissAllNotificationsAsync();
+    }
     await AsyncStorage.multiRemove([...new Set(storageKeys)]);
   });
 }

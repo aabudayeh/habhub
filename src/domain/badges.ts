@@ -18,7 +18,10 @@ import {
   metricPeriodStats,
   trackedGoalSummary,
 } from "@/src/domain/metrics";
-import { resolvedGroupChallengeWins } from "@/src/domain/groupChallenges";
+import {
+  type ResolvedChallengePlacement,
+  resolvedGroupChallengePlacements,
+} from "@/src/domain/groupChallenges";
 import { memberDisplayName } from "@/src/domain/members";
 import { palette } from "@/src/theme";
 import { AppState, GroupChallenge, MetricDefinition } from "@/src/types";
@@ -38,6 +41,16 @@ export type BadgeCategory =
   | "consistency"
   | "record"
   | "comeback";
+export type BadgeAim =
+  | "milestones"
+  | "streaks"
+  | "today"
+  | "previous-leaders"
+  | "leaders"
+  | "records"
+  | "consistency"
+  | "challenges";
+export type BadgeFrame = "crest" | "medallion" | "shield" | "burst";
 export type EarnedBadge = {
   id: string;
   icon: keyof typeof Ionicons.glyphMap;
@@ -67,8 +80,22 @@ export type BadgeLevelSummary = {
   nextLevelXp: number;
   earned: number;
   active: number;
+  locked: number;
   recurring: number;
+  challengeWins: number;
   nextBadge?: EarnedBadge;
+  topEarnedBadges: { badge: EarnedBadge; xp: number }[];
+};
+
+export type BadgeXpSummary = {
+  earned: number;
+  available: number;
+};
+
+export type BadgeVisualSpec = {
+  frame: BadgeFrame;
+  primaryIcon: EarnedBadge["icon"];
+  accentIcon: EarnedBadge["icon"];
 };
 
 const LEVEL_TITLES = [
@@ -82,6 +109,204 @@ const LEVEL_TITLES = [
   "Goal specialist",
   "HabHub veteran",
 ] as const;
+
+const BADGE_XP_WEIGHTS = {
+  "goal-count:": 10,
+  "perfect-days:": 30,
+  "check-ins:": 5,
+  "streak-progress:": 3,
+  "challenge-wins:": 100,
+  "challenge-seconds:": 60,
+  "challenge-thirds:": 35,
+  "challenge-finishes:": 15,
+  "consistency-days:": 12,
+} as const;
+
+function badgeXpWeight(badge: EarnedBadge) {
+  if (badge.id.startsWith("personal-best:")) return 75;
+  return (
+    Object.entries(BADGE_XP_WEIGHTS).find(([prefix]) =>
+      badge.id.replace(/^earned:/, "").startsWith(prefix),
+    )?.[1] ?? 0
+  );
+}
+
+/**
+ * Returns the cumulative XP represented by an earned badge card. Milestone
+ * copies encode their reached counter in the final id segment, while personal
+ * records are one-off awards. Live/recurring positions intentionally stay at
+ * zero so losing a lead can never remove level XP.
+ */
+export function earnedBadgeXp(badge: EarnedBadge) {
+  let sourceId = badge.id;
+  let count = Math.max(0, badge.earnedCount ?? 0);
+  if (sourceId.startsWith("earned:")) {
+    const milestoneSeparator = sourceId.lastIndexOf(":");
+    const milestone = Number(sourceId.slice(milestoneSeparator + 1));
+    sourceId = sourceId.slice("earned:".length, milestoneSeparator);
+    count = Number.isFinite(milestone) ? Math.max(0, milestone) : count;
+  }
+  if (sourceId.startsWith("personal-best:")) return 75;
+  const weighted = Object.entries(BADGE_XP_WEIGHTS).find(([prefix]) =>
+    sourceId.startsWith(prefix),
+  );
+  return weighted ? count * weighted[1] : 0;
+}
+
+/** XP already represented by a badge and the remaining XP at its next tier. */
+export function badgeXpSummary(badge: EarnedBadge): BadgeXpSummary {
+  const earned = earnedBadgeXp(badge);
+  const weight = badgeXpWeight(badge);
+  const current = Math.max(0, badge.progress?.current ?? badge.earnedCount ?? 0);
+  const target = Math.max(current, badge.progress?.target ?? current);
+  return {
+    earned,
+    available:
+      badge.status === "earned" && !badge.progress
+        ? 0
+        : Math.max(0, target - current) * weight,
+  };
+}
+
+export function badgeAim(badge: EarnedBadge): BadgeAim {
+  if (badge.id.startsWith("challenge-")) return "challenges";
+  if (badge.category === "record") return "records";
+  if (badge.category === "streak") return "streaks";
+  if (badge.period === "today" || badge.id === "live") return "today";
+  if (badge.period === "yesterday" || badge.id === "yesterday")
+    return "previous-leaders";
+  if (badge.category === "competition") return "leaders";
+  if (badge.category === "consistency" || badge.category === "comeback")
+    return "consistency";
+  return "milestones";
+}
+
+/**
+ * One composable visual language for every award. Tracker awards put the
+ * tracker glyph in the centre and the achievement motif in the corner.
+ */
+export function badgeVisualSpec(
+  badge: EarnedBadge,
+  trackerIcon?: EarnedBadge["icon"],
+): BadgeVisualSpec {
+  const aim = badgeAim(badge);
+  if (aim === "records") {
+    return {
+      frame: "burst",
+      primaryIcon: trackerIcon ?? badge.icon,
+      accentIcon: "star",
+    };
+  }
+  if (aim === "challenges") {
+    return {
+      frame: "shield",
+      primaryIcon: badge.icon,
+      accentIcon: "flag",
+    };
+  }
+  if (aim === "previous-leaders") {
+    return {
+      frame: "medallion",
+      primaryIcon: "medal",
+      accentIcon: "checkmark",
+    };
+  }
+  if (aim === "today" || aim === "leaders") {
+    return {
+      frame: "crest",
+      primaryIcon: trackerIcon ?? badge.icon,
+      accentIcon: aim === "today" ? "flash" : "trophy",
+    };
+  }
+  if (aim === "streaks") {
+    return {
+      frame: "burst",
+      primaryIcon: trackerIcon ?? badge.icon,
+      accentIcon: "flame",
+    };
+  }
+  if (aim === "consistency") {
+    return {
+      frame: "medallion",
+      primaryIcon: badge.icon,
+      accentIcon: badge.category === "comeback" ? "trending-up" : "repeat",
+    };
+  }
+  return {
+    frame: "shield",
+    primaryIcon: trackerIcon ?? badge.icon,
+    accentIcon: "checkmark",
+  };
+}
+
+/**
+ * Picks three useful starter pins while preferring trackers selected during
+ * onboarding. Explicitly persisted pins (including an empty list) supersede
+ * this suggestion in the UI.
+ */
+export function defaultPinnedBadgeIds(
+  badges: readonly EarnedBadge[],
+  memberId: string,
+  preferredMetricIds: readonly string[],
+  limit = 3,
+) {
+  const preferred = new Set(preferredMetricIds);
+  const candidates = badges
+    .filter((badge) => badge.memberId === memberId)
+    .sort((left, right) => {
+      const statusScore = (badge: EarnedBadge) =>
+        badge.status === "earned"
+          ? 4
+          : badge.status === "progress"
+            ? 3
+            : badge.status === "recurring"
+              ? 2
+              : 1;
+      return (
+        Number(Boolean(right.metricId && preferred.has(right.metricId))) -
+          Number(Boolean(left.metricId && preferred.has(left.metricId))) ||
+        statusScore(right) - statusScore(left) ||
+        earnedBadgeXp(right) - earnedBadgeXp(left) ||
+        right.anchorDate.localeCompare(left.anchorDate)
+      );
+    });
+  const selected: EarnedBadge[] = [];
+  const add = (badge?: EarnedBadge) => {
+    if (badge && !selected.some((item) => item.id === badge.id))
+      selected.push(badge);
+  };
+  add(candidates.find((badge) => badgeAim(badge) === "records"));
+  add(
+    candidates.find(
+      (badge) =>
+        badge.metricId &&
+        preferred.has(badge.metricId) &&
+        badgeAim(badge) === "milestones",
+    ),
+  );
+  add(
+    candidates.find((badge) =>
+      ["challenges", "consistency", "previous-leaders"].includes(
+        badgeAim(badge),
+      ),
+    ),
+  );
+  for (const candidate of candidates) {
+    if (selected.length >= limit) break;
+    const aim = badgeAim(candidate);
+    add(
+      selected.some((badge) => badgeAim(badge) === aim) &&
+        candidates.length > limit
+        ? undefined
+        : candidate,
+    );
+  }
+  for (const candidate of candidates) {
+    if (selected.length >= limit) break;
+    add(candidate);
+  }
+  return selected.slice(0, limit).map((badge) => badge.id);
+}
 
 /**
  * A stable, easy-to-explain motivation score derived from badge counters.
@@ -104,12 +329,17 @@ export function badgeLevelSummary(
   const personalRecords = canonical.filter((badge) =>
     badge.id.startsWith("personal-best:"),
   ).length;
+  const challengeWins = countFor("challenge-wins:");
   const xp = Math.round(
     countFor("goal-count:") * 10 +
       countFor("perfect-days:") * 30 +
       countFor("check-ins:") * 5 +
       countFor("streak-progress:") * 3 +
-      countFor("challenge-wins:") * 100 +
+      challengeWins * 100 +
+      countFor("challenge-seconds:") * 60 +
+      countFor("challenge-thirds:") * 35 +
+      countFor("challenge-finishes:") * 15 +
+      countFor("consistency-days:") * 12 +
       personalRecords * 75,
   );
   // Quadratic levels keep early rewards close together while leaving useful
@@ -134,6 +364,17 @@ export function badgeLevelSummary(
         : 1;
       return leftRemaining - rightRemaining;
     })[0];
+  const topEarnedBadges = owned
+    .filter((badge) => badge.status === "earned")
+    .map((badge) => ({ badge, xp: earnedBadgeXp(badge) }))
+    .filter((item) => item.xp > 0)
+    .sort(
+      (left, right) =>
+        right.xp - left.xp ||
+        right.badge.anchorDate.localeCompare(left.badge.anchorDate) ||
+        left.badge.title.localeCompare(right.badge.title),
+    )
+    .slice(0, 3);
   return {
     xp,
     level,
@@ -145,8 +386,11 @@ export function badgeLevelSummary(
     nextLevelXp,
     earned: owned.filter((badge) => badge.status === "earned").length,
     active: owned.filter((badge) => badge.status === "progress").length,
+    locked: owned.filter((badge) => badge.status === "locked").length,
     recurring: owned.filter((badge) => badge.status === "recurring").length,
+    challengeWins,
     nextBadge,
+    topEarnedBadges,
   };
 }
 
@@ -185,6 +429,8 @@ type BadgeCache = {
   anchor: string;
   today: string;
   challenges: readonly GroupChallenge[];
+  externalChallengePlacements: readonly ResolvedChallengePlacement[];
+  settledChallengeOccurrenceKeys?: readonly string[];
   group: AppState["group"];
   metrics: AppState["metrics"];
   entries: AppState["entries"];
@@ -208,17 +454,24 @@ type BadgeCache = {
 
 let badgeCache: BadgeCache | undefined;
 const EMPTY_GROUP_CHALLENGES: readonly GroupChallenge[] = [];
+const EMPTY_CHALLENGE_PLACEMENTS: readonly ResolvedChallengePlacement[] = [];
 
 export function buildBadges(
   state: AppState,
   anchor = dateKey(),
   challenges: readonly GroupChallenge[] = EMPTY_GROUP_CHALLENGES,
   today = dateKey(),
+  externalChallengePlacements: readonly ResolvedChallengePlacement[] =
+    EMPTY_CHALLENGE_PLACEMENTS,
+  settledChallengeOccurrenceKeys?: readonly string[],
 ): EarnedBadge[] {
   if (
     badgeCache?.anchor === anchor &&
     badgeCache.today === today &&
     badgeCache.challenges === challenges &&
+    badgeCache.externalChallengePlacements === externalChallengePlacements &&
+    badgeCache.settledChallengeOccurrenceKeys ===
+      settledChallengeOccurrenceKeys &&
     badgeCache.group === state.group &&
     badgeCache.metrics === state.metrics &&
     badgeCache.entries === state.entries &&
@@ -546,19 +799,32 @@ export function buildBadges(
       };
     }),
   );
-  const perfectDayBadges = state.group.members.map((member): EarnedBadge => {
-    const count = achievementDates.filter((day) => {
-      if (member.id !== state.currentUserId) {
-        const sharedGoals =
+  // Compute the two goal-quality awards in one bounded pass. This keeps the
+  // richer catalogue from repeating 365 days of metric aggregation per card.
+  const goalQualityByMember = new Map(
+    state.group.members.map((member) => {
+      let perfect = 0;
+      let strong = 0;
+      for (const day of achievementDates) {
+        if (member.id === state.currentUserId) {
+          const summary = trackedGoalSummary(state, member.id, day);
+          if (summary.total > 0 && summary.allMet) perfect += 1;
+          if (summary.total > 0 && summary.met / summary.total >= 0.75)
+            strong += 1;
+          continue;
+        }
+        const statuses =
           sharedGoalsByMemberDate.get(`${member.id}\u0000${day}`) ?? [];
-        return (
-          sharedGoals.length > 0 &&
-          sharedGoals.every((status) => status.goalReached)
-        );
+        if (statuses.length === 0) continue;
+        const met = statuses.filter((status) => status.goalReached).length;
+        if (met === statuses.length) perfect += 1;
+        if (met / statuses.length >= 0.75) strong += 1;
       }
-      const summary = trackedGoalSummary(state, member.id, day);
-      return summary.total > 0 && summary.allMet;
-    }).length;
+      return [member.id, { perfect, strong }] as const;
+    }),
+  );
+  const perfectDayBadges = state.group.members.map((member): EarnedBadge => {
+    const count = goalQualityByMember.get(member.id)?.perfect ?? 0;
     const nextTarget = nextMilestone(count);
     return {
       id: `perfect-days:${member.id}`,
@@ -605,6 +871,32 @@ export function buildBadges(
       anchorDate: anchor,
     };
   });
+  const consistencyBadges = state.group.members.map(
+    (member): EarnedBadge => {
+      const count = goalQualityByMember.get(member.id)?.strong ?? 0;
+      const nextTarget = nextMilestone(count);
+      return {
+        id: `consistency-days:${member.id}`,
+        icon: "repeat",
+        title: "Consistency builder",
+        owner: memberDisplayName(state, member),
+        memberId: member.id,
+        caption: `${count} strong day${count === 1 ? "" : "s"}`,
+        description: nextTarget
+          ? `Reach at least 75% of your shared goals on ${nextTarget - count} more day${nextTarget - count === 1 ? "" : "s"} for the ${nextTarget}-day milestone.`
+          : "Top consistency milestone reached.",
+        earnedCount: count,
+        nextTarget,
+        progress: badgeProgress(count, nextTarget),
+        status: milestoneStatus(count),
+        category: "consistency",
+        color: "#2E9C8B",
+        period: "achievement",
+        periodLabel: labels.achievement,
+        anchorDate: anchor,
+      };
+    },
+  );
   const personalBestBadges = state.group.members.flatMap((member) =>
     goalMetrics.flatMap((metric): EarnedBadge[] => {
       if (
@@ -705,16 +997,44 @@ export function buildBadges(
       };
     }),
   );
-  const resolvedChallengeWins = resolvedGroupChallengeWins(
-    state,
-    challenges,
-    anchor,
-    today,
+  const resolvedChallengePlacements = [
+    // Cloud outcomes come exclusively from the immutable server snapshot.
+    // Undefined is reserved for the credential-free local/demo model.
+    ...(settledChallengeOccurrenceKeys === undefined
+      ? resolvedGroupChallengePlacements(
+          state,
+          challenges,
+          anchor,
+          today,
+        )
+      : []),
+    ...externalChallengePlacements,
+  ].filter(
+    (challenge, index, allPlacements) =>
+      allPlacements.findIndex(
+        (candidate) =>
+          candidate.challengeId === challenge.challengeId &&
+          candidate.localDate === challenge.localDate,
+      ) === index,
   );
-  const challengeWinBadges = state.group.members.map((member): EarnedBadge => {
-    const memberWins = resolvedChallengeWins.filter((win) =>
-      win.winnerIds.includes(member.id),
+  const challengesAtRank = (memberId: string, position?: number) =>
+    resolvedChallengePlacements.filter((challenge) =>
+      challenge.placements.some(
+        (placement) =>
+          placement.memberId === memberId &&
+          (position === undefined ||
+            placement.standingPosition === position),
+      ),
     );
+  const challengeWinsFor = (memberId: string) =>
+    resolvedChallengePlacements.filter((challenge) =>
+      challenge.placements.some(
+        (placement) =>
+          placement.memberId === memberId && placement.winner === true,
+      ),
+    );
+  const challengeWinBadges = state.group.members.map((member): EarnedBadge => {
+    const memberWins = challengeWinsFor(member.id);
     const count = memberWins.length;
     const nextTarget = nextMilestone(count);
     return {
@@ -739,10 +1059,73 @@ export function buildBadges(
       anchorDate: memberWins[0]?.localDate ?? anchor,
     };
   });
+  const challengeRankBadges = state.group.members.flatMap(
+    (member): EarnedBadge[] => {
+      const finishes = challengesAtRank(member.id);
+      const seconds = challengesAtRank(member.id, 2);
+      const thirds = challengesAtRank(member.id, 3);
+      const rankBadge = (
+        id: string,
+        icon: EarnedBadge["icon"],
+        title: string,
+        matches: typeof finishes,
+        description: string,
+        color: string,
+      ): EarnedBadge => {
+        const count = matches.length;
+        const nextTarget = nextMilestone(count);
+        return {
+          id: `${id}:${member.id}`,
+          icon,
+          title,
+          owner: memberDisplayName(state, member),
+          memberId: member.id,
+          caption: `${count} ${count === 1 ? "challenge" : "challenges"}`,
+          description,
+          earnedCount: count,
+          nextTarget,
+          progress: badgeProgress(count, nextTarget),
+          status: count > 0 ? "earned" : "locked",
+          category: "competition",
+          color,
+          period: "achievement",
+          periodLabel: labels.achievement,
+          anchorDate: matches[0]?.localDate ?? anchor,
+        };
+      };
+      return [
+        rankBadge(
+          "challenge-seconds",
+          "medal",
+          "Challenge runner-up",
+          seconds,
+          "Second place earns a 60 XP rank bonus.",
+          "#A7AFBD",
+        ),
+        rankBadge(
+          "challenge-thirds",
+          "ribbon",
+          "Challenge third place",
+          thirds,
+          "Third place earns a 35 XP rank bonus.",
+          "#B97943",
+        ),
+        rankBadge(
+          "challenge-finishes",
+          "flag",
+          "Challenge finishes",
+          finishes,
+          "Every finalized rank earns 15 XP; podium bonuses stack on top.",
+          palette.blue,
+        ),
+      ];
+    },
+  );
   const earnedMilestoneBadges = [
     ...trackerGoalBadges,
     ...perfectDayBadges,
     ...checkInBadges,
+    ...consistencyBadges,
     ...streakMilestoneBadges,
   ].flatMap((badge): EarnedBadge[] => {
     const reached = reachedMilestone(badge.earnedCount ?? 0);
@@ -804,16 +1187,18 @@ export function buildBadges(
     ...metricBadges,
     ...perfectDayBadges,
     ...checkInBadges,
+    ...consistencyBadges,
     ...trackerGoalBadges,
     ...streakBadges,
     ...streakMilestoneBadges,
     ...personalBestBadges,
     ...challengeWinBadges,
+    ...challengeRankBadges,
     ...earnedMilestoneBadges,
     {
       id: "comeback",
       icon: "trending-up",
-      title: "Comeback",
+      title: "Best comeback",
       color: "#E56B4B",
       period: "achievement",
       periodLabel: labels.achievement,
@@ -880,6 +1265,8 @@ export function buildBadges(
     anchor,
     today,
     challenges,
+    externalChallengePlacements,
+    settledChallengeOccurrenceKeys,
     group: state.group,
     metrics: state.metrics,
     entries: state.entries,

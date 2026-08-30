@@ -23,6 +23,7 @@ import {
   migrateRetiredWorkoutCaloriesEntries,
   RETIRED_WORKOUT_CALORIES_METRIC_ID,
 } from "@/src/domain/workoutCaloriesMigration";
+import { withInferredGymStepCoverageEntries } from "@/src/domain/stepCoveragePreferences";
 
 const WORKOUT_CALORIES_METRIC_ID = RETIRED_WORKOUT_CALORIES_METRIC_ID;
 const RETIRED_METRIC_IDS = new Set([WORKOUT_CALORIES_METRIC_ID]);
@@ -105,6 +106,13 @@ function repairKnownMetricDefaults(
   metric: MetricDefinition,
   enableTodoToday = false,
 ) {
+  if (metric.id === "progress_photo")
+    return {
+      ...metric,
+      name: "Photo progress",
+      dataType: "photo" as const,
+      manualEntry: true,
+    };
   if (metric.id === "todo_completion")
     return {
       ...metric,
@@ -520,6 +528,12 @@ export function upgradeStateV21(
   state = retireWorkoutCalories(state, defaults);
   state = repairEnergyFormula(state);
   state = { ...state, todos: normalizeTodoItems(state.todos ?? []) };
+  const stepCoverageEntries = withInferredGymStepCoverageEntries(
+    state.entries,
+    state.gymSessions ?? [],
+  );
+  if (stepCoverageEntries !== state.entries)
+    state = { ...state, entries: stepCoverageEntries };
   state = upgradeNutritionStateV26(state, defaults, sourceVersion);
   const screenTimeEntries = repairLegacyScreenTimeEntries(state.entries);
   if (screenTimeEntries !== state.entries)

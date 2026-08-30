@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
+import * as ImagePicker from "expo-image-picker";
 import React, { useEffect, useMemo, useState } from "react";
 import {
   KeyboardAvoidingView,
@@ -11,6 +12,10 @@ import {
 } from "react-native";
 
 import { AppText as Text, AppTextInput as TextInput } from "@/src/components/AppText";
+import {
+  CHALLENGE_VISUAL_ICONS,
+  ChallengeVisual,
+} from "@/src/components/ChallengeVisual";
 import { SelectionMenu } from "@/src/components/SelectionMenu";
 import { Avatar } from "@/src/components/ui";
 import { SaveGroupChallengeInput } from "@/src/cloud/groupChallenges";
@@ -20,12 +25,14 @@ import {
   challengePresetEndDate,
   groupChallengeEndDate,
   isChallengeMetric,
+  isPublicChallengeMetric,
   validChallengeDate,
   validateGroupChallenge,
 } from "@/src/domain/groupChallenges";
 import { useTranslation } from "@/src/i18n";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import {
+  type ChallengeVisualIcon,
   GoalSchedule,
   Group,
   GroupChallenge,
@@ -177,15 +184,39 @@ export function GroupChallengeEditor({
   const colors = useAppColors();
   const accent = useGroupAccent();
   const t = useTranslation();
+  const [audience, setAudience] = useState<"group" | "public">("group");
   const eligibleMetrics = useMemo(
-    () => metrics.filter(isChallengeMetric),
-    [metrics],
+    () =>
+      metrics.filter(
+        audience === "public"
+          ? isPublicChallengeMetric
+          : isChallengeMetric,
+      ),
+    [audience, metrics],
+  );
+  const metricOptions = useMemo(
+    () =>
+      eligibleMetrics.map((metric) => ({
+        id: metric.id,
+        label: metric.name,
+        sublabel: metric.unit || "Shared tracker",
+        group: "Trackers",
+        icon: metric.icon as keyof typeof Ionicons.glyphMap,
+        color: metric.color,
+      })),
+    [eligibleMetrics],
   );
   const [metricId, setMetricId] = useState(eligibleMetrics[0]?.id ?? "");
   const [target, setTarget] = useState("");
   const [targetEnabled, setTargetEnabled] = useState(true);
   const [title, setTitle] = useState("");
-  const [audience, setAudience] = useState<"group" | "public">("group");
+  const [visualOpen, setVisualOpen] = useState(false);
+  const [visualIcon, setVisualIcon] = useState<ChallengeVisualIcon>();
+  const [visualImagePreviewUri, setVisualImagePreviewUri] = useState<string>();
+  const [visualImageStoragePath, setVisualImageStoragePath] = useState<
+    string | null
+  >();
+  const [visualImageUploadUri, setVisualImageUploadUri] = useState<string>();
   const [limitEnabled, setLimitEnabled] = useState(false);
   const [participantLimit, setParticipantLimit] = useState("");
   const [localDate, setLocalDate] = useState(initialDate ?? dateKey());
@@ -225,6 +256,11 @@ export function GroupChallengeEditor({
     );
     setTargetEnabled(!challenge || challenge.target !== undefined);
     setTitle(challenge?.title ?? "");
+    setVisualOpen(false);
+    setVisualIcon(challenge?.visualIcon);
+    setVisualImagePreviewUri(challenge?.visualImageUri);
+    setVisualImageStoragePath(challenge?.visualImageStoragePath);
+    setVisualImageUploadUri(undefined);
     setAudience(challenge?.audience ?? "group");
     setLimitEnabled(challenge?.participantLimit !== undefined);
     setParticipantLimit(
@@ -297,6 +333,20 @@ export function GroupChallengeEditor({
       );
       return next;
     });
+  }
+
+  async function chooseVisualImage() {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      quality: 0.78,
+      allowsEditing: true,
+      aspect: [1, 1],
+    });
+    const uri = result.canceled ? undefined : result.assets[0]?.uri;
+    if (!uri) return;
+    setVisualImagePreviewUri(uri);
+    setVisualImageUploadUri(uri);
+    setVisualImageStoragePath(null);
   }
 
   async function submit() {
@@ -381,6 +431,10 @@ export function GroupChallengeEditor({
         groupId: group.id,
         metricId,
         title,
+        visualIcon,
+        visualImageStoragePath: visualImageStoragePath ?? null,
+        visualImageUploadUri,
+        previousVisualImageStoragePath: challenge?.visualImageStoragePath,
         audience,
         participantLimit: numericParticipantLimit,
         target: numericTarget,
@@ -427,39 +481,27 @@ export function GroupChallengeEditor({
               <Text style={[styles.repeatSeriesHint, { color: colors.muted }]}>Past results are locked. You can edit the title or change only the future repeat end.</Text>
             ) : null}
             <Text style={[styles.label, { color: colors.ink }]}>Tracker</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
-              {eligibleMetrics.map((metric) => {
-                const selected = metric.id === metricId;
-                return (
-                  <Pressable
-                    key={metric.id}
-                    accessibilityRole="radio"
-                    accessibilityState={{
-                      selected,
-                      disabled: historicalRecurringRulesLocked,
-                    }}
-                    accessibilityLabel={metric.name}
-                    disabled={historicalRecurringRulesLocked}
-                    onPress={() => {
-                      setMetricId(metric.id);
-                      if (!challenge) setTarget(String(metric.goal.target || ""));
-                    }}
-                    style={[
-                      styles.metricChip,
-                      {
-                        borderColor: selected ? metric.color : colors.border,
-                        backgroundColor: selected ? colors.primarySoft : colors.canvas,
-                      },
-                    ]}
-                  >
-                    <Ionicons name={metric.icon as keyof typeof Ionicons.glyphMap} size={15} color={selected ? metric.color : colors.muted} />
-                    <Text style={[styles.metricText, { color: colors.ink }]}>{metric.name}</Text>
-                  </Pressable>
+            <SelectionMenu
+              title="Choose tracker"
+              items={metricOptions}
+              selectedIds={metricId ? [metricId] : []}
+              multiple={false}
+              minimumSelected={1}
+              emptyLabel="Select a shared tracker"
+              icon="analytics-outline"
+              disabled={historicalRecurringRulesLocked}
+              onChange={(ids) => {
+                const next = eligibleMetrics.find(
+                  (metric) => metric.id === ids[0],
                 );
-              })}
-            </ScrollView>
+                if (!next) return;
+                setMetricId(next.id);
+                if (!challenge)
+                  setTarget(String(next.goal.target ?? ""));
+              }}
+            />
 
-            <View style={styles.ruleChoices}>
+            <View style={[styles.ruleChoices, styles.targetRuleChoices]}>
               {([
                 { enabled: true, label: "Target", detail: "Reach a set value" },
                 { enabled: false, label: "Most wins", detail: "No target; highest total wins" },
@@ -700,6 +742,113 @@ export function GroupChallengeEditor({
               style={[styles.titleInput, { color: colors.ink, borderColor: colors.border, backgroundColor: colors.canvas }]}
             />
 
+            <View
+              style={[
+                styles.visualSection,
+                { borderColor: colors.border, backgroundColor: colors.canvas },
+              ]}
+            >
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={t(`${visualOpen ? "Collapse" : "Customize"} challenge icon or image`)}
+                accessibilityState={{ expanded: visualOpen }}
+                onPress={() => setVisualOpen((open) => !open)}
+                style={styles.visualHeader}
+              >
+                <ChallengeVisual
+                  challenge={{ audience, visualIcon }}
+                  imageUri={visualImagePreviewUri}
+                  color={accent}
+                  size={38}
+                />
+                <View style={styles.ruleCopy}>
+                  <Text style={[styles.ruleTitle, { color: colors.ink }]}>Challenge icon or image</Text>
+                  <Text style={[styles.ruleDetail, { color: colors.muted }]}>Optional · the image overrides the icon</Text>
+                </View>
+                <Ionicons
+                  name={visualOpen ? "chevron-up" : "chevron-down"}
+                  size={17}
+                  color={colors.muted}
+                />
+              </Pressable>
+              {visualOpen ? (
+                <View style={[styles.visualBody, { borderTopColor: colors.border }]}>
+                  <Text style={[styles.visualLabel, { color: colors.muted }]}>ICON</Text>
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={styles.visualIcons}
+                  >
+                    <Pressable
+                      accessibilityRole="radio"
+                      accessibilityState={{ selected: visualIcon === undefined }}
+                      accessibilityLabel={t("Use default challenge icon")}
+                      onPress={() => setVisualIcon(undefined)}
+                      style={[
+                        styles.visualIconChoice,
+                        {
+                          borderColor: visualIcon === undefined ? accent : colors.border,
+                          backgroundColor: visualIcon === undefined ? colors.primarySoft : colors.card,
+                        },
+                      ]}
+                    >
+                      <Ionicons
+                        name={audience === "public" ? "earth-outline" : "trophy-outline"}
+                        size={19}
+                        color={visualIcon === undefined ? accent : colors.muted}
+                      />
+                    </Pressable>
+                    {CHALLENGE_VISUAL_ICONS.map((icon) => {
+                      const selected = icon === visualIcon;
+                      return (
+                        <Pressable
+                          key={icon}
+                          accessibilityRole="radio"
+                          accessibilityState={{ selected }}
+                          accessibilityLabel={t(`Use ${icon.replaceAll("-", " ")} challenge icon`)}
+                          onPress={() => setVisualIcon(icon)}
+                          style={[
+                            styles.visualIconChoice,
+                            {
+                              borderColor: selected ? accent : colors.border,
+                              backgroundColor: selected ? colors.primarySoft : colors.card,
+                            },
+                          ]}
+                        >
+                          <Ionicons name={icon} size={19} color={selected ? accent : colors.muted} />
+                        </Pressable>
+                      );
+                    })}
+                  </ScrollView>
+                  <View style={styles.visualImageActions}>
+                    <Pressable
+                      accessibilityRole="button"
+                      onPress={() => void chooseVisualImage()}
+                      style={[styles.visualImageAction, { borderColor: colors.border }]}
+                    >
+                      <Ionicons name="image-outline" size={16} color={accent} />
+                      <Text style={[styles.visualImageActionText, { color: accent }]}>Choose image</Text>
+                    </Pressable>
+                    {visualImagePreviewUri ? (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={t("Remove challenge image")}
+                        onPress={() => {
+                          setVisualImagePreviewUri(undefined);
+                          setVisualImageUploadUri(undefined);
+                          setVisualImageStoragePath(null);
+                        }}
+                        style={[styles.visualImageAction, { borderColor: palette.red }]}
+                      >
+                        <Ionicons name="trash-outline" size={15} color={palette.red} />
+                        <Text style={[styles.visualImageActionText, { color: palette.red }]}>Remove</Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
+                </View>
+              ) : null}
+            </View>
+
             <Text style={[styles.label, { color: colors.ink }]}>Who can join</Text>
             <View style={styles.ruleChoices}>
               {([
@@ -865,6 +1014,7 @@ const styles = StyleSheet.create({
   metricText: { fontSize: 10, fontWeight: "800" },
   fieldRow: { flexDirection: "row", gap: 9, marginBottom: 13 },
   ruleChoices: { flexDirection: "row", gap: 8, marginBottom: 13 },
+  targetRuleChoices: { marginTop: 12 },
   ruleChoice: { flex: 1, minHeight: 50, borderRadius: 13, borderWidth: 1, paddingHorizontal: 10, flexDirection: "row", alignItems: "center", gap: 7 },
   ruleCopy: { flex: 1 },
   ruleTitle: { fontSize: 10, fontWeight: "900" },
@@ -893,6 +1043,15 @@ const styles = StyleSheet.create({
   repeatUntilLabel: { fontSize: 8, fontWeight: "800" },
   repeatUntilInput: { width: 88, padding: 0, fontSize: 9, fontWeight: "900" },
   titleInput: { height: 42, borderRadius: 13, borderWidth: 1, paddingHorizontal: 11, fontSize: 11, marginBottom: 14 },
+  visualSection: { borderWidth: 1, borderRadius: 14, marginBottom: 14, overflow: "hidden" },
+  visualHeader: { minHeight: 56, flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 10, paddingVertical: 8 },
+  visualBody: { borderTopWidth: StyleSheet.hairlineWidth, padding: 10, gap: 8 },
+  visualLabel: { fontSize: 8, fontWeight: "900", letterSpacing: 1 },
+  visualIcons: { gap: 7, paddingRight: 4 },
+  visualIconChoice: { width: 38, height: 38, borderRadius: 12, borderWidth: 1, alignItems: "center", justifyContent: "center" },
+  visualImageActions: { flexDirection: "row", flexWrap: "wrap", gap: 7 },
+  visualImageAction: { minHeight: 34, borderRadius: 11, borderWidth: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingHorizontal: 10 },
+  visualImageActionText: { fontSize: 8, fontWeight: "900" },
   publicLimit: { borderWidth: 1, borderRadius: 13, padding: 10, marginBottom: 13, gap: 8 },
   publicLimitToggle: { minHeight: 34, flexDirection: "row", alignItems: "center", gap: 8 },
   publicLimitInput: { height: 36, borderWidth: 1, borderRadius: 11, paddingHorizontal: 10, fontSize: 11, fontWeight: "800" },

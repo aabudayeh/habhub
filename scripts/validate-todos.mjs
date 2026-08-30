@@ -233,6 +233,9 @@ assert.equal(
 );
 
 const migration = read("supabase/migrations/202608240002_group_todos.sql");
+const realtimeMigration = read(
+  "supabase/migrations/202608270006_finish_compact_realtime.sql",
+);
 for (const required of [
   "alter table public.group_todos enable row level security",
   "group_todos_parent_same_group",
@@ -330,16 +333,21 @@ assert.match(cloudProvider, /groupTodosEnabled: state\.group\.groupTodosEnabled 
 assert.match(cloudProvider, /localGroupConfiguration\.groupTodosEnabled/);
 
 const groupTodoHook = read("src/cloud/useGroupTodos.ts");
-assert.match(groupTodoHook, /groupTodoRealtimeByGroup/);
 assert.match(groupTodoHook, /groupTodoLoadsByGroup/);
 assert.match(groupTodoHook, /loadGroupTodosShared\(groupId\)/);
-assert.match(groupTodoHook, /references: number/);
-assert.match(groupTodoHook, /\.channel\(`group-todos:\$\{groupId\}`\)/);
+assert.match(groupTodoHook, /subscribePrivateBroadcast/);
+assert.match(groupTodoHook, /`group:\$\{groupId\}:todos`/);
+assert.match(groupTodoHook, /"todos_updated"/);
+assert.doesNotMatch(groupTodoHook, /group-todos:/);
 assert.doesNotMatch(
   groupTodoHook,
-  /\.channel\(`group-todos:\$\{groupId\}:\$\{/,
-  "all devices must share one group broadcast topic",
+  /\.send\(\{[\s\S]{0,120}type:\s*"broadcast"/,
+  "clients must not be able to send group to-do invalidations",
 );
+assert.match(realtimeMigration, /'todos'/);
+assert.match(realtimeMigration, /'todos_updated'/);
+assert.match(realtimeMigration, /group_todos_compact_broadcast/);
+assert.match(realtimeMigration, /group_todo_completions_compact_broadcast/);
 const reminderReconciler = read(
   "src/components/GroupTodoReminderReconciler.tsx",
 );

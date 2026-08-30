@@ -10,6 +10,21 @@ export const STANDALONE_IOS_TAB_BOTTOM_INSET = 10;
 export const WEB_TAB_CONTENT_BOTTOM_PADDING = 16;
 export const IOS_WEB_MIN_EDITOR_FONT_SIZE = 16;
 
+/**
+ * Tab scenes stop at the navigator's top edge, so only their top safe area is
+ * owned by the page. Use explicit `off` modes instead of `edges={["top"]}`:
+ * react-native-safe-area-context's Web adapter currently treats an omitted
+ * edge mode as additive, which repeats the iPhone home-indicator inset above
+ * the bottom navigator in installed PWAs. Native receives the same effective
+ * top-only policy it had before.
+ */
+export const TAB_SCENE_SAFE_AREA_EDGES = {
+  top: "additive",
+  right: "off",
+  bottom: "off",
+  left: "off",
+} as const;
+
 export function isIosWebDevice(
   environment: WebDisplayEnvironment,
 ): boolean {

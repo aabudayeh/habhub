@@ -238,7 +238,7 @@ const BASE_METRICS: MetricDefinition[] = [
   },
   {
     id: "progress_photo",
-    name: "Progress photo",
+    name: "Photo progress",
     icon: "camera-outline",
     color: "#7756D9",
     unit: "",
@@ -1869,6 +1869,11 @@ export function createInitialState(): AppState {
           menstruation: true,
         },
       },
+      stepCoveragePreferences: {
+        version: 1,
+        sessions: {},
+        activityRules: {},
+      },
       banterTone: "friendly",
       autoMessages: true,
       cheerMessage: "You’ve got this, team! One small win at a time. 🌱",
@@ -1969,6 +1974,8 @@ export function createInitialState(): AppState {
       streakRestDaysPerWeek: 1,
       memberNicknamesByGroup: { "weekend-warriors": {} },
       badgeShowcaseByGroup: {},
+      badgePinnedByGroup: {},
+      badgePinnedLimitByGroup: {},
       recapDateNavigatorCollapsed: true,
       progressMetricIds: ["tracked_goals", "steps"],
       progressPinnedMetricIds: [],
@@ -1984,6 +1991,7 @@ export function createInitialState(): AppState {
       notifications: {
         pushEnabled: false,
         groupMetricActivity: true,
+        socialReactions: true,
         leadChanges: true,
         metricIds: ["steps", "exercise", "deficit"],
         chatMessages: true,

@@ -31,6 +31,7 @@ import { GroupChallengeEditor } from "@/src/components/GroupChallengeEditor";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import { isCloudGroupId } from "@/src/cloud/groupCloud";
 import { useGroupChallenges } from "@/src/cloud/useGroupChallenges";
+import { useSettledChallengeResults } from "@/src/cloud/useSettledChallengeResults";
 import {
   adjacentPeriod,
   DateRangeNavigator,
@@ -44,17 +45,13 @@ import {
   PageHeader,
   ProgressBar,
   Screen,
-  SectionHeader,
 } from "@/src/components/ui";
-import {
-  comparisonStats,
-  metricHeadToHeadStats,
-} from "@/src/domain/comparison";
+import { metricHeadToHeadStats } from "@/src/domain/comparison";
+import { badgeLevelSummary, buildBadges } from "@/src/domain/badges";
 import {
   dateKey,
   dateWithOffsetFrom,
   friendlyDate,
-  relativeTime,
 } from "@/src/domain/date";
 import {
   allTimePeriodDates,
@@ -65,13 +62,9 @@ import {
   periodTitle,
   shiftedPeriodAnchor,
 } from "@/src/domain/leaderboard";
-import { latestMemberActivityPublishedAt } from "@/src/domain/leaderboardSync";
 import { imageSourceUri } from "@/src/domain/media";
-import {
-  memberDisplayName,
-  memberOriginalLabel,
-  memberRoleLabel,
-} from "@/src/domain/members";
+import { fullPhotoDate, photoWeightLabel } from "@/src/domain/photoProgress";
+import { memberDisplayName } from "@/src/domain/members";
 import {
   formatMetricValue,
   metricOverallAverage,
@@ -91,20 +84,17 @@ export default function MemberProfile() {
   }>();
   const { state, updateSettings } = useApp();
   const challengeCloud = useGroupChallenges(state.group.id);
+  const settledChallengeResults = useSettledChallengeResults(state.group.id);
+  const settledChallengeOccurrenceKeys =
+    settledChallengeResults.occurrenceKeys;
   const locale = useLocale();
-  const { language } = useLocalization();
+  const { language, t } = useLocalization();
   const calculationStateRef = useRef(state);
   calculationStateRef.current = state;
   const colors = useAppColors();
   const member =
     state.group.members.find((item) => item.id === params.id) ??
     state.group.members[0];
-  const memberSyncedAt = latestMemberActivityPublishedAt(
-    state.dailyMetricStatuses,
-    state.group.id,
-    member.id,
-    member.lastDataSyncedAt,
-  );
   const groupMetricConfiguration = state.group.metricConfiguration;
   const available = useMemo(
     () =>
@@ -152,7 +142,6 @@ export default function MemberProfile() {
     state.settings.comparisonDateNavigatorCollapsedByGroup?.[
       state.group.id
     ] === false;
-  const comparisonReady = true;
   const challengeParticipantIds = useMemo(
     () => [...new Set([state.currentUserId, member.id])],
     [member.id, state.currentUserId],
@@ -313,7 +302,6 @@ export default function MemberProfile() {
         overallLabel: string;
       }
     >();
-    if (!comparisonReady) return cache;
     const calculationState = calculationStateRef.current;
     for (const metric of metrics)
       for (const person of people) {
@@ -372,7 +360,6 @@ export default function MemberProfile() {
       }
     return cache;
   }, [
-    comparisonReady,
     dates,
     deferredAnchor,
     metrics,
@@ -380,57 +367,58 @@ export default function MemberProfile() {
     comparisonInputs,
     locale,
   ]);
-  const stats = useMemo(
-    () => {
-      void comparisonInputs;
-      const calculationState = calculationStateRef.current;
-      return comparisonReady
-        ? comparisonStats(
-            calculationState,
-            member.id,
-            calculationState.currentUserId,
-            dates,
-            metrics.slice(0, 1),
-          )
-        : {
-            bestDay: "—",
-            bestScore: 0,
-            daysWon: 0,
-            longestWinStreak: 0,
-            eligibleDays: 0,
-          };
-    },
-    [
-      comparisonReady,
-      dates,
-      member.id,
-      metrics,
-      comparisonInputs,
-    ],
+  const comparisonPair = useMemo(
+    () => (people.length === 2 ? ([people[0], people[1]] as const) : undefined),
+    [people],
   );
+  const comparisonBadgeSummaries = useMemo(() => {
+    const badges = buildBadges(
+      state,
+      dateKey(),
+      challengeCloud.challenges,
+      dateKey(),
+      settledChallengeResults.placements,
+      settledChallengeOccurrenceKeys,
+    );
+    return new Map(
+      state.group.members.map((person) => [
+        person.id,
+        badgeLevelSummary(badges, person.id),
+      ]),
+    );
+  }, [
+    challengeCloud.challenges,
+    settledChallengeOccurrenceKeys,
+    settledChallengeResults.placements,
+    state,
+  ]);
   const headToHeads = useMemo(
     () => {
       void comparisonInputs;
       const calculationState = calculationStateRef.current;
-      return comparisonReady
+      const left = comparisonPair?.[0];
+      const right = comparisonPair?.[1];
+      return left && right
         ? metrics
             .map((metric) => ({
               metric,
+              left,
+              right,
               stats: metricHeadToHeadStats(
                 calculationState,
                 metric,
-                member.id,
-                calculationState.currentUserId,
+                left.id,
+                right.id,
                 dates,
+                calculationState.currentUserId,
               ),
             }))
             .filter((item) => item.stats)
         : [];
     },
     [
-      comparisonReady,
+      comparisonPair,
       dates,
-      member.id,
       metrics,
       comparisonInputs,
     ],
@@ -522,13 +510,7 @@ export default function MemberProfile() {
   return (
     <Screen>
       <PageHeader
-        eyebrow="Friend comparison"
-        title={
-          member.id === state.currentUserId
-            ? "Your progress"
-            : memberDisplayName(state, member)
-        }
-        translateTitle={member.id === state.currentUserId}
+        title="Friend comparison"
         showMenu={false}
         action={
           <View style={styles.headerActions}>
@@ -577,66 +559,11 @@ export default function MemberProfile() {
         ) : null}
       </View>
       <View {...pageSwipeResponder.panHandlers}>
-      <Card style={styles.profile}>
-        <Avatar
-          initials={member.initials}
-          color={member.color}
-          uri={member.avatarUri}
-          size={58}
-        />
-        <View style={styles.copy}>
-          <Text translate={false} style={[styles.name, { color: colors.ink }]}>
-            {memberDisplayName(state, member)}
-          </Text>
-          {memberOriginalLabel(state, member) ? (
-            <Text style={[styles.original, { color: colors.faint }]}>
-              {memberOriginalLabel(state, member)}
-            </Text>
-          ) : null}
-          <Text style={[styles.meta, { color: colors.muted }]}>
-            {memberRoleLabel(member)} · <Text translate={false}>{state.group.name}</Text>
-          </Text>
-          {memberSyncedAt ? (
-            <Text style={[styles.meta, { color: colors.muted }]}>
-              Synced {relativeTime(memberSyncedAt)}
-            </Text>
-          ) : null}
-        </View>
-        <Ionicons
-          name="shield-checkmark-outline"
-          size={22}
-          color={colors.primary}
-        />
-      </Card>
       <TutorialTarget id="comparison-stats">
-      {member.id === state.currentUserId ? (
+      {headToHeads.length ? (
         <>
-          <SectionHeader title="Your competitive stats" />
-          <View style={styles.comparisonStats}>
-            <StatCard
-              icon="sparkles-outline"
-              label="Best day"
-              value={stats.bestDay}
-              detail={`${Math.round(stats.bestScore)} pts`}
-            />
-            <StatCard
-              icon="medal-outline"
-              label="Days ranked #1"
-              value={`${stats.daysWon}/${stats.eligibleDays}`}
-              detail={periodTitle(period, anchor)}
-            />
-            <StatCard
-              icon="flame-outline"
-              label="Longest win streak"
-              value={`${stats.longestWinStreak} day${stats.longestWinStreak === 1 ? "" : "s"}`}
-              detail="Within this range"
-            />
-          </View>
-        </>
-      ) : headToHeads.length ? (
-        <>
-          <SectionHeader title="Head-to-head vs you" />
-          {headToHeads.map(({ metric, stats: duel }) =>
+          <Text style={[styles.headToHeadTitle, { color: colors.ink }]}>Head-to-head</Text>
+          {headToHeads.map(({ metric, left, right, stats: duel }) =>
             duel ? (
               <Card key={metric.id} style={styles.duel}>
                 <View style={styles.duelHeading}>
@@ -668,22 +595,25 @@ export default function MemberProfile() {
                 <View style={styles.duelGrid}>
                   <DuelStat
                     label="Best day"
-                    you={`${formatMetricValue(metric, duel.viewerBest.value)} · ${friendlyDate(duel.viewerBest.date, locale)}`}
-                    friend={`${formatMetricValue(metric, duel.subjectBest.value)} · ${friendlyDate(duel.subjectBest.date, locale)}`}
-                    friendName={memberDisplayName(state, member)}
+                    left={`${formatMetricValue(metric, duel.subjectBest.value)} · ${friendlyDate(duel.subjectBest.date, locale)}`}
+                    right={`${formatMetricValue(metric, duel.opponentBest.value)} · ${friendlyDate(duel.opponentBest.date, locale)}`}
+                    leftName={left.id === state.currentUserId ? t("You") : memberDisplayName(state, left)}
+                    rightName={right.id === state.currentUserId ? t("You") : memberDisplayName(state, right)}
                   />
                   <DuelStat
                     label="Days won"
-                    you={`${duel.viewerWins}`}
-                    friend={`${duel.subjectWins}`}
-                    friendName={memberDisplayName(state, member)}
+                    left={`${duel.subjectWins}`}
+                    right={`${duel.opponentWins}`}
+                    leftName={left.id === state.currentUserId ? t("You") : memberDisplayName(state, left)}
+                    rightName={right.id === state.currentUserId ? t("You") : memberDisplayName(state, right)}
                     detail={duel.ties ? `${duel.ties} tied` : undefined}
                   />
                   <DuelStat
                     label="Longest win streak"
-                    you={`${duel.viewerLongestStreak} day${duel.viewerLongestStreak === 1 ? "" : "s"}`}
-                    friend={`${duel.subjectLongestStreak} day${duel.subjectLongestStreak === 1 ? "" : "s"}`}
-                    friendName={memberDisplayName(state, member)}
+                    left={`${duel.subjectLongestStreak} day${duel.subjectLongestStreak === 1 ? "" : "s"}`}
+                    right={`${duel.opponentLongestStreak} day${duel.opponentLongestStreak === 1 ? "" : "s"}`}
+                    leftName={left.id === state.currentUserId ? t("You") : memberDisplayName(state, left)}
+                    rightName={right.id === state.currentUserId ? t("You") : memberDisplayName(state, right)}
                   />
                 </View>
               </Card>
@@ -694,9 +624,9 @@ export default function MemberProfile() {
         <Card style={styles.headEmpty}>
           <Ionicons name="analytics-outline" size={20} color={colors.primary} />
           <Text style={[styles.emptyPhotos, { color: colors.muted }]}>
-            Head-to-head stats appear for selected “higher wins” metrics with
-            shared daily data. Goal-distance metrics such as food and deficit
-            are intentionally excluded.
+            {people.length !== 2
+              ? "Choose exactly two people below to see their head-to-head."
+              : "Head-to-head stats appear when both people share daily data for the selected tracker."}
           </Text>
         </Card>
       ) : null}
@@ -731,19 +661,41 @@ export default function MemberProfile() {
                 return (
                   <View key={person.id} style={styles.personBlock}>
                     <View style={styles.barRow}>
-                      <Avatar
-                        initials={person.initials}
-                        color={person.color}
-                        uri={person.avatarUri}
-                        size={34}
-                      />
+                      <Pressable
+                        accessibilityRole="link"
+                        accessibilityLabel={`Open ${memberDisplayName(state, person)} profile`}
+                        onPress={() => router.navigate(`/member-profile/${person.id}` as never)}
+                      >
+                        <Avatar
+                          initials={person.initials}
+                          color={person.color}
+                          uri={person.avatarUri}
+                          size={34}
+                        />
+                      </Pressable>
                       <View style={styles.barCopy}>
                         <View style={styles.labels}>
-                          <Text style={[styles.barName, { color: colors.ink }]}>
-                            {person.id === state.currentUserId
-                              ? "You"
-                              : <Text translate={false}>{memberDisplayName(state, person)}</Text>}
-                          </Text>
+                          <View style={styles.barIdentity}>
+                            <Pressable
+                              accessibilityRole="link"
+                              onPress={() => router.navigate(`/member-profile/${person.id}` as never)}
+                            >
+                              <Text style={[styles.barName, { color: colors.ink }]}>
+                                {person.id === state.currentUserId
+                                  ? "You"
+                                  : <Text translate={false}>{memberDisplayName(state, person)}</Text>}
+                              </Text>
+                            </Pressable>
+                            <Text
+                              translate={false}
+                              style={[
+                                styles.levelPill,
+                                { color: person.color, backgroundColor: `${person.color}18` },
+                              ]}
+                            >
+                              {t("Lv")} {comparisonBadgeSummaries.get(person.id)?.level ?? 1}
+                            </Text>
+                          </View>
                         <Text
                           style={[
                               styles.barValue,
@@ -819,7 +771,7 @@ export default function MemberProfile() {
         ))}
       </View>
       {hasSharedComparisonPhotos ? (
-      <><Pressable onPress={() => setPhotosOpen((open) => !open)}>
+      <View style={styles.photoComparisonSection}><Pressable onPress={() => setPhotosOpen((open) => !open)}>
         <Card style={styles.collapseHeader}>
           <Ionicons name="images-outline" size={18} color={colors.primary} />
           <Text style={[styles.collapseTitle, { color: colors.ink }]}>
@@ -844,7 +796,7 @@ export default function MemberProfile() {
           ))}
         </Card>
       ) : null}
-      </>
+      </View>
       ) : null}
       <View style={styles.selectors}>
         <MetricSelector
@@ -910,38 +862,19 @@ function MiniStat({ label, value }: { label: string; value: string }) {
     </View>
   );
 }
-function StatCard({
-  icon,
-  label,
-  value,
-  detail,
-}: {
-  icon: keyof typeof Ionicons.glyphMap;
-  label: string;
-  value: string;
-  detail: string;
-}) {
-  const colors = useAppColors();
-  return (
-    <Card style={styles.comparisonCard}>
-      <Ionicons name={icon} size={19} color={colors.primary} />
-      <Text style={[styles.comparisonValue, { color: colors.ink }]}>{value}</Text>
-      <Text style={[styles.comparisonLabel, { color: colors.muted }]}>{label}</Text>
-      <Text style={[styles.comparisonDetail, { color: colors.faint }]}>{detail}</Text>
-    </Card>
-  );
-}
 function DuelStat({
   label,
-  you,
-  friend,
-  friendName,
+  left,
+  right,
+  leftName,
+  rightName,
   detail,
 }: {
   label: string;
-  you: string;
-  friend: string;
-  friendName: string;
+  left: string;
+  right: string;
+  leftName: string;
+  rightName: string;
   detail?: string;
 }) {
   const colors = useAppColors();
@@ -949,12 +882,12 @@ function DuelStat({
     <View style={[styles.duelStat, { backgroundColor: colors.canvas }]}>
       <Text style={[styles.duelLabel, { color: colors.muted }]}>{label}</Text>
       <View style={styles.duelSide}>
-        <Text style={[styles.duelPerson, { color: colors.faint }]}>You</Text>
-        <Text style={[styles.duelValue, { color: colors.ink }]}>{you}</Text>
+        <Text translate={false} style={[styles.duelPerson, { color: colors.faint }]}>{leftName}</Text>
+        <Text style={[styles.duelValue, { color: colors.ink }]}>{left}</Text>
       </View>
       <View style={styles.duelSide}>
-        <Text style={[styles.duelPerson, { color: colors.faint }]}>{friendName}</Text>
-        <Text style={[styles.duelValue, { color: colors.ink }]}>{friend}</Text>
+        <Text translate={false} style={[styles.duelPerson, { color: colors.faint }]}>{rightName}</Text>
+        <Text style={[styles.duelValue, { color: colors.ink }]}>{right}</Text>
       </View>
       {detail ? <Text style={[styles.duelDetail, { color: colors.muted }]}>{detail}</Text> : null}
     </View>
@@ -970,6 +903,7 @@ function ProfilePhotoCompare({
   dates: string[];
 }) {
   const tutorialSandbox = useTutorialSandboxActive();
+  const locale = useLocale();
   const colors = useAppColors();
   const person = state.group.members.find((item) => item.id === personId)!;
   const visible = state.photos
@@ -992,26 +926,18 @@ function ProfilePhotoCompare({
   );
   const comparison = older.find((photo) => photo.id === olderId[0]);
   const collageRef = useRef<ViewShot>(null);
+  const visibleWeightEntries = useMemo(
+    () =>
+      state.entries.filter(
+        (entry) =>
+          entry.userId === personId &&
+          entry.metricId === "weight" &&
+          (personId === state.currentUserId || entry.visibility === "group"),
+      ),
+    [personId, state.currentUserId, state.entries],
+  );
   function weight(day: string) {
-    const entry = state.entries
-      .filter(
-        (item) =>
-          item.userId === personId &&
-          item.metricId === "weight" &&
-          (personId === state.currentUserId || item.visibility === "group"),
-      )
-      .sort(
-        (a, b) =>
-          Math.abs(
-            new Date(`${a.localDate}T12:00:00`).getTime() -
-              new Date(`${day}T12:00:00`).getTime(),
-          ) -
-          Math.abs(
-            new Date(`${b.localDate}T12:00:00`).getTime() -
-              new Date(`${day}T12:00:00`).getTime(),
-          ),
-      )[0];
-    return entry ? `${Number(entry.value).toFixed(1)} kg` : "No weight log";
+    return photoWeightLabel(visibleWeightEntries, personId, day, locale) ?? "No weight log";
   }
   async function save() {
     if (tutorialSandbox) return;
@@ -1055,7 +981,7 @@ function ProfilePhotoCompare({
         context.fillStyle = "#17211B";
         context.font = "bold 23px sans-serif";
         context.fillText(
-          friendlyDate(photos[index].localDate),
+          fullPhotoDate(photos[index].localDate, locale),
           x + 270,
           755,
         );
@@ -1109,7 +1035,7 @@ function ProfilePhotoCompare({
                   thumbnailStyle={styles.photo}
                 />
                 <Text preserveColor style={styles.photoDate}>
-                  {friendlyDate(primary.localDate)}
+                  {fullPhotoDate(primary.localDate, locale)}
                 </Text>
                 <Text preserveColor style={styles.photoDate}>
                   {weight(primary.localDate)}
@@ -1122,7 +1048,7 @@ function ProfilePhotoCompare({
                     thumbnailStyle={styles.photo}
                   />
                   <Text preserveColor style={styles.photoDate}>
-                    {friendlyDate(comparison.localDate)}
+                    {fullPhotoDate(comparison.localDate, locale)}
                   </Text>
                   <Text preserveColor style={styles.photoDate}>
                     {weight(comparison.localDate)}
@@ -1145,7 +1071,7 @@ function ProfilePhotoCompare({
               multiple={false}
               items={older.map((photo) => ({
                 id: photo.id,
-                label: friendlyDate(photo.localDate),
+                label: fullPhotoDate(photo.localDate, locale),
                 icon: "image-outline",
                 color: person.color,
               }))}
@@ -1180,13 +1106,9 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     marginBottom: 7,
   },
-  profile: { flexDirection: "row", alignItems: "center", gap: 12 },
   copy: { flex: 1, minWidth: 0 },
-  name: { color: palette.ink, fontSize: 18, fontWeight: "900" },
-  original: { color: palette.faint, fontSize: 9, marginTop: 2 },
-  meta: { color: palette.muted, fontSize: 11, marginTop: 3 },
   chips: { flexDirection: "row", flexWrap: "wrap", gap: 7 },
-  selectors: { gap: 8 },
+  selectors: { gap: 8, marginTop: 12 },
   navigator: {
     flexDirection: "row",
     alignItems: "center",
@@ -1198,22 +1120,13 @@ const styles = StyleSheet.create({
   navCopy: { alignItems: "center", flex: 1 },
   navTitle: { color: palette.ink, fontSize: 14, fontWeight: "900" },
   navSub: { color: palette.muted, fontSize: 9, marginTop: 2 },
-  comparisonStats: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  comparisonCard: { flex: 1, minWidth: 105, padding: 12 },
-  comparisonValue: {
-    color: palette.ink,
-    fontSize: 17,
+  headToHeadTitle: {
+    fontSize: 14,
     fontWeight: "900",
     marginTop: 7,
+    marginBottom: 6,
   },
-  comparisonLabel: {
-    color: palette.muted,
-    fontSize: 8,
-    fontWeight: "900",
-    marginTop: 2,
-  },
-  comparisonDetail: { color: palette.faint, fontSize: 7, marginTop: 3 },
-  duel: { marginBottom: 9 },
+  duel: { marginBottom: 5 },
   duelHeading: {
     flexDirection: "row",
     alignItems: "center",
@@ -1269,7 +1182,8 @@ const styles = StyleSheet.create({
     gap: 9,
     overflow: "hidden",
   },
-  metricCards: { gap: 12, marginTop: 14 },
+  metricCards: { gap: 12, marginTop: 8 },
+  photoComparisonSection: { gap: 8, marginTop: 12 },
   chartCard: { padding: 15 },
   chartHeading: {
     flexDirection: "row",
@@ -1304,7 +1218,15 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     marginBottom: 7,
   },
+  barIdentity: { flexDirection: "row", alignItems: "center", gap: 6, flexShrink: 1 },
   barName: { color: palette.ink, fontSize: 12, fontWeight: "800" },
+  levelPill: {
+    borderRadius: 999,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    fontSize: 7,
+    fontWeight: "900",
+  },
   barValue: { color: palette.muted, fontSize: 11, fontWeight: "800" },
   streakMeta: { fontSize: 8, fontWeight: "700", marginTop: 5 },
   private: { color: palette.faint, fontStyle: "italic" },
@@ -1328,7 +1250,7 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginTop: 2,
   },
-  dateSection: { marginTop: 16 },
+  dateSection: { marginTop: 2 },
   photoPerson: { paddingVertical: 9, gap: 7 },
   photoName: { color: palette.ink, fontSize: 11, fontWeight: "900" },
   photos: { flexDirection: "row", flexWrap: "wrap", gap: 8 },

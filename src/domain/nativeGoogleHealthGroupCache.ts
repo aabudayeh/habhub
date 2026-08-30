@@ -1,4 +1,3 @@
-import { dateKey, dateWithOffsetFrom } from "@/src/domain/date";
 import {
   buildGoogleHealthGroupCheckpoint,
   parseGoogleHealthGroupCheckpoint,
@@ -14,7 +13,7 @@ export const NATIVE_GOOGLE_GROUP_CHUNK_LENGTH = 1_800;
 export const NATIVE_GOOGLE_GROUP_MAX_CHUNKS = 48;
 export const NATIVE_GOOGLE_GROUP_MAX_STATUSES = 320;
 export const NATIVE_GOOGLE_GROUP_MAX_ENTRIES = 80;
-export const NATIVE_GOOGLE_GROUP_CACHE_DAYS = 7;
+const NATIVE_GOOGLE_GROUP_RESERVED_RECENT_STATUSES = 64;
 export type NativeGoogleHealthGroupSlot = "slot-a" | "slot-b";
 
 export type NativeGoogleHealthGroupManifest = {
@@ -44,20 +43,47 @@ function asciiJson(value: unknown) {
 
 /**
  * Ignore second-by-second checkpoint timestamps when coalescing writes, while
- * retaining the creation day so an unchanged cache refreshes its seven-day
- * expiry at most once per day.
+ * retaining the creation day so unchanged native cache metadata refreshes at
+ * most once per day. Native secure storage remains independently size-bounded.
  */
 export function nativeGoogleHealthCheckpointContentSignature(
   serialized: string,
 ) {
   try {
     const checkpoint = JSON.parse(serialized) as {
+      version?: unknown;
+      accountId?: unknown;
+      groupId?: unknown;
+      entries?: unknown;
+      dailyMetricStatuses?: unknown;
+    };
+    return nativeGoogleHealthStableHash(
+      asciiJson({
+        version: checkpoint.version,
+        accountId: checkpoint.accountId,
+        groupId: checkpoint.groupId,
+        entries: checkpoint.entries,
+        dailyMetricStatuses: checkpoint.dailyMetricStatuses,
+      }),
+    );
+  } catch {
+    return nativeGoogleHealthStableHash(serialized);
+  }
+}
+
+function legacyNativeGoogleHealthCheckpointContentSignature(
+  serialized: string,
+) {
+  try {
+    const checkpoint = JSON.parse(serialized) as {
+      version?: unknown;
       accountId?: unknown;
       groupId?: unknown;
       createdAt?: unknown;
       entries?: unknown;
       dailyMetricStatuses?: unknown;
     };
+    if (checkpoint.version !== 2) return;
     return nativeGoogleHealthStableHash(
       asciiJson({
         accountId: checkpoint.accountId,
@@ -71,7 +97,7 @@ export function nativeGoogleHealthCheckpointContentSignature(
       }),
     );
   } catch {
-    return nativeGoogleHealthStableHash(serialized);
+    return;
   }
 }
 
@@ -81,13 +107,8 @@ export function serializeNativeGoogleHealthGroupCheckpoint(
 ): string | undefined {
   const checkpoint = buildGoogleHealthGroupCheckpoint(source, now);
   if (!checkpoint) return;
-  const earliestDate = dateWithOffsetFrom(
-    dateKey(now),
-    -(NATIVE_GOOGLE_GROUP_CACHE_DAYS - 1),
-  );
   const latestStatusByKey = new Map<string, (typeof checkpoint.dailyMetricStatuses)[number]>();
   for (const status of checkpoint.dailyMetricStatuses) {
-    if (status.localDate < earliestDate) continue;
     const key = [status.userId, status.metricId, status.localDate].join("\u0000");
     const current = latestStatusByKey.get(key);
     if (
@@ -108,7 +129,6 @@ export function serializeNativeGoogleHealthGroupCheckpoint(
     })
     .slice(-NATIVE_GOOGLE_GROUP_MAX_STATUSES);
   const entries = checkpoint.entries
-    .filter((entry) => entry.localDate >= earliestDate)
     .sort((left, right) => left.recordedAt.localeCompare(right.recordedAt))
     .slice(-NATIVE_GOOGLE_GROUP_MAX_ENTRIES);
   if (!statuses.length && !entries.length) return;
@@ -119,10 +139,16 @@ export function serializeNativeGoogleHealthGroupCheckpoint(
     asciiJson(compact).length >
       NATIVE_GOOGLE_GROUP_CHUNK_LENGTH * NATIVE_GOOGLE_GROUP_MAX_CHUNKS
   ) {
-    // Oldest detail rows yield before compact totals. Today's last-known
-    // values survive even for unusually large groups without allowing
-    // unbounded Keychain growth.
-    if (compact.entries.length) compact.entries.shift();
+    // Preserve a useful recent-status floor, then let older compact totals
+    // yield before human-readable meal/workout rows. Detail is expensive to
+    // reconstruct and is the reason this encrypted cache exists; today's
+    // statuses remain at the newest end of the sorted array.
+    if (
+      compact.dailyMetricStatuses.length >
+      NATIVE_GOOGLE_GROUP_RESERVED_RECENT_STATUSES
+    )
+      compact.dailyMetricStatuses.shift();
+    else if (compact.entries.length) compact.entries.shift();
     else compact.dailyMetricStatuses.shift();
   }
   const serialized = asciiJson(compact);
@@ -200,9 +226,18 @@ export function joinCheckpointChunks(
   )
     return;
   const serialized = chunks.join("");
-  return nativeGoogleHealthStableHash(serialized) === manifest.signature &&
+  if (nativeGoogleHealthStableHash(serialized) !== manifest.signature) return;
+  if (
     nativeGoogleHealthCheckpointContentSignature(serialized) ===
-      manifest.contentSignature
+    manifest.contentSignature
+  )
+    return serialized;
+  // Manifest v1 originally coalesced writes by creation day and omitted the
+  // payload version. Accept that exact signature only for a v2 payload so the
+  // reader can validate, parse and rewrite existing encrypted checkpoints as
+  // v3 without weakening the current v3 integrity check.
+  return legacyNativeGoogleHealthCheckpointContentSignature(serialized) ===
+    manifest.contentSignature
     ? serialized
     : undefined;
 }

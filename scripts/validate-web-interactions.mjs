@@ -10,6 +10,7 @@ import {
   resolveWebEditorFontSize,
   resolveScreenBottomPadding,
   resolveTabBarBottomInset,
+  TAB_SCENE_SAFE_AREA_EDGES,
 } from "../src/domain/webSafeArea.ts";
 import { resolveWebSoftwareKeyboardVisibility } from "../src/domain/webKeyboard.ts";
 
@@ -70,8 +71,12 @@ assert.match(
   pager,
   /onScroll=\{Platform\.OS === "web" \? updateActivePage : undefined\}/,
 );
-assert.match(pager, /onMomentumScrollEnd=\{updateActivePage\}/);
-assert.match(pager, /onScrollEndDrag=\{updateActivePage\}/);
+assert.match(pager, /onMomentumScrollEnd=\{settleActivePage\}/);
+assert.match(
+  pager,
+  /onScrollEndDrag=\{\s*Platform\.OS === "web" \? undefined : settleActivePage\s*\}/,
+);
+assert.match(pager, /onPageSettled\?\.\(page\)/);
 assert.match(pager, /const activePageRef = useRef\(0\)/);
 assert.match(pager, /PanResponder\.create\(/);
 assert.match(pager, /onMoveShouldSetPanResponderCapture/);
@@ -258,6 +263,11 @@ assert.equal(
   "iOS Safari and installed iOS Web apps must use the same compact tab inset",
 );
 assert.equal(resolveTabBarBottomInset(34), 34);
+assert.deepEqual(
+  TAB_SCENE_SAFE_AREA_EDGES,
+  { top: "additive", right: "off", bottom: "off", left: "off" },
+  "tab scenes must explicitly disable the Web adapter's implicit bottom safe-area padding",
+);
 const standaloneIos = {
   userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X)",
   platform: "iPhone",
@@ -336,6 +346,22 @@ assert.equal(
 assert.match(tabs, /height: 55 \+ tabBarBottomInset/);
 assert.match(tabs, /paddingBottom: Math\.max\(1, tabBarBottomInset\)/);
 assert.match(screen, /resolveScreenBottomPadding\(/);
+for (const [name, sourceText] of [
+  ["shared Screen", screen],
+  ["Today", today],
+  ["Chat", chat],
+]) {
+  assert.match(
+    sourceText,
+    /edges=\{TAB_SCENE_SAFE_AREA_EDGES\}/,
+    `${name} must not repeat the installed-iOS bottom safe area above navigation`,
+  );
+  assert.doesNotMatch(
+    sourceText,
+    /edges=\{\["top"\]\}/,
+    `${name} must avoid the Web safe-area adapter's ambiguous array edge mode`,
+  );
+}
 assert.doesNotMatch(
   screen,
   /removeWebTabGutter|paddingBottom: 0/,
@@ -388,8 +414,10 @@ assert.match(
 );
 assert.match(
   today,
-  /onPress=\{\(\) => setRequestedTodayPage\(index\)\}/,
+  /onPress=\{\(\) => \{[\s\S]{0,260}setTodayPageIndex\(index\);[\s\S]{0,120}setRequestedTodayPage\(index\);/,
 );
+assert.match(today, /onPress=\{\(\) => \{\s*if \(selected\) return;/);
+assert.match(today, /pointerEvents="box-none"[\s\S]{0,100}styles\.sectionPageIndicator/);
 assert.match(today, /requestedPage=\{requestedTodayPage\}/);
 assert.match(today, /todosAfterPagedTrackers/);
 assert.match(today, /refreshing=\{!editing && manualRefreshing\}/);
@@ -424,8 +452,8 @@ assert.match(today, /opacity: tapPressed \? 0\.78 : 1/);
 assert.match(status, /pressed && styles\.pressed/);
 assert.match(
   log,
-  /params\.metric && metrics\.some\(\(metric\) => metric\.id === params\.metric\)[\s\S]{0,80}setSelectedId\(params\.metric\)/,
-  "Log deep links must focus the tracker requested by a double tap",
+  /const destination = metricLoggingDestination\(requested\)[\s\S]{0,320}setSelectedId\(targetId\)/,
+  "Log deep links must focus their direct or canonical parent logger",
 );
 
 assert.doesNotMatch(extensionPopup, /toolbar|quick-nav|data-companion-home|data-app-path|Active timers|schedule card/i);

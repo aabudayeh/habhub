@@ -1,5 +1,6 @@
 import {
   MetricChartStyle,
+  MetricDataType,
   HealthMetricMapping,
   GoalProgressMode,
   MetricVisualization,
@@ -7,8 +8,10 @@ import {
 
 type VisualizableMetric = {
   id: string;
+  dataType?: MetricDataType;
   goalProgressMode?: GoalProgressMode;
   healthMapping?: HealthMetricMapping;
+  fastingSettings?: unknown;
   visualization?: MetricVisualization;
 };
 
@@ -20,6 +23,15 @@ function automaticVisualization(
     metric.healthMapping?.dataType === "blood_pressure";
   const isJourney =
     metric.id === "weight" || metric.goalProgressMode === "journey";
+  const keepsPurposeBuiltRange =
+    metric.id === "food" ||
+    metric.id === "intermittent_fasting" ||
+    metric.id === "weekly_deficit_balance" ||
+    metric.id === "weekly_deficit" ||
+    Boolean(metric.fastingSettings);
+  const supportsCombinedRange =
+    (metric.dataType === "number" || metric.dataType === "calculated") &&
+    !keepsPurposeBuiltRange;
   if (isPressure)
     return {
       detailDay: "completion",
@@ -36,7 +48,7 @@ function automaticVisualization(
     };
   return {
     detailDay: "progress",
-    detailRange: "bar",
+    detailRange: supportsCombinedRange ? "both" : "bar",
     progressOverview: "bar",
     progressGrid: "intensity",
   };

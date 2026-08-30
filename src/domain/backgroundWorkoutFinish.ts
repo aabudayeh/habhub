@@ -1,11 +1,15 @@
 import { dateKey } from "@/src/domain/date";
 import {
+  completedGymDistanceKm,
   completedGymSets,
   estimateGymActiveCalories,
+  gymSessionDistanceKm,
+  gymSessionWorkoutSample,
   gymSessionVisibilityForMetric,
   recommendedRestSeconds,
 } from "@/src/domain/gym";
 import { workoutQualifies } from "@/src/domain/workoutQualification";
+import { inferStepCoverageActivityFromGymSession } from "@/src/domain/stepCoveragePreferences";
 import type {
   AppState,
   GymCalorieCalculationMode,
@@ -62,6 +66,8 @@ export type StoredWorkoutDraft = {
   calorieCalculationMode: GymCalorieCalculationMode;
   intensity: GymIntensity;
   sessionNotes: string;
+  sessionImageUri?: string;
+  sessionImageStoragePath?: string;
   visibility: Visibility;
   selectedPlanId: string | null;
   setStartDelaySeconds: number;
@@ -125,6 +131,10 @@ export function parseStoredWorkoutDraft(
       ) ||
       !["light", "moderate", "vigorous"].includes(draft.intensity ?? "") ||
       typeof draft.sessionNotes !== "string" ||
+      (draft.sessionImageUri !== undefined &&
+        typeof draft.sessionImageUri !== "string") ||
+      (draft.sessionImageStoragePath !== undefined &&
+        typeof draft.sessionImageStoragePath !== "string") ||
       !["private", "group", "status"].includes(draft.visibility ?? "") ||
       (draft.selectedPlanId !== null &&
         typeof draft.selectedPlanId !== "string") ||
@@ -447,14 +457,28 @@ export function finishStoredWorkoutDraft(
       : existingSession?.pausedSeconds,
     setStartDelaySeconds: draft.setStartDelaySeconds,
     durationMinutes: preciseDuration,
+    distanceKm: completedGymDistanceKm(exercises),
     calories: completedSets ? sessionCalories : undefined,
     calorieCalculationMode: draft.calorieCalculationMode,
     caloriesManual: manualCalories !== undefined,
     intensity: draft.intensity,
     notes: draft.sessionNotes.trim() || undefined,
+    imageUri: draft.sessionImageUri || undefined,
+    imageStoragePath: draft.sessionImageStoragePath || undefined,
     exercises,
     visibility: draft.visibility,
   };
+}
+
+function workoutSessionForStorage(
+  session: GymSession,
+  completedSets = completedGymSets(session.exercises),
+) {
+  if (completedSets <= 0) return session;
+  const storedSession = { ...session };
+  delete storedSession.imageUri;
+  delete storedSession.imageStoragePath;
+  return storedSession;
 }
 
 /**
@@ -468,20 +492,27 @@ export function applyBackgroundGymSession(
 ): AppState {
   if (session.userId !== state.currentUserId) return state;
   const completedSets = completedGymSets(session.exercises);
+  const {
+    imageUri: sessionImageUri,
+    imageStoragePath: sessionImageStoragePath,
+  } = session;
+  // A completed workout photo belongs to one canonical MetricEntry. Keeping a
+  // second raw URI on GymSession would upload/share the same photo twice and
+  // leak a device-local file URI into account snapshots.
+  const storedSession = workoutSessionForStorage(session, completedSets);
+  const inferredStepActivity = inferStepCoverageActivityFromGymSession(session);
   const calorieValue = Math.max(0, Number(session.calories ?? 0));
+  const distanceValue = gymSessionDistanceKm(session);
   const workoutMetric = state.metrics.find((metric) => metric.id === "workout");
   const qualifiesAsWorkout = workoutQualifies(
-    {
-      activity: "strength",
-      durationMinutes: session.durationMinutes,
-      activeCalories: calorieValue,
-    },
+    gymSessionWorkoutSample(session),
     workoutMetric?.workoutQualification,
   );
-  const synced = (completedSets > 0
+  const syncedValues = (completedSets > 0
     ? [
         ...(qualifiesAsWorkout ? [{ metricId: "workout", value: true }] : []),
         { metricId: "workout_duration", value: session.durationMinutes },
+        { metricId: "workout_distance", value: distanceValue },
         { metricId: "exercise", value: calorieValue },
       ]
     : [])
@@ -489,9 +520,10 @@ export function applyBackgroundGymSession(
       (item) =>
         state.metrics.some((metric) => metric.id === item.metricId) &&
         (item.metricId === "workout" || Number(item.value) > 0),
-    )
+    );
+  const synced = syncedValues
     .map(
-      (item): MetricEntry => ({
+      (item, index): MetricEntry => ({
         id: `gym-sync:${session.id}:${item.metricId}`,
         metricId: item.metricId,
         userId: state.currentUserId,
@@ -505,7 +537,14 @@ export function applyBackgroundGymSession(
         ),
         source: "manual",
         label: session.name,
+        stepCoverageActivityKey: inferredStepActivity?.key,
         note: `Workout session · ${completedSets} sets${session.notes ? ` · ${session.notes}` : ""}`,
+        ...(index === 0 && (sessionImageUri || sessionImageStoragePath)
+          ? {
+              imageUri: sessionImageUri,
+              imageStoragePath: sessionImageStoragePath,
+            }
+          : {}),
       }),
     );
   const existingSession = (state.gymSessions ?? []).find(
@@ -518,7 +557,7 @@ export function applyBackgroundGymSession(
   );
   if (
     existingSession &&
-    JSON.stringify(existingSession) === JSON.stringify(session) &&
+    JSON.stringify(existingSession) === JSON.stringify(storedSession) &&
     JSON.stringify(existingSynced) === JSON.stringify(synced)
   )
     return state;
@@ -543,7 +582,7 @@ export function applyBackgroundGymSession(
       deletedEntryIds: reconcileDeletedIds(state.settings.deletedEntryIds),
     },
     gymSessions: [
-      session,
+      storedSession,
       ...(state.gymSessions ?? []).filter((item) => item.id !== session.id),
     ],
     entries: [
@@ -581,9 +620,12 @@ export function reconcileBackgroundWorkoutCompletion(
       session.id === completion.session.id &&
       session.userId === state.currentUserId,
   );
+  const completionSessionForStorage = workoutSessionForStorage(
+    completion.session,
+  );
   if (
     existing &&
-    JSON.stringify(existing) === JSON.stringify(completion.session)
+    JSON.stringify(existing) === JSON.stringify(completionSessionForStorage)
   )
     return { state, resolution: "already_applied" };
   if (existing) {

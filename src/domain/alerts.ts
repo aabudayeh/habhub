@@ -5,6 +5,7 @@ import { leaderboardRows } from "@/src/domain/leaderboard";
 import { memberDisplayName } from "@/src/domain/members";
 import { buildGroupRecapFeed } from "@/src/domain/recaps";
 import { todoAppearsOnDate, todoResolvedOnDate } from "@/src/domain/schedule";
+import { chatSharePreview } from "@/src/domain/social";
 import { todayHeroSummary } from "@/src/domain/todayHero";
 import { palette } from "@/src/theme";
 import {
@@ -31,6 +32,8 @@ export type PaceAlert = {
   readAt?: string;
   /** Explicit unread state; absence means this alert has no durable read cursor. */
   unread?: boolean;
+  /** Private settings key used to dismiss app-owned activity updates. */
+  readCursorKey?: string;
   challengeId?: string;
   challengeOccurrenceDate?: string;
   groupId?: string;
@@ -221,7 +224,25 @@ export function buildAlerts(
       const groupConversation =
         conversation === "group" ||
         conversation === `group:${state.group.id}`;
+      const systemUpdate = message.senderId === "system";
+      const systemCategory: AlertCategory = groupConversation ? "lead" : "today";
+      const systemReadCursorKey = `${state.group.id}:${systemCategory}`;
+      const sharedMessage = chatSharePreview(message.text);
+      const visibleMessageText = sharedMessage.text;
+      const hasAttachment = Boolean(
+        sharedMessage.hasAttachment || message.todoAttachment,
+      );
+      const messagePreview = visibleMessageText
+        ? `${visibleMessageText}${hasAttachment ? " · Attachment" : ""}`
+        : hasAttachment
+          ? "Sent an attachment"
+          : message.imageUri
+            ? "Sent an image"
+            : "Sent a message";
       const readAt =
+        notifications.chatReadAtByConversation?.[
+          `${state.group.id}:${conversation}`
+        ] ??
         notifications.chatReadAtByConversation?.[conversation] ??
         (groupConversation
           ? notifications.chatReadAtByConversation?.[
@@ -230,7 +251,14 @@ export function buildAlerts(
           : undefined);
       return {
         id: `message-${message.id}`,
-        category: achievement ? "achievement" : "message",
+        // App-generated goal/member updates are activity, not chat. Keep a
+        // personal update in Today and a group update in Leaderboard so the
+        // Messages tab contains actual conversations only.
+        category: systemUpdate
+          ? systemCategory
+          : achievement
+            ? "achievement"
+            : "message",
         icon: message.imageUri
           ? "image-outline"
           : achievement
@@ -245,19 +273,61 @@ export function buildAlerts(
                 ? `Group message in ${state.group.name}`
                 : `Direct message from ${memberDisplayName(state, sender)}`
               : "New message",
-        detail: groupConversation
-          ? `${sender ? memberDisplayName(state, sender) : "A group member"}: ${message.text || "Sent an image"}`
-          : message.text || "Sent an image",
+        detail: systemUpdate
+          ? messagePreview
+          : groupConversation
+            ? `${sender ? memberDisplayName(state, sender) : "A group member"}: ${messagePreview}`
+            : messagePreview,
         createdAt: message.createdAt,
         memberId: sender?.id,
         scope: groupConversation || achievement ? "group" : "personal",
         unread:
           !achievement &&
           message.senderId !== state.currentUserId &&
-          (!readAt || message.createdAt > readAt),
+          (systemUpdate
+            ? message.createdAt >
+              (notifications.activityReadAtByCategory?.[
+                systemReadCursorKey
+              ] ?? "")
+            : !readAt || message.createdAt > readAt),
+        readCursorKey: systemUpdate ? systemReadCursorKey : undefined,
       };
     });
-  const challengeEvents = groupNotificationEvents.map((event): PaceAlert => {
+  const groupEventsEnabled = groupPreferences?.enabled !== false;
+  const socialReactionsEnabled =
+    groupEventsEnabled &&
+    (groupPreferences?.socialReactions ??
+      notifications.socialReactions ??
+      true);
+  const challengeEvents = groupNotificationEvents
+    .filter((event) => {
+      if (!groupEventsEnabled) return false;
+      if (event.kind === "social_reaction") return socialReactionsEnabled;
+      if (
+        (event.kind === "challenge_invitation" ||
+          event.kind === "challenge_accepted" ||
+          event.kind === "challenge_all_accepted") &&
+        groupPreferences?.challengeUpdates === false
+      )
+        return false;
+      if (
+        event.kind === "challenge_standing" &&
+        groupPreferences?.challengeStandings === false
+      )
+        return false;
+      if (
+        event.kind === "challenge_reminder" &&
+        groupPreferences?.challengeReminders === false
+      )
+        return false;
+      if (
+        event.kind === "challenge_result" &&
+        groupPreferences?.challengeResults === false
+      )
+        return false;
+      return true;
+    })
+    .map((event): PaceAlert => {
     const actor = state.group.members.find(
       (member) => member.id === event.actorId,
     );
@@ -271,7 +341,9 @@ export function buildAlerts(
       id: `group-notification-${event.id}`,
       category: socialReaction ? "lead" : "challenge",
       icon: socialReaction
-        ? event.reaction === "thumbs_down"
+        ? event.reaction === "cheer"
+          ? "megaphone-outline"
+          : event.reaction === "thumbs_down"
           ? "thumbs-down-outline"
           : event.reaction === "thumbs_up"
             ? "thumbs-up-outline"
@@ -286,7 +358,9 @@ export function buildAlerts(
               ? "flame-outline"
               : "swap-vertical-outline",
       color: socialReaction
-        ? palette.red
+        ? event.reaction === "cheer"
+          ? palette.amber
+          : palette.red
         : invitation
         ? palette.primary
         : result
@@ -326,7 +400,7 @@ export function buildAlerts(
       localDate: event.occurrenceDate,
       targetType: event.targetType,
     };
-  });
+    });
   return [
     ...personalProgress,
     ...personalTodos,

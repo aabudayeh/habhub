@@ -19,6 +19,11 @@ function preferenceAllowsEvent(
 ) {
   if (preferences?.enabled === false) return false;
   if (
+    event.kind === "social_reaction" &&
+    preferences?.socialReactions === false
+  )
+    return false;
+  if (
     (event.kind === "challenge_invitation" ||
       event.kind === "challenge_accepted" ||
       event.kind === "challenge_all_accepted") &&

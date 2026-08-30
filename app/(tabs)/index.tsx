@@ -72,6 +72,10 @@ import {
 } from "@/src/domain/goalLiquid";
 import { isFoodNutrientTrackerId } from "@/src/domain/food";
 import {
+  metricLoggingDestination,
+  metricLoggingTargetId,
+} from "@/src/domain/metricLogging";
+import {
   canBeTrackedGoal,
   effectiveGoalTarget,
   formatMetricValue,
@@ -119,6 +123,7 @@ import {
 } from "@/src/domain/pagedLayout";
 import {
   isIosWebDevice,
+  TAB_SCENE_SAFE_AREA_EDGES,
   WebDisplayEnvironment,
 } from "@/src/domain/webSafeArea";
 import { metricVisualization } from "@/src/domain/visualization";
@@ -415,6 +420,13 @@ function Today() {
     ? heroTotal
     : todayHero.met;
   const heroProgress = tutorialCompletionPreview ? 1 : todayHero.progress;
+  // Keep the visual fill aligned with the integer percentage presented to the
+  // user. A tiny fractional value that still reads as 0% must not leave a lime
+  // pixel in the icon, outline, or progress bar.
+  const heroVisualProgress =
+    Math.round(Math.max(0, Math.min(1, heroProgress)) * 100) === 0
+      ? 0
+      : heroProgress;
   const heroAllMet = heroTotal > 0 && heroMet === heroTotal;
   const visible = useMemo(() => {
     // This is the section-level visibility switch, so it must fence every
@@ -989,7 +1001,7 @@ function Today() {
       style={[styles.safe, { backgroundColor: colors.canvas }]}
       // The navigator owns the bottom safe area. Reserving it again here
       // leaves a canvas-coloured strip between Today and the tab bar.
-      edges={["top"]}
+      edges={TAB_SCENE_SAFE_AREA_EDGES}
     >
       <Animated.View
         pointerEvents="none"
@@ -1193,7 +1205,7 @@ function Today() {
         >
           {state.settings.showFeaturedCardProgressOutline !== false ? (
             <HeroProgressOutline
-              progress={heroProgress}
+              progress={heroVisualProgress}
               color={heroAllMet ? "#FFD166" : GOAL_COMPLETE_COLOR}
               fillMode={completionIndicatorFillMode(
                 state.settings.completionIndicatorIcon,
@@ -1270,7 +1282,7 @@ function Today() {
             </View>
             <CompletionShapeIndicator
               icon={state.settings.completionIndicatorIcon}
-              progress={heroProgress}
+              progress={heroVisualProgress}
               fillMode={
                 state.settings.completionIndicatorFillMode ?? "auto"
               }
@@ -1287,15 +1299,17 @@ function Today() {
               { backgroundColor: "rgba(255,255,255,.22)" },
             ]}
           >
-            <Animated.View
-              style={[
-                styles.heroProgressFill,
-                {
-                  backgroundColor: heroCompletionColor,
-                  width: `${heroProgress * 100}%`,
-                },
-              ]}
-            />
+            {heroVisualProgress > 0 ? (
+              <Animated.View
+                style={[
+                  styles.heroProgressFill,
+                  {
+                    backgroundColor: heroCompletionColor,
+                    width: `${heroVisualProgress * 100}%`,
+                  },
+                ]}
+              />
+            ) : null}
           </View>
           {heroUsesGoals &&
           todayTodos.length > 0 &&
@@ -1422,6 +1436,7 @@ function Today() {
                 )
                 .replace("{total}", String(todayPageCount))}
               accessibilityRole="tablist"
+              pointerEvents="box-none"
               style={styles.sectionPageIndicator}
             >
               {Array.from({ length: todayPageCount }, (_, index) => {
@@ -1434,7 +1449,13 @@ function Today() {
                       .replace("{page}", String(index + 1))
                       .replace("{total}", String(todayPageCount))}
                     accessibilityState={{ selected }}
-                    onPress={() => setRequestedTodayPage(index)}
+                    onPress={() => {
+                      if (selected) return;
+                      // Reflect the click immediately on Web while the pager
+                      // performs its animated imperative scroll.
+                      setTodayPageIndex(index);
+                      setRequestedTodayPage(index);
+                    }}
                     style={styles.sectionPageDotButton}
                   >
                     <View
@@ -1453,7 +1474,7 @@ function Today() {
               })}
             </View>
           ) : null}
-          <View style={styles.sectionActions}>
+          <View pointerEvents="box-none" style={styles.sectionActions}>
             {editing ? (
               <Pressable
                 accessibilityLabel={
@@ -2304,9 +2325,11 @@ function GoalCompletionDot({
         outputRange: [palette.lime, "#FFD166"],
       })
     : palette.lime;
-  const normalized = unavailable
+  const rawNormalized = unavailable
     ? 0
     : Math.max(0, Math.min(1, Number.isFinite(progress) ? progress : 0));
+  const normalized =
+    Math.round(rawNormalized * 100) === 0 ? 0 : rawNormalized;
   const waveTranslateX = liquidMotion.interpolate({
     inputRange: [0, 1],
     outputRange: [-5, 5],
@@ -2721,16 +2744,14 @@ function TrackerRow({
       />
     </Pressable>
   ) : null;
+  const loggingDestination = metricLoggingDestination(item);
+  const loggingTargetId = metricLoggingTargetId(item);
   const canLog =
-    item.dataType !== "calculated" &&
-    !item.fastingSettings &&
-    item.id !== "screen_time" &&
-    item.id !== "blood_pressure_diastolic" &&
+    loggingDestination !== "none" &&
     !(
       item.id === "pulse" &&
       state.metrics.some((metric) => metric.id === "blood_pressure_systolic")
-    ) &&
-    (item.manualEntry !== false || item.id === "steps");
+    );
   const openDetails = useCallback(() => {
     if (item.id === "overall_score") {
       router.navigate("/group" as never);
@@ -2746,11 +2767,30 @@ function TrackerRow({
       openDetails();
       return;
     }
+    if (loggingDestination === "workout") {
+      router.navigate("/gym" as never);
+      return;
+    }
+    if (!loggingTargetId) {
+      openDetails();
+      return;
+    }
     router.navigate({
       pathname: "/log",
-      params: { metric: item.id, date: day },
+      params: {
+        metric: loggingTargetId,
+        date: day,
+        focusMetric: loggingTargetId === item.id ? undefined : item.id,
+      },
     } as never);
-  }, [canLog, day, item.id, openDetails]);
+  }, [
+    canLog,
+    day,
+    item.id,
+    loggingDestination,
+    loggingTargetId,
+    openDetails,
+  ]);
   const handlePress = useCallback(() => {
     if (editing) return;
     if (longPressHandledRef.current) {
@@ -3608,39 +3648,41 @@ function CompletionShapeIndicator({
           styles.completionShapeTrackIcon,
         ]}
       />
-      {resolvedFill === "clockwise" ? (
-        <ClockwiseIconReveal progress={normalized}>
-          {coloredIcon()}
-        </ClockwiseIconReveal>
-      ) : (
-        <View
-          pointerEvents="none"
-          style={[
-            styles.completionReveal,
-            resolvedFill === "bottom_up"
-              ? {
-                  top: (1 - normalized) * COMPLETION_INDICATOR_SIZE,
-                  height: normalized * COMPLETION_INDICATOR_SIZE,
-                  width: COMPLETION_INDICATOR_SIZE,
-                }
-              : {
-                  left:
-                    ((1 - normalized) * COMPLETION_INDICATOR_SIZE) / 2,
-                  width: normalized * COMPLETION_INDICATOR_SIZE,
-                  height: COMPLETION_INDICATOR_SIZE,
-                },
-          ]}
-        >
-          {coloredIcon(
-            resolvedFill === "bottom_up"
-              ? { top: -(1 - normalized) * COMPLETION_INDICATOR_SIZE }
-              : {
-                  left:
-                    -((1 - normalized) * COMPLETION_INDICATOR_SIZE) / 2,
-                },
-          )}
-        </View>
-      )}
+      {normalized > 0 ? (
+        resolvedFill === "clockwise" ? (
+          <ClockwiseIconReveal progress={normalized}>
+            {coloredIcon()}
+          </ClockwiseIconReveal>
+        ) : (
+          <View
+            pointerEvents="none"
+            style={[
+              styles.completionReveal,
+              resolvedFill === "bottom_up"
+                ? {
+                    top: (1 - normalized) * COMPLETION_INDICATOR_SIZE,
+                    height: normalized * COMPLETION_INDICATOR_SIZE,
+                    width: COMPLETION_INDICATOR_SIZE,
+                  }
+                : {
+                    left:
+                      ((1 - normalized) * COMPLETION_INDICATOR_SIZE) / 2,
+                    width: normalized * COMPLETION_INDICATOR_SIZE,
+                    height: COMPLETION_INDICATOR_SIZE,
+                  },
+            ]}
+          >
+            {coloredIcon(
+              resolvedFill === "bottom_up"
+                ? { top: -(1 - normalized) * COMPLETION_INDICATOR_SIZE }
+                : {
+                    left:
+                      -((1 - normalized) * COMPLETION_INDICATOR_SIZE) / 2,
+                  },
+            )}
+          </View>
+        )
+      ) : null}
       <View pointerEvents="none" style={styles.completionShapeLabelCenter}>
         <Text preserveColor style={styles.completionShapeLabel}>
           {label}
@@ -3999,6 +4041,7 @@ const styles = StyleSheet.create({
   },
   sectionPageIndicator: {
     ...StyleSheet.absoluteFillObject,
+    zIndex: 2,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",

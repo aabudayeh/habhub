@@ -41,6 +41,7 @@ import {
   type GoalHeatmapModel,
 } from "@/src/components/GoalHeatmap";
 import { GroupChallengeEditor } from "@/src/components/GroupChallengeEditor";
+import { ChallengeVisual } from "@/src/components/ChallengeVisual";
 import { GroupTodoLeaderboardSection } from "@/src/components/GroupTodoLeaderboardSection";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import {
@@ -87,6 +88,7 @@ import {
 import { isCloudGroupId } from "@/src/cloud/groupCloud";
 import { useFocusedCloudSyncPause } from "@/src/cloud/useFocusedCloudSyncPause";
 import { useGroupChallenges } from "@/src/cloud/useGroupChallenges";
+import { useChallengePreferences } from "@/src/cloud/useChallengePreferences";
 import { useGroupNotificationEvents } from "@/src/cloud/useGroupNotificationEvents";
 import {
   canManageGroupChallenge,
@@ -437,12 +439,30 @@ function LeaderboardScreen() {
   const challengesEnabled =
     tutorialSandbox || (!personalSetup && isCloudGroupId(state.group.id));
   const challengeCloud = useGroupChallenges(state.group.id);
+  const challengePreferences = useChallengePreferences();
+  const effectiveGroupNotificationPreferences = useMemo(() => {
+    const groupPreferences =
+      state.settings.notifications.groupPreferencesByGroup?.[state.group.id];
+    return {
+      ...groupPreferences,
+      // Match the backend and Alerts fallback order: an explicit per-group
+      // choice wins, otherwise the account-wide reaction preference applies.
+      socialReactions:
+        groupPreferences?.socialReactions ??
+        state.settings.notifications.socialReactions ??
+        true,
+    };
+  }, [
+    state.group.id,
+    state.settings.notifications.groupPreferencesByGroup,
+    state.settings.notifications.socialReactions,
+  ]);
   const {
     allEvents: groupFeedEvents,
     unreadCount: groupFeedUnreadCount,
   } = useGroupNotificationEvents(
     state.group.id,
-    state.settings.notifications.groupPreferencesByGroup?.[state.group.id],
+    effectiveGroupNotificationPreferences,
   );
   const notificationBadgeCount =
     groupFeedUnreadCount + (state.group.pendingMembers?.length ?? 0);
@@ -696,6 +716,10 @@ function LeaderboardScreen() {
       fromDate,
       throughDate,
     ).filter((challenge) => {
+      const preference = challengePreferences.preferences.get(
+        groupChallengeSourceId(challenge),
+      );
+      if (preference?.hidden || preference?.withdrawnAt) return false;
       const participation = groupChallengeParticipation(
         challenge,
         state.currentUserId,
@@ -711,6 +735,10 @@ function LeaderboardScreen() {
     // unanswered/declined source cards here so accepted future series do not
     // crowd the current ranking view.
     const futureInvitations = challengeCloud.challenges.filter((challenge) => {
+      const preference = challengePreferences.preferences.get(
+        groupChallengeSourceId(challenge),
+      );
+      if (preference?.hidden || preference?.withdrawnAt) return false;
       const participation = groupChallengeParticipation(
         challenge,
         state.currentUserId,
@@ -729,7 +757,14 @@ function LeaderboardScreen() {
         ]),
       ).values(),
     ];
-  }, [anchor, challengeCloud.challenges, dates, period, state.currentUserId]);
+  }, [
+    anchor,
+    challengeCloud.challenges,
+    challengePreferences.preferences,
+    dates,
+    period,
+    state.currentUserId,
+  ]);
   const savedCardOrder =
     state.settings.leaderboardCardOrderByGroup?.[state.group.id];
   const allCardIds = useMemo(
@@ -753,9 +788,29 @@ function LeaderboardScreen() {
     },
     [allCardIds, visibleChallenges],
   );
+  const isCardPinned = useCallback(
+    (id: string) => {
+      const challengeId = challengeIdFromCard(id);
+      if (!challengeId) return pinnedIds.includes(id);
+      const challenge = visibleChallenges.find(
+        (candidate) => candidate.id === challengeId,
+      );
+      return Boolean(
+        challenge &&
+          challengePreferences.preferences.get(
+            groupChallengeSourceId(challenge),
+          )?.pinned,
+      );
+    },
+    [challengePreferences.preferences, pinnedIds, visibleChallenges],
+  );
   const displayedSelected = useMemo(() => {
     if (editing) return orderedCardIds;
-    const pinOrder = new Map(pinnedIds.map((id, index) => [id, index]));
+    const pinOrder = new Map(
+      orderedCardIds
+        .filter(isCardPinned)
+        .map((id, index) => [id, index]),
+    );
     return [...orderedCardIds].sort((left, right) => {
       const leftPin = pinOrder.get(left);
       const rightPin = pinOrder.get(right);
@@ -767,7 +822,7 @@ function LeaderboardScreen() {
             : leftPin - rightPin;
       return orderedCardIds.indexOf(left) - orderedCardIds.indexOf(right);
     });
-  }, [editing, orderedCardIds, pinnedIds]);
+  }, [editing, isCardPinned, orderedCardIds]);
   const scrollToChallengeCard = useCallback((cardId: string) => {
     const sectionY = rankingSectionY.current;
     const cardY = challengeCardYById.current.get(cardId);
@@ -1199,6 +1254,24 @@ function LeaderboardScreen() {
     });
   }
   function togglePin(id: string) {
+    const occurrenceId = challengeIdFromCard(id);
+    const challenge = occurrenceId
+      ? visibleChallenges.find((candidate) => candidate.id === occurrenceId)
+      : undefined;
+    if (challenge) {
+      const sourceId = groupChallengeSourceId(challenge);
+      const pinned =
+        challengePreferences.preferences.get(sourceId)?.pinned === true;
+      void challengePreferences
+        .save(sourceId, { pinned: !pinned })
+        .catch((reason) =>
+          Alert.alert(
+            "Could not update challenge",
+            reason instanceof Error ? reason.message : String(reason),
+          ),
+        );
+      return;
+    }
     updateSettings({
       leaderboardPinnedMetricIdsByGroup: {
         ...(state.settings.leaderboardPinnedMetricIdsByGroup ?? {}),
@@ -1207,6 +1280,16 @@ function LeaderboardScreen() {
           : [...pinnedIds, id],
       },
     });
+  }
+  function hideChallenge(challenge: GroupChallenge) {
+    void challengePreferences
+      .save(groupChallengeSourceId(challenge), { hidden: true })
+      .catch((reason) =>
+        Alert.alert(
+          "Could not hide challenge",
+          reason instanceof Error ? reason.message : String(reason),
+        ),
+      );
   }
   function move(id: string, target: number) {
     const next = [...orderedCardIds];
@@ -1273,53 +1356,6 @@ function LeaderboardScreen() {
     );
     setChallengeEditorOpen(true);
   }
-  function confirmDeleteChallenge(challenge: GroupChallenge) {
-    const sourceId = groupChallengeSourceId(challenge);
-    Alert.alert(
-      "Delete challenge?",
-      "This removes the challenge card for every invited member. Tracker data is not changed.",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Delete",
-          style: "destructive",
-          onPress: () => {
-            challengeCloud
-              .remove(sourceId)
-              .then(() => {
-                const isChallengeSeriesCard = (id: string) => {
-                  const challengeId = challengeIdFromCard(id);
-                  return (
-                    challengeId === sourceId ||
-                    challengeId?.startsWith(`${sourceId}@`) === true
-                  );
-                };
-                updateSettings({
-                  leaderboardPinnedMetricIdsByGroup: {
-                    ...(state.settings.leaderboardPinnedMetricIdsByGroup ?? {}),
-                    [state.group.id]: pinnedIds.filter(
-                      (id) => !isChallengeSeriesCard(id),
-                    ),
-                  },
-                  leaderboardCardOrderByGroup: {
-                    ...(state.settings.leaderboardCardOrderByGroup ?? {}),
-                    [state.group.id]: (savedCardOrder ?? []).filter(
-                      (id) => !isChallengeSeriesCard(id),
-                    ),
-                  },
-                });
-              })
-              .catch((reason) =>
-                Alert.alert(
-                  "Could not delete challenge",
-                  reason instanceof Error ? reason.message : String(reason),
-                ),
-              );
-          },
-        },
-      ],
-    );
-  }
   const finishLeaderboardEditing = useCallback(() => {
     setEditing(false);
     setShowPicker(false);
@@ -1347,64 +1383,66 @@ function LeaderboardScreen() {
       contentContainerStyle={{ paddingBottom: 14 }}
       refreshEnabled={!editing}
     >
-      <PageHeader
-        title="Leaderboard"
-        tutorialId="leaderboard-header"
-        action={
-          editing ? (
-            <View style={styles.headerActions}>
-            {canManageGroup ? (
-              <IconButton
-                icon="settings-outline"
-                label="Group settings"
-                onPress={() => router.navigate("/group-settings" as never)}
-              />
-            ) : null}
-            <Pressable
-              onPress={finishLeaderboardEditing}
-              style={[styles.done, { backgroundColor: accent }]}
-            >
-              <Text style={styles.doneText}>Done</Text>
-            </Pressable>
-            </View>
-          ) : (
-            <View style={styles.headerActions}>
-              {challengesEnabled ? (
-                <TutorialTarget id="leaderboard-create-challenge">
+      <View style={styles.compactHeaderSpacing}>
+        <PageHeader
+          title="Leaderboard"
+          tutorialId="leaderboard-header"
+          action={
+            editing ? (
+              <View style={styles.headerActions}>
+                {canManageGroup ? (
                   <IconButton
-                    icon="trophy-outline"
-                    label="Challenges"
-                    onPress={() => router.navigate("/challenges" as never)}
+                    icon="settings-outline"
+                    label="Group settings"
+                    onPress={() => router.navigate("/group-settings" as never)}
                   />
-                </TutorialTarget>
-              ) : null}
-              <IconButton
-                icon="sparkles-outline"
-                label="Group recap"
-                onPress={() =>
-                  router.navigate("/recap?scope=group" as never)
-                }
-              />
-              <View>
+                ) : null}
+                <Pressable
+                  onPress={finishLeaderboardEditing}
+                  style={[styles.done, { backgroundColor: accent }]}
+                >
+                  <Text style={styles.doneText}>Done</Text>
+                </Pressable>
+              </View>
+            ) : (
+              <View style={styles.headerActions}>
+                {challengesEnabled ? (
+                  <TutorialTarget id="leaderboard-create-challenge">
+                    <IconButton
+                      icon="trophy-outline"
+                      label="Challenges"
+                      onPress={() => router.navigate("/challenges" as never)}
+                    />
+                  </TutorialTarget>
+                ) : null}
                 <IconButton
-                  icon="notifications-outline"
-                  label="Group notifications"
+                  icon="sparkles-outline"
+                  label="Group recap"
                   onPress={() =>
-                    router.navigate("/alerts?scope=group" as never)
+                    router.navigate("/recap?scope=group" as never)
                   }
                 />
-                {notificationBadgeCount > 0 ? (
-                  <View style={styles.pendingDot}>
-                    <Text style={styles.pendingDotText}>
-                      {Math.min(9, notificationBadgeCount)}
-                    </Text>
-                  </View>
-                ) : null}
+                <View>
+                  <IconButton
+                    icon="notifications-outline"
+                    label="Group notifications"
+                    onPress={() =>
+                      router.navigate("/alerts?scope=group" as never)
+                    }
+                  />
+                  {notificationBadgeCount > 0 ? (
+                    <View style={styles.pendingDot}>
+                      <Text style={styles.pendingDotText}>
+                        {Math.min(9, notificationBadgeCount)}
+                      </Text>
+                    </View>
+                  ) : null}
+                </View>
               </View>
-            </View>
-          )
-        }
-      />
+            )
+          }
+        />
+      </View>
       <View
         {...pageSwipeResponder.panHandlers}
         onLayout={(event) => {
@@ -1509,9 +1547,9 @@ function LeaderboardScreen() {
                   move(id, target);
                 }}
                 onSendBelow={() => move(id, displayedSelected.length - 1)}
-                onRemove={manageable ? () => confirmDeleteChallenge(challenge) : undefined}
+                onRemove={() => hideChallenge(challenge)}
                 onEdit={editable ? () => openChallengeEditor(challenge) : undefined}
-                pinned={pinnedIds.includes(id)}
+                pinned={isCardPinned(id)}
                 onPin={() => togglePin(id)}
                 onDragStart={() => setDraggingCardId(id)}
                 onDragHover={() => {}}
@@ -1526,7 +1564,7 @@ function LeaderboardScreen() {
                   accent={accent}
                   editing={editing}
                   highlighted={highlightedChallengeCardId === id}
-                  pinned={pinnedIds.includes(id)}
+                  pinned={isCardPinned(id)}
                   onLongPress={() => setEditing(true)}
                   onRespond={(response) =>
                     challengeCloud
@@ -1559,7 +1597,7 @@ function LeaderboardScreen() {
               }}
               onSendBelow={() => move(id, displayedSelected.length - 1)}
               onRemove={() => saveSelection(selected.filter((item) => item !== id))}
-              pinned={pinnedIds.includes(id)}
+              pinned={isCardPinned(id)}
               onPin={() => togglePin(id)}
               visibility={
                 id === SCORE_ID
@@ -1608,7 +1646,7 @@ function LeaderboardScreen() {
                 </Text>
               </View>
               <View style={styles.rankingHeadAction}>
-              {pinnedIds.includes(id) && !editing ? (
+              {isCardPinned(id) && !editing ? (
                 <Ionicons name="pin" size={13} color={palette.amber} />
               ) : null}
               {includeScore ? (
@@ -2368,9 +2406,7 @@ function ChallengeRankingCard({
         />
       ) : null}
       <Pressable disabled={editing} onLongPress={onLongPress} style={styles.challengeHead}>
-        <View style={[styles.challengeMark, { backgroundColor: `${accent}1F` }]}>
-          <Ionicons name="trophy" size={18} color={accent} />
-        </View>
+        <ChallengeVisual challenge={challenge} color={accent} size={38} />
         <View style={styles.challengeHeadingCopy}>
           <View style={styles.challengeEyebrowLine}>
             <Text style={[styles.eyebrow, { color: accent }]}>FRIEND CHALLENGE</Text>
@@ -2626,6 +2662,7 @@ function EditableRankingCard({
 
 export default LeaderboardScreen;
 const styles = StyleSheet.create({
+  compactHeaderSpacing: { marginBottom: -5 },
   headerActions: { flexDirection: "row", gap: 5, alignItems: "center" },
   pendingDot: {
     position: "absolute",
@@ -2681,7 +2718,6 @@ const styles = StyleSheet.create({
     borderColor: palette.amber,
   },
   challengeHead: { flexDirection: "row", alignItems: "center", gap: 9, padding: 5, paddingBottom: 8 },
-  challengeMark: { width: 38, height: 38, borderRadius: 13, alignItems: "center", justifyContent: "center" },
   challengeHeadingCopy: { flex: 1, minWidth: 0 },
   challengeEyebrowLine: { flexDirection: "row", alignItems: "center", gap: 5 },
   challengeMeta: { fontSize: 8, lineHeight: 11, marginTop: 2, fontWeight: "700" },

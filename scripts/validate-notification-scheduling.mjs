@@ -603,6 +603,11 @@ assert.match(adapterSource, /deliveryMode = await getExactAlarmStatus\(\)/);
 assert.match(adapterSource, /plan\.scheduleKey,[\s\S]{0,40}deliveryMode/);
 assert.match(adapterSource, /sound: content\.sound === undefined \? "default"/);
 assert.match(adapterSource, /cancelAllScheduledNotificationsAsync\(\)/);
+assert.match(
+  adapterSource,
+  /if \(Platform\.OS !== "web"\) \{[\s\S]{0,180}cancelAllScheduledNotificationsAsync\(\)[\s\S]{0,120}dismissAllNotificationsAsync\(\)/,
+  "web sign-out must not call native-only Expo notification cancellation methods",
+);
 assert.match(adapterSource, /dismissAllNotificationsAsync\(\)/);
 assert.match(adapterSource, /createManagedLocalNotificationGate/);
 assert.match(adapterSource, /scheduleImmediateManagedLocalNotification/);

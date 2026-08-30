@@ -1,8 +1,5 @@
 import type { DailyMetricStatus, MetricEntry } from "../types";
 
-export const SHARED_DAILY_SUMMARY_LABEL =
-  "Shared daily total";
-
 type SharedLeaderboardLogInput = {
   currentUserId: string;
   dates: readonly string[];
@@ -170,41 +167,9 @@ export function sharedLeaderboardLogEntries({
       authoritativeStatus.visibility === "group"
     );
   });
-  const detailedProjectionKeys = new Set(
-    detailedEntries.map((entry) =>
-      dailyProjectionKey(entry.userId, entry.metricId, entry.localDate),
-    ),
-  );
-  const compactOnlyEntries = statuses
-    .filter(
-      (status) =>
-        status.groupId === groupId &&
-        status.userId !== currentUserId &&
-        dateSet.has(status.localDate) &&
-        status.visibility === "group" &&
-        status.privacyProjectionVersion === 2 &&
-        status.exactValue !== undefined &&
-        !detailedProjectionKeys.has(
-          dailyProjectionKey(
-            status.userId,
-            status.metricId,
-            status.localDate,
-          ),
-        ),
-    )
-    .map<MetricEntry>((status) => ({
-      id: `shared-total:${status.userId}:${status.metricId}:${status.localDate}`,
-      metricId: status.metricId,
-      userId: status.userId,
-      value: status.exactValue!,
-      localDate: status.localDate,
-      recordedAt:
-        status.syncedAt ?? `${status.localDate}T12:00:00.000Z`,
-      visibility: "group",
-      source: "calculated",
-      label: SHARED_DAILY_SUMMARY_LABEL,
-      sourceProvider: status.sourceProvider,
-      sourceRevision: status.sourceRevision,
-    }));
-  return [...detailedEntries, ...compactOnlyEntries];
+  // Compact statuses belong to the ranking card above. A detail screen must
+  // never fabricate a log from that aggregate: it either shows an authorized
+  // relational item or no item. This also prevents a transient range fetch
+  // from replacing a previously cached meal/workout with a daily-total row.
+  return detailedEntries;
 }

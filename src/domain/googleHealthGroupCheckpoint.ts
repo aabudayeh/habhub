@@ -1,12 +1,25 @@
-import { dateKey, dateWithOffsetFrom } from "@/src/domain/date";
+import { dateKey } from "@/src/domain/date";
 import { cloudEntryNeedsItemDetail } from "@/src/domain/cloudMaintenance";
 import type { DailyMetricStatus, MetricEntry } from "@/src/types";
 
-export const GOOGLE_HEALTH_GROUP_CHECKPOINT_VERSION = 2 as const;
-export const GOOGLE_HEALTH_GROUP_CHECKPOINT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const GOOGLE_HEALTH_GROUP_CHECKPOINT_DAYS = 120;
-const GOOGLE_HEALTH_GROUP_CHECKPOINT_MAX_STATUSES = 10_000;
-const GOOGLE_HEALTH_GROUP_CHECKPOINT_MAX_ENTRIES = 500;
+export const GOOGLE_HEALTH_GROUP_CHECKPOINT_VERSION = 3 as const;
+const LEGACY_GOOGLE_HEALTH_GROUP_CHECKPOINT_VERSION = 2 as const;
+// An authorized item that was already shown must remain available across app
+// restarts. Privacy fences, exact tombstones, membership loss and sign-out are
+// the invalidation boundary; elapsed wall-clock time is not. The broad caps
+// protect local storage without imposing the old seven-day/120-day expiry.
+const GOOGLE_HEALTH_GROUP_CHECKPOINT_EARLIEST_DATE = "2000-01-01";
+const GOOGLE_HEALTH_GROUP_CHECKPOINT_MAX_STATUSES = 20_000;
+const GOOGLE_HEALTH_GROUP_CHECKPOINT_MAX_ENTRIES = 5_000;
+const LEGACY_GOOGLE_HEALTH_GROUP_CHECKPOINT_MAX_STATUSES = 10_000;
+const LEGACY_GOOGLE_HEALTH_GROUP_CHECKPOINT_MAX_ENTRIES = 500;
+const GOOGLE_HEALTH_GROUP_CHECKPOINT_STATUS_BUDGET = 2 * 1024 * 1024;
+const GOOGLE_HEALTH_GROUP_CHECKPOINT_ENTRY_BUDGET = 6 * 1024 * 1024;
+const GOOGLE_HEALTH_GROUP_CHECKPOINT_MAX_SERIALIZED_BYTES =
+  GOOGLE_HEALTH_GROUP_CHECKPOINT_STATUS_BUDGET +
+  GOOGLE_HEALTH_GROUP_CHECKPOINT_ENTRY_BUDGET +
+  16 * 1024;
+const NON_EXPIRING_CHECKPOINT_DATE = "9999-12-31T23:59:59.999Z";
 
 export type GoogleHealthGroupCheckpoint = {
   version: typeof GOOGLE_HEALTH_GROUP_CHECKPOINT_VERSION;
@@ -121,6 +134,56 @@ function boundedJson(value: unknown, maximum: number) {
   }
 }
 
+function utf8ByteLength(value: string) {
+  let bytes = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code < 0x80) bytes += 1;
+    else if (code < 0x800) bytes += 2;
+    else if (
+      code >= 0xd800 &&
+      code <= 0xdbff &&
+      index + 1 < value.length &&
+      value.charCodeAt(index + 1) >= 0xdc00 &&
+      value.charCodeAt(index + 1) <= 0xdfff
+    ) {
+      bytes += 4;
+      index += 1;
+    } else bytes += 3;
+  }
+  return bytes;
+}
+
+function boundedJsonUtf8(value: unknown, maximumBytes: number) {
+  try {
+    const serialized = JSON.stringify(value);
+    return (
+      serialized === undefined || utf8ByteLength(serialized) <= maximumBytes
+    );
+  } catch {
+    return false;
+  }
+}
+
+function newestWithinSerializedBudget<T>(
+  values: readonly T[],
+  maximumBytes: number,
+) {
+  const retained: T[] = [];
+  let usedBytes = 2;
+  for (let index = values.length - 1; index >= 0; index -= 1) {
+    const value = values[index];
+    const serialized = JSON.stringify(value);
+    if (serialized === undefined) continue;
+    const valueBytes =
+      utf8ByteLength(serialized) + (retained.length ? 1 : 0);
+    if (usedBytes + valueBytes > maximumBytes) continue;
+    retained.push(value);
+    usedBytes += valueBytes;
+  }
+  return retained.reverse();
+}
+
 function validSharedGoogleEntry(
   value: unknown,
   accountId: string,
@@ -137,6 +200,11 @@ function validSharedGoogleEntry(
     typeof entry.id === "string" &&
     entry.id.length > 0 &&
     entry.id.length <= 300 &&
+    (entry.cloudId === undefined ||
+      (typeof entry.cloudId === "string" &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+          entry.cloudId,
+        ))) &&
     typeof entry.metricId === "string" &&
     entry.metricId.length > 0 &&
     entry.metricId.length <= 200 &&
@@ -169,6 +237,7 @@ function validSharedGoogleEntry(
 function minimalSharedGoogleEntry(entry: MetricEntry): MetricEntry {
   return {
     id: entry.id.slice(0, 300),
+    ...(entry.cloudId ? { cloudId: entry.cloudId } : {}),
     metricId: entry.metricId.slice(0, 200),
     userId: entry.userId.slice(0, 200),
     value: entry.value,
@@ -213,17 +282,19 @@ export function buildGoogleHealthGroupCheckpoint(
 ): GoogleHealthGroupCheckpoint | undefined {
   if (!source.currentUserId || !source.groupId) return;
   const today = dateKey(now);
-  const earliestDate = dateWithOffsetFrom(
-    today,
-    -(GOOGLE_HEALTH_GROUP_CHECKPOINT_DAYS - 1),
-  );
-  const statuses = source.dailyMetricStatuses
+  const earliestDate = GOOGLE_HEALTH_GROUP_CHECKPOINT_EARLIEST_DATE;
+  const statusCandidates = source.dailyMetricStatuses
     .filter((status) =>
       validSharedGoogleStatus(status, source.groupId, earliestDate, today),
     )
+    .sort((left, right) =>
+      left.localDate === right.localDate
+        ? (left.syncedAt ?? "").localeCompare(right.syncedAt ?? "")
+        : left.localDate.localeCompare(right.localDate),
+    )
     .slice(-GOOGLE_HEALTH_GROUP_CHECKPOINT_MAX_STATUSES)
     .map(minimalSharedGoogleStatus);
-  const entries = (source.entries ?? [])
+  const entryCandidates = (source.entries ?? [])
     .filter((entry) =>
       validSharedGoogleEntry(
         entry,
@@ -232,17 +303,30 @@ export function buildGoogleHealthGroupCheckpoint(
         today,
       ),
     )
+    .sort((left, right) => left.recordedAt.localeCompare(right.recordedAt))
     .slice(-GOOGLE_HEALTH_GROUP_CHECKPOINT_MAX_ENTRIES)
     .map(minimalSharedGoogleEntry);
+  // IndexedDB can hold much more than the old rolling window, but a malformed
+  // nutrition payload must not turn one cache rewrite into an 80 MB main-thread
+  // stringify/encryption task. Keep the newest authorized rows within fixed
+  // status/detail byte budgets; ordinary groups retain years of sparse logs.
+  const statuses = newestWithinSerializedBudget(
+    statusCandidates,
+    GOOGLE_HEALTH_GROUP_CHECKPOINT_STATUS_BUDGET,
+  );
+  const entries = newestWithinSerializedBudget(
+    entryCandidates,
+    GOOGLE_HEALTH_GROUP_CHECKPOINT_ENTRY_BUDGET,
+  );
   if (!statuses.length && !entries.length) return;
   return {
     version: GOOGLE_HEALTH_GROUP_CHECKPOINT_VERSION,
     accountId: source.currentUserId,
     groupId: source.groupId,
     createdAt: now.toISOString(),
-    expiresAt: new Date(
-      now.getTime() + GOOGLE_HEALTH_GROUP_CHECKPOINT_TTL_MS,
-    ).toISOString(),
+    // Kept as a field so v2 ciphertext can be upgraded in place. Readers no
+    // longer treat time as revocation; the authorization stream does that.
+    expiresAt: NON_EXPIRING_CHECKPOINT_DATE,
     entries,
     dailyMetricStatuses: statuses,
   };
@@ -256,28 +340,36 @@ export function parseGoogleHealthGroupCheckpoint(
 ): GoogleHealthGroupCheckpoint | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return;
   const checkpoint = value as Partial<GoogleHealthGroupCheckpoint>;
+  const checkpointVersion = (value as { version?: unknown }).version;
+  const legacy =
+    checkpointVersion === LEGACY_GOOGLE_HEALTH_GROUP_CHECKPOINT_VERSION;
   if (
-    checkpoint.version !== GOOGLE_HEALTH_GROUP_CHECKPOINT_VERSION ||
+    (checkpointVersion !== GOOGLE_HEALTH_GROUP_CHECKPOINT_VERSION &&
+      checkpointVersion !== LEGACY_GOOGLE_HEALTH_GROUP_CHECKPOINT_VERSION) ||
     checkpoint.accountId !== accountId ||
     checkpoint.groupId !== groupId ||
     !validIso(checkpoint.createdAt) ||
     !validIso(checkpoint.expiresAt) ||
     Date.parse(checkpoint.createdAt!) > now.getTime() + 5 * 60_000 ||
-    Date.parse(checkpoint.expiresAt!) <= now.getTime() ||
-    Date.parse(checkpoint.expiresAt!) - Date.parse(checkpoint.createdAt!) >
-      GOOGLE_HEALTH_GROUP_CHECKPOINT_TTL_MS + 5 * 60_000 ||
     !Array.isArray(checkpoint.dailyMetricStatuses) ||
     checkpoint.dailyMetricStatuses.length >
-      GOOGLE_HEALTH_GROUP_CHECKPOINT_MAX_STATUSES ||
+      (legacy
+        ? LEGACY_GOOGLE_HEALTH_GROUP_CHECKPOINT_MAX_STATUSES
+        : GOOGLE_HEALTH_GROUP_CHECKPOINT_MAX_STATUSES) ||
     !Array.isArray(checkpoint.entries) ||
-    checkpoint.entries.length > GOOGLE_HEALTH_GROUP_CHECKPOINT_MAX_ENTRIES
+    checkpoint.entries.length >
+      (legacy
+        ? LEGACY_GOOGLE_HEALTH_GROUP_CHECKPOINT_MAX_ENTRIES
+        : GOOGLE_HEALTH_GROUP_CHECKPOINT_MAX_ENTRIES) ||
+    (!legacy &&
+      !boundedJsonUtf8(
+        checkpoint,
+        GOOGLE_HEALTH_GROUP_CHECKPOINT_MAX_SERIALIZED_BYTES,
+      ))
   )
     return;
   const today = dateKey(now);
-  const earliestDate = dateWithOffsetFrom(
-    today,
-    -(GOOGLE_HEALTH_GROUP_CHECKPOINT_DAYS - 1),
-  );
+  const earliestDate = GOOGLE_HEALTH_GROUP_CHECKPOINT_EARLIEST_DATE;
   if (
     !checkpoint.dailyMetricStatuses.every((status) =>
       validSharedGoogleStatus(status, groupId, earliestDate, today),
@@ -292,15 +384,38 @@ export function parseGoogleHealthGroupCheckpoint(
     )
   )
     return;
+  const entries = checkpoint.entries.map(minimalSharedGoogleEntry);
+  const dailyMetricStatuses = checkpoint.dailyMetricStatuses.map(
+    minimalSharedGoogleStatus,
+  );
+  if (legacy) {
+    entries.sort((left, right) => left.recordedAt.localeCompare(right.recordedAt));
+    dailyMetricStatuses.sort((left, right) =>
+      left.localDate === right.localDate
+        ? (left.syncedAt ?? "").localeCompare(right.syncedAt ?? "")
+        : left.localDate.localeCompare(right.localDate),
+    );
+  }
   return {
     version: GOOGLE_HEALTH_GROUP_CHECKPOINT_VERSION,
     accountId,
     groupId,
     createdAt: checkpoint.createdAt!,
-    expiresAt: checkpoint.expiresAt!,
-    entries: checkpoint.entries.map(minimalSharedGoogleEntry),
-    dailyMetricStatuses: checkpoint.dailyMetricStatuses.map(
-      minimalSharedGoogleStatus,
-    ),
+    expiresAt: NON_EXPIRING_CHECKPOINT_DATE,
+    // Legacy v2 had independent row caps but no total serialized-size limit.
+    // Compact a valid authenticated upgrade instead of treating it as corrupt;
+    // every subsequent write uses the bounded v3 representation.
+    entries: legacy
+      ? newestWithinSerializedBudget(
+          entries,
+          GOOGLE_HEALTH_GROUP_CHECKPOINT_ENTRY_BUDGET,
+        )
+      : entries,
+    dailyMetricStatuses: legacy
+      ? newestWithinSerializedBudget(
+          dailyMetricStatuses,
+          GOOGLE_HEALTH_GROUP_CHECKPOINT_STATUS_BUDGET,
+        )
+      : dailyMetricStatuses,
   };
 }

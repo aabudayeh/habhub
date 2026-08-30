@@ -34,7 +34,7 @@ const termRows = [
   ["Carbs", "الكربوهيدرات", "Carbohidratos", "碳水化合物", "Kolhydrater", "Kohlenhydrate", "Углеводы", "Glucides"],
   ["Fiber", "الألياف", "Fibra", "膳食纤维", "Fiber", "Ballaststoffe", "Клетчатка", "Fibres"],
   ["Sodium", "الصوديوم", "Sodio", "钠", "Natrium", "Natrium", "Натрий", "Sodium"],
-  ["Progress photo", "صورة التقدم", "Foto de progreso", "进度照片", "Framstegsfoto", "Fortschrittsfoto", "Фото прогресса", "Photo de progression"],
+  ["Photo progress", "تقدم الصور", "Progreso fotográfico", "照片进度", "Fotoframsteg", "Fotofortschritt", "Прогресс в фотографиях", "Progression en photos"],
   ["Workout duration", "مدة التمرين", "Duración del entrenamiento", "锻炼时长", "Träningstid", "Trainingsdauer", "Длительность тренировки", "Durée de l’entraînement"],
   ["Body fat", "دهون الجسم", "Grasa corporal", "体脂", "Kroppsfett", "Körperfett", "Жир в организме", "Masse grasse"],
   ["Lean body mass", "كتلة الجسم الخالية من الدهون", "Masa corporal magra", "瘦体重", "Fettfri kroppsmassa", "Fettfreie Körpermasse", "Безжировая масса тела", "Masse maigre"],

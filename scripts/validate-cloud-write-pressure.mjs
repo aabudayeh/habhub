@@ -17,6 +17,10 @@ const migration = fs.readFileSync(
   "supabase/migrations/202608240008_conditional_daily_status_upserts.sql",
   "utf8",
 );
+const idempotentDeletionMigration = fs.readFileSync(
+  "supabase/migrations/202608280004_idempotent_group_entry_deletion_ack.sql",
+  "utf8",
+);
 
 assert.equal(
   cloudSourceTimestampIsNewer(
@@ -67,9 +71,11 @@ const workspaceHashBlock = cloudProvider.slice(
   workspaceHashEnd,
 );
 assert.ok(workspaceHashStart >= 0 && workspaceHashEnd > workspaceHashStart);
-assert.match(workspaceHashBlock, /snapshotPayload\(state\)/);
-assert.match(workspaceHashBlock, /orderedValueHash\(payload\.entries\)/);
-assert.match(workspaceHashBlock, /orderedValueHash\(payload\.photos\)/);
+assert.match(workspaceHashBlock, /accountOwnedCollections\(state\)/);
+assert.match(workspaceHashBlock, /orderedValueHash\(owned\.entries\)/);
+assert.match(workspaceHashBlock, /orderedValueHash\(owned\.photos\)/);
+assert.doesNotMatch(workspaceHashBlock, /orderedValueHash\(state\.entries\)/);
+assert.doesNotMatch(workspaceHashBlock, /orderedValueHash\(state\.photos\)/);
 assert.doesNotMatch(workspaceHashBlock, /signedUrl|avatarUrl|imageUri/);
 assert.match(
   cloudProvider,
@@ -121,6 +127,36 @@ assert.notEqual(
 );
 
 assert.match(
+  groupCloud,
+  /acknowledgedSupersededStepFallbackIdsByGroup\s*=\s*new Map/,
+  "superseded private Steps fallbacks need a process-scoped server acknowledgement",
+);
+assert.match(
+  groupCloud,
+  /supersededSharedStepFallbackIds[\s\S]{0,900}!acknowledgedSupersededFallbackIds\.has\(entryId\)/,
+  "an acknowledged absent Steps fallback must not reopen the delete outbox on every autosave",
+);
+assert.match(
+  groupCloud,
+  /if \(deleted\.error\)[\s\S]{0,320}acknowledgedSupersededFallbackIds\.add\(entryId\)/,
+  "a Steps fallback deletion may only be acknowledged after the server RPC succeeds",
+);
+assert.match(
+  idempotentDeletionMigration,
+  /create or replace function public\.delete_group_metric_entries\([\s\S]{0,260}security definer/,
+);
+assert.match(
+  idempotentDeletionMigration,
+  /perform public\.assert_account_snapshot_revision\([\s\S]{0,150}p_expected_revision[\s\S]{0,900}public\.delete_group_metric_entries\(/,
+  "idempotent deletion acknowledgement must retain the account revision/privacy fence before canonical deletion",
+);
+assert.match(
+  idempotentDeletionMigration,
+  /left join removed[\s\S]{0,500}grant execute[\s\S]{0,120}to authenticated/,
+  "already-absent requested ids must be acknowledged without widening RPC access",
+);
+
+assert.match(
   migration,
   /create or replace function public\.upsert_daily_metric_status_rows_if_changed\([\s\S]{0,160}security invoker/,
   "conditional status writes must remain governed by existing RLS",
@@ -147,5 +183,5 @@ assert.match(
 );
 
 console.log(
-  "Cloud write-pressure validation passed (volatile ACK retention, owned projection, timestamp canonicalization, conditional status writes, and bounded freshness).",
+  "Cloud write-pressure validation passed (volatile ACK retention, owned projection, idempotent deletion ACK, timestamp canonicalization, conditional status writes, and bounded freshness).",
 );

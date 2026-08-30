@@ -310,6 +310,7 @@ export function metricValue(
         state.metrics,
         stepCount,
         profile,
+        state.settings.stepCoveragePreferences,
       );
       if (
         metric.healthMapping?.dataType === "workouts" &&

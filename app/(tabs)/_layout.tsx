@@ -21,6 +21,7 @@ import {
   workoutTimerPresenceFor,
 } from "@/src/storage/workoutTimerPresence";
 import { TutorialTarget } from "@/src/components/TutorialSpotlight";
+import { requestLogDraftExit } from "@/src/components/logDraftNavigationGuard";
 import {
   compactTabBarForCount,
   normalizeTabOrder,
@@ -202,7 +203,7 @@ export default function TabLayout() {
       href: showPerformance ? "/performance" : null,
     },
     recapfeed: {
-      title: t("Recap"),
+      title: t("Feed"),
       href: showRecap ? ("/recapfeed" as Href) : null,
     },
     status: {
@@ -348,10 +349,38 @@ export default function TabLayout() {
       })}
     >
       {orderedTabs.map((name) => (
-        <Tabs.Screen key={name} name={name} options={tabOptions[name]} />
+        <Tabs.Screen
+          key={name}
+          name={name}
+          options={tabOptions[name]}
+          listeners={({ navigation }) => ({
+            tabPress: (event) => {
+              if (name === "log") return;
+              const tabState = navigation.getState();
+              if (tabState.routes[tabState.index]?.name !== "log") return;
+              const guarded = requestLogDraftExit(() =>
+                navigation.navigate(name as never),
+              );
+              if (guarded) event.preventDefault();
+            },
+          })}
+        />
       ))}
       {!orderedTabs.includes("timers") ? (
-        <Tabs.Screen name="timers" options={tabOptions.timers} />
+        <Tabs.Screen
+          name="timers"
+          options={tabOptions.timers}
+          listeners={({ navigation }) => ({
+            tabPress: (event) => {
+              const tabState = navigation.getState();
+              if (tabState.routes[tabState.index]?.name !== "log") return;
+              const guarded = requestLogDraftExit(() =>
+                navigation.navigate("timers" as never),
+              );
+              if (guarded) event.preventDefault();
+            },
+          })}
+        />
       ) : null}
     </Tabs>
   );

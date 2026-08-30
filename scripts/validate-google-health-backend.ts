@@ -354,6 +354,25 @@ assert.equal(
   false,
   "per-workout calories must not become a second Active energy value alongside Google's canonical daily rollup",
 );
+const mappedDailyActiveEnergy = googleHealthSyncTestHooks.mapRecordsToEntries(
+  [{
+    externalId: "active-energy-burned:daily:2026-08-21",
+    dataType: "active_energy",
+    startTime: "2026-08-21T00:00:00.000Z",
+    endTime: "2026-08-22T00:00:00.000Z",
+    localDate: "2026-08-21",
+    value: 420,
+    unit: "kcal",
+  }],
+  { metrics: workoutMetrics, entries: [], settings: {} },
+  "owner",
+  "2026-08-22T00:05:00.000Z",
+).find((row) => row.entry.metricId === "exercise")!;
+assert.equal(
+  mappedDailyActiveEnergy.entry.label,
+  "Active energy total",
+  "a Google daily Active Energy aggregate must be identifiable so the client does not add uncovered-step calories twice",
+);
 const privateEnergyWorkout = googleHealthSyncTestHooks.mapRecordsToEntries(
   [workoutRecord],
   {
@@ -372,6 +391,640 @@ assert.equal(
   privateEnergyWorkout.entry.submetricValues?.exercise,
   100,
   "per-workout calories must remain in the private snapshot for privacy-safe destination-group projection",
+);
+
+const stepFallbackMetrics = [
+  {
+    id: "steps",
+    unit: "steps",
+    dataType: "number",
+    defaultVisibility: "group",
+    healthMapping: { dataType: "steps", field: "value" },
+  },
+  ...workoutMetrics.map((metric) =>
+    ["exercise", "workout_duration", "workout_distance"].includes(metric.id)
+      ? { ...metric, stepFallback: true }
+      : metric
+  ),
+];
+const fallbackSnapshot = {
+  metrics: stepFallbackMetrics,
+  entries: [],
+  settings: {
+    energyProfile: {
+      age: 35,
+      sex: "male",
+      heightCm: 180,
+      weightKg: 80,
+    },
+  },
+};
+const serverUnexplainedWalking =
+  googleHealthSyncTestHooks.estimateWalkingFromSteps(6_000, fallbackSnapshot);
+assert.equal(googleHealthSyncTestHooks.metCadenceStepEstimate(3), 100);
+assert.equal(googleHealthSyncTestHooks.metCadenceStepEstimate(6), 130);
+assert.equal(
+  googleHealthSyncTestHooks.stepCoverageActivityFromKey("basketball")
+    ?.stepsPerMinute,
+  130,
+  "Google must preserve a published activity-table rate",
+);
+assert.equal(
+  googleHealthSyncTestHooks.stepCoverageActivityFromKey("mountain_biking")
+    ?.stepsPerMinute,
+  155,
+  "Google must recognize session activities through the MET cadence fallback",
+);
+assert.equal(
+  googleHealthSyncTestHooks.stepCoverageActivity(
+    "High-intensity interval training",
+  )?.key,
+  "hiit",
+  "Google must resolve canonical catalog labels as well as explicit activity keys",
+);
+assert.equal(
+  googleHealthSyncTestHooks.stepCoverageActivityFromKey(
+    "barbell_bench_press",
+  ),
+  undefined,
+  "individual strength exercises must not enter the session Step picker",
+);
+for (const administrativeKey of [
+  "multisport_transition",
+  "other_workout",
+  "workout_break",
+]) {
+  assert.equal(
+    googleHealthSyncTestHooks.stepCoverageActivityFromKey(administrativeKey),
+    undefined,
+    `${administrativeKey} must not invent a covered-step rate`,
+  );
+}
+assert.ok(
+  Math.abs(serverUnexplainedWalking.stepLengthM - 0.7636) < 1e-12 &&
+    Math.abs(
+      serverUnexplainedWalking.durationMinutes -
+        (6_000 * 0.7636) / 1_000 * 1_000 / 1.4 / 60,
+    ) < 1e-12,
+  "Google remaining-step distance and duration must use the explicit 1.4 m/s profile equation",
+);
+const serverMeasuredWalkingStep =
+  googleHealthSyncTestHooks.movementStepLengthForCoverage(
+    { distanceKm: 3, durationMinutes: 30 },
+    fallbackSnapshot,
+  );
+assert.ok(
+  serverMeasuredWalkingStep.speedSource === "measured" &&
+    Math.abs(serverMeasuredWalkingStep.speedKmh - 6) < 1e-12 &&
+    Math.abs(serverMeasuredWalkingStep.stepLengthM - 0.8436) < 1e-12,
+  "Google walking and hiking coverage must use measured distance/duration speed with the profile equation",
+);
+const serverMeasuredRunningStep =
+  googleHealthSyncTestHooks.movementStepLengthForCoverage(
+    { distanceKm: 3, durationMinutes: 15, running: true },
+    fallbackSnapshot,
+  );
+assert.ok(
+  serverMeasuredRunningStep.speedSource === "measured" &&
+    Math.abs(serverMeasuredRunningStep.speedKmh - 12) < 1e-12 &&
+    Math.abs(serverMeasuredRunningStep.stepLengthM - 1.2082) < 1e-12,
+  "Google running coverage must use the age-height-speed regression instead of a fixed metre",
+);
+const mappedStepFallbackInputs = googleHealthSyncTestHooks.mapRecordsToEntries(
+  [
+    {
+      externalId: "steps:daily:2026-08-21",
+      dataType: "steps",
+      startTime: "2026-08-21T00:00:00.000Z",
+      endTime: "2026-08-21T12:00:00.000Z",
+      localDate: "2026-08-21",
+      value: 8_000,
+      unit: "steps",
+      label: "Steps",
+    },
+    workoutRecord,
+  ],
+  fallbackSnapshot,
+  "owner",
+  "2026-08-21T12:00:00.000Z",
+);
+const webStepFallback = googleHealthSyncTestHooks.appendStepFallbackRecords(
+  mappedStepFallbackInputs,
+  fallbackSnapshot,
+  "owner",
+  "2026-08-21T12:00:00.000Z",
+  [
+    { dataType: "steps", fromDate: "2026-08-21", throughDate: "2026-08-21" },
+    { dataType: "workouts", fromDate: "2026-08-21", throughDate: "2026-08-21" },
+  ],
+  [],
+);
+const fallbackRows = webStepFallback.mapped.filter(
+  (row) => row.dataType === "derived_step_fallback",
+);
+assert.deepEqual(
+  fallbackRows.map((row) => row.entry.metricId).sort(),
+  ["exercise", "workout_distance", "workout_duration"],
+  "Google Health web sync must materialize the same unrecorded-step tracker family as native sync",
+);
+assert.ok(
+  Number(fallbackRows.find((row) => row.entry.metricId === "workout_distance")?.entry.value) > 0,
+  "the web fallback must retain walking distance not covered by an imported workout",
+);
+assert.ok(
+  webStepFallback.replacements.some((replacement) =>
+    replacement.dataType === "derived_step_fallback" &&
+    replacement.fromDate === "2026-08-21"
+  ),
+  "derived rows need their own replacement ownership so later syncs update or remove them instead of duplicating",
+);
+const stableWebStepFallback = googleHealthSyncTestHooks.appendStepFallbackRecords(
+  mappedStepFallbackInputs,
+  { ...fallbackSnapshot, entries: fallbackRows.map((row) => row.entry) },
+  "owner",
+  "2026-08-21T13:00:00.000Z",
+  [
+    { dataType: "steps", fromDate: "2026-08-21", throughDate: "2026-08-21" },
+    { dataType: "workouts", fromDate: "2026-08-21", throughDate: "2026-08-21" },
+  ],
+  fallbackRows.map((row) => ({
+    entry_id: String(row.entry.id),
+    data_type: "derived_step_fallback",
+    local_date: row.localDate,
+  })),
+);
+assert.equal(
+  stableWebStepFallback.mapped.find((row) =>
+    row.dataType === "derived_step_fallback" && row.entry.metricId === "exercise"
+  )?.entry.sourceUpdatedAt,
+  "2026-08-21T12:00:00.000Z",
+  "an unchanged hourly fallback must retain its prior JSON so background sync does not churn account/group revisions",
+);
+const directWorkoutStepInputs = googleHealthSyncTestHooks.mapRecordsToEntries(
+  [
+    {
+      externalId: "steps:daily:2026-08-21",
+      dataType: "steps",
+      startTime: "2026-08-21T00:00:00.000Z",
+      endTime: "2026-08-21T12:00:00.000Z",
+      localDate: "2026-08-21",
+      value: 8_000,
+      unit: "steps",
+      label: "Steps",
+    },
+    {
+      ...workoutRecord,
+      measurements: {
+        ...workoutRecord.measurements,
+        distanceKm: 20,
+        steps: 2_500,
+      },
+    },
+  ],
+  fallbackSnapshot,
+  "owner",
+  "2026-08-21T12:00:00.000Z",
+);
+const directWorkoutStepFallback = googleHealthSyncTestHooks.appendStepFallbackRecords(
+  directWorkoutStepInputs,
+  fallbackSnapshot,
+  "owner",
+  "2026-08-21T12:00:00.000Z",
+  [
+    { dataType: "steps", fromDate: "2026-08-21", throughDate: "2026-08-21" },
+    { dataType: "workouts", fromDate: "2026-08-21", throughDate: "2026-08-21" },
+  ],
+  [],
+);
+assert.match(
+  String(directWorkoutStepFallback.mapped.find((row) =>
+    row.dataType === "derived_step_fallback" && row.entry.metricId === "exercise"
+  )?.entry.note),
+  /5,500 steps/,
+  "a provider's workout step summary must outrank an inferred distance when subtracting covered steps",
+);
+function fallbackExerciseNote(mapped, snapshot) {
+  return String(googleHealthSyncTestHooks.appendStepFallbackRecords(
+    mapped,
+    snapshot,
+    "owner",
+    "2026-08-21T12:00:00.000Z",
+    [
+      { dataType: "steps", fromDate: "2026-08-21", throughDate: "2026-08-21" },
+      { dataType: "workouts", fromDate: "2026-08-21", throughDate: "2026-08-21" },
+    ],
+    [],
+  ).mapped.find((row) =>
+    row.dataType === "derived_step_fallback" && row.entry.metricId === "exercise"
+  )?.entry.note);
+}
+const walkingPreferenceEntry = mappedStepFallbackInputs.find((row) =>
+  row.entry.metricId === "workout_duration"
+)!.entry;
+const walkingPreferenceIdentity = `source:${encodeURIComponent(String(
+  walkingPreferenceEntry.sourceProvider ?? "health",
+))}:${encodeURIComponent(String(walkingPreferenceEntry.sourceRecordId))}`;
+assert.match(
+  fallbackExerciseNote(mappedStepFallbackInputs, {
+    ...fallbackSnapshot,
+    settings: {
+      ...fallbackSnapshot.settings,
+      stepCoveragePreferences: {
+        version: 1,
+        sessions: {
+          [walkingPreferenceIdentity]: {
+            choice: "exclude",
+            updatedAt: "2026-08-21T12:00:00.000Z",
+          },
+        },
+        activityRules: {},
+      },
+    },
+  }),
+  /8,000 steps/,
+  "an exact-session exclusion must affect the Google web fallback calculation",
+);
+const basketballRecord = {
+  ...workoutRecord,
+  externalId: "exercise:basketball",
+  startTime: "2026-08-21T10:00:00.000Z",
+  endTime: "2026-08-21T10:30:00.000Z",
+  value: 30,
+  label: "Basketball",
+  measurements: { durationMinutes: 30, activeCalories: 200 },
+};
+const mappedBasketballInputs = googleHealthSyncTestHooks.mapRecordsToEntries(
+  [
+    {
+      externalId: "steps:daily:2026-08-21",
+      dataType: "steps",
+      startTime: "2026-08-21T00:00:00.000Z",
+      endTime: "2026-08-21T12:00:00.000Z",
+      localDate: "2026-08-21",
+      value: 8_000,
+      unit: "steps",
+      label: "Steps",
+    },
+    basketballRecord,
+  ],
+  fallbackSnapshot,
+  "owner",
+  "2026-08-21T12:00:00.000Z",
+);
+assert.match(
+  fallbackExerciseNote(mappedBasketballInputs, fallbackSnapshot),
+  /8,000 steps/,
+  "a nonwalking activity equivalent must be excluded by default on web",
+);
+const basketballPreferenceEntry = mappedBasketballInputs.find((row) =>
+  row.entry.metricId === "workout_duration"
+)!.entry;
+const basketballPreferenceIdentity = `source:${encodeURIComponent(String(
+  basketballPreferenceEntry.sourceProvider ?? "health",
+))}:${encodeURIComponent(String(basketballPreferenceEntry.sourceRecordId))}`;
+assert.match(
+  fallbackExerciseNote(mappedBasketballInputs, {
+    ...fallbackSnapshot,
+    settings: {
+      ...fallbackSnapshot.settings,
+      stepCoveragePreferences: {
+        version: 1,
+        sessions: {
+          [basketballPreferenceIdentity]: {
+            choice: "include",
+            updatedAt: "2026-08-21T12:00:00.000Z",
+          },
+        },
+        activityRules: {},
+      },
+    },
+  }),
+  /4,100 steps/,
+  "30 opted-in basketball minutes must cover 3,900 of 8,000 Google steps",
+);
+
+const standaloneActiveEnergyInputs =
+  googleHealthSyncTestHooks.mapRecordsToEntries(
+    [
+      {
+        externalId: "steps:daily:2026-08-21",
+        dataType: "steps",
+        startTime: "2026-08-21T00:00:00.000Z",
+        endTime: "2026-08-21T12:00:00.000Z",
+        localDate: "2026-08-21",
+        value: 8_000,
+        unit: "steps",
+        label: "Steps",
+      },
+      {
+        externalId: "active-energy:standalone",
+        dataType: "active_energy",
+        startTime: "2026-08-21T10:00:00.000Z",
+        endTime: "2026-08-21T10:30:00.000Z",
+        localDate: "2026-08-21",
+        value: 200,
+        unit: "kcal",
+        label: "Active energy",
+      },
+    ],
+    fallbackSnapshot,
+    "owner",
+    "2026-08-21T12:00:00.000Z",
+  );
+const standaloneActiveEnergyEntry = standaloneActiveEnergyInputs.find((row) =>
+  row.entry.metricId === "exercise"
+)!.entry;
+const standaloneActiveEnergyIdentity = `source:${encodeURIComponent(String(
+  standaloneActiveEnergyEntry.sourceProvider ?? "health",
+))}:${encodeURIComponent(String(standaloneActiveEnergyEntry.sourceRecordId))}`;
+assert.match(
+  fallbackExerciseNote(standaloneActiveEnergyInputs, fallbackSnapshot),
+  /8,000 steps/,
+  "an unlinked Active-energy interval must not subtract steps from its label alone",
+);
+assert.match(
+  fallbackExerciseNote(standaloneActiveEnergyInputs, {
+    ...fallbackSnapshot,
+    settings: {
+      ...fallbackSnapshot.settings,
+      stepCoveragePreferences: {
+        version: 1,
+        sessions: {
+          [standaloneActiveEnergyIdentity]: {
+            choice: "include",
+            activityKey: "basketball",
+            updatedAt: "2026-08-21T12:00:00.000Z",
+          },
+        },
+        activityRules: {},
+      },
+    },
+  }),
+  /4,623 steps/,
+  "an explicitly classified standalone Active-energy interval must use net MET, calories, and body weight to cover steps",
+);
+
+for (const unsafeActiveEnergyEntry of [
+  {
+    ...standaloneActiveEnergyEntry,
+    label: "Active energy total",
+    sourceProvider: "google_health",
+    sourceRecordId: "active-energy:daily:2026-08-21",
+  },
+  {
+    ...standaloneActiveEnergyEntry,
+    label: "Active energy",
+    sourceOrigin: "Fitbit Mobile",
+  },
+  {
+    ...standaloneActiveEnergyEntry,
+    label: "Resting energy (BMR)",
+  },
+]) {
+  assert.equal(
+    googleHealthSyncTestHooks.eligibleStandaloneActiveEnergyForStepCoverage(
+      unsafeActiveEnergyEntry,
+    ),
+    false,
+    "daily aggregate, Fitbit resting, and BMR rows must remain ineligible even with stale preferences",
+  );
+}
+
+const trackRunningInputs = googleHealthSyncTestHooks.mapRecordsToEntries(
+  [
+    {
+      externalId: "steps:daily:2026-08-21",
+      dataType: "steps",
+      startTime: "2026-08-21T00:00:00.000Z",
+      endTime: "2026-08-21T12:00:00.000Z",
+      localDate: "2026-08-21",
+      value: 8_000,
+      unit: "steps",
+      label: "Steps",
+    },
+    {
+      ...workoutRecord,
+      externalId: "exercise:track-running",
+      label: "Track running",
+      measurements: {
+        durationMinutes: 15,
+        distanceKm: 3,
+        activeCalories: 200,
+      },
+    },
+  ],
+  fallbackSnapshot,
+  "owner",
+  "2026-08-21T12:00:00.000Z",
+);
+assert.equal(
+  googleHealthSyncTestHooks.stepCoverageActivity("Track running")?.key,
+  "track_running",
+  "Track running must retain its canonical activity key in the Google worker",
+);
+assert.match(
+  fallbackExerciseNote(trackRunningInputs, fallbackSnapshot),
+  /5,517 steps/,
+  "Track running must use the running regression in the Google worker",
+);
+
+const genericGymId = "web-gym-basketball";
+const genericGymEntries = [
+  {
+    id: `gym-sync:${genericGymId}:workout`,
+    metricId: "workout",
+    userId: "owner",
+    value: true,
+    localDate: "2026-08-21",
+    recordedAt: "2026-08-21T10:30:00.000Z",
+    visibility: "private",
+    source: "manual",
+    label: "Workout",
+  },
+  {
+    id: `gym-sync:${genericGymId}:workout_duration`,
+    metricId: "workout_duration",
+    userId: "owner",
+    value: 30,
+    localDate: "2026-08-21",
+    recordedAt: "2026-08-21T10:30:00.000Z",
+    visibility: "private",
+    source: "manual",
+    label: "Workout",
+  },
+  {
+    id: `gym-sync:${genericGymId}:exercise`,
+    metricId: "exercise",
+    userId: "owner",
+    value: 200,
+    localDate: "2026-08-21",
+    recordedAt: "2026-08-21T10:30:00.000Z",
+    visibility: "private",
+    source: "manual",
+    label: "Workout",
+  },
+];
+const genericBasketballGymSession = {
+  id: genericGymId,
+  userId: "owner",
+  name: "Workout",
+  localDate: "2026-08-21",
+  recordedAt: "2026-08-21T10:30:00.000Z",
+  durationMinutes: 30,
+  exercises: [
+    {
+      id: "basketball-exercise",
+      exerciseKey: "basketball",
+      name: "Basketball",
+      sets: [
+        {
+          id: "basketball-set",
+          reps: 0,
+          weightKg: 0,
+          completed: true,
+        },
+      ],
+    },
+  ],
+  visibility: "private",
+};
+const mappedStepOnly = mappedStepFallbackInputs.filter(
+  (row) => row.entry.metricId === "steps",
+);
+const genericGymSnapshot = {
+  ...fallbackSnapshot,
+  entries: genericGymEntries,
+  gymSessions: [genericBasketballGymSession],
+};
+assert.match(
+  fallbackExerciseNote(mappedStepOnly, genericGymSnapshot),
+  /8,000 steps/,
+  "Google Health may infer Basketball for selection but must not include it without explicit consent",
+);
+const genericGymIdentity = `gym:${encodeURIComponent(genericGymId)}`;
+assert.match(
+  fallbackExerciseNote(mappedStepOnly, {
+    ...genericGymSnapshot,
+    settings: {
+      ...genericGymSnapshot.settings,
+      stepCoveragePreferences: {
+        version: 1,
+        sessions: {
+          [genericGymIdentity]: {
+            choice: "exclude",
+            activityKey: "basketball",
+            updatedAt: "2026-08-21T12:00:00.000Z",
+          },
+        },
+        activityRules: {},
+      },
+    },
+  }),
+  /8,000 steps/,
+  "an explicit session exclusion must outrank Google worker gym inference",
+);
+assert.match(
+  fallbackExerciseNote(mappedStepOnly, {
+    ...fallbackSnapshot,
+    entries: genericGymEntries,
+    settings: {
+      ...fallbackSnapshot.settings,
+      stepCoveragePreferences: {
+        version: 1,
+        sessions: {
+          [genericGymIdentity]: {
+            choice: "include",
+            activityKey: "basketball",
+            updatedAt: "2026-08-21T12:00:00.000Z",
+          },
+        },
+        activityRules: {},
+      },
+    },
+  }),
+  /4,100 steps/,
+  "the Google worker must honor an explicit activity classification even without local gym metadata",
+);
+assert.match(
+  fallbackExerciseNote(mappedStepOnly, {
+    ...genericGymSnapshot,
+    gymSessions: [
+      {
+        ...genericBasketballGymSession,
+        exercises: [
+          ...genericBasketballGymSession.exercises,
+          {
+            id: "walking-exercise",
+            exerciseKey: "walking",
+            name: "Walking",
+            sets: [
+              {
+                id: "walking-set",
+                reps: 0,
+                weightKg: 0,
+                completed: true,
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  }),
+  /8,000 steps/,
+  "mixed eligible gym exercises must remain unclassified in the Google worker",
+);
+const fallbackWithoutWorkoutParent = stepFallbackMetrics.filter((metric) =>
+  !["workout", "workout_distance"].includes(metric.id)
+);
+const customWorkoutCalories = {
+  id: "walking_session_calories",
+  unit: "kcal",
+  dataType: "number",
+  defaultVisibility: "private",
+  healthMapping: { dataType: "workouts", field: "active_calories" },
+};
+const workoutWithoutDistance = {
+  ...workoutRecord,
+  measurements: { durationMinutes: 42, activeCalories: 100 },
+};
+function exerciseFallbackValue(metrics) {
+  const snapshot = { ...fallbackSnapshot, metrics };
+  const mapped = googleHealthSyncTestHooks.mapRecordsToEntries(
+    [
+      {
+        externalId: "steps:daily:2026-08-21",
+        dataType: "steps",
+        startTime: "2026-08-21T00:00:00.000Z",
+        endTime: "2026-08-21T12:00:00.000Z",
+        localDate: "2026-08-21",
+        value: 8_000,
+        unit: "steps",
+        label: "Steps",
+      },
+      workoutWithoutDistance,
+    ],
+    snapshot,
+    "owner",
+    "2026-08-21T12:00:00.000Z",
+  );
+  return Number(googleHealthSyncTestHooks.appendStepFallbackRecords(
+    mapped,
+    snapshot,
+    "owner",
+    "2026-08-21T12:00:00.000Z",
+    [
+      { dataType: "steps", fromDate: "2026-08-21", throughDate: "2026-08-21" },
+      { dataType: "workouts", fromDate: "2026-08-21", throughDate: "2026-08-21" },
+    ],
+    [],
+  ).mapped.find((row) =>
+    row.dataType === "derived_step_fallback" && row.entry.metricId === "exercise"
+  )?.entry.value);
+}
+assert.ok(
+  exerciseFallbackValue([...fallbackWithoutWorkoutParent, customWorkoutCalories]) >
+    exerciseFallbackValue(fallbackWithoutWorkoutParent),
+  "a custom workout-calorie tracker must participate in step coverage even when the boolean Workout tracker is absent",
 );
 
 const absentDefinitionSidecars = mappedFood.filter(
@@ -1632,6 +2285,20 @@ assert.match(subscriber, /awaitOperation/);
 assert.match(subscriber, /activeSubscriber/);
 assert.match(subscriber, /subscriptionCreatePolicy: "AUTOMATIC"/);
 assert.ok(!subscriber.includes("active-energy-burned"));
+const replacementPlanningIndex = sync.indexOf("const replacements = successful");
+const ownershipReadIndex = sync.indexOf(
+  'admin.from("google_health_import_records")',
+);
+assert.ok(
+  replacementPlanningIndex >= 0 && ownershipReadIndex > replacementPlanningIndex,
+  "step/workout ownership must not be scanned during unrelated or failed Google Health syncs",
+);
+const boundedOwnershipRead = sync.slice(
+  sync.indexOf("if (stepContextReplacements.length) {"),
+  sync.indexOf("const stepFallbackOwnership"),
+);
+assert.match(boundedOwnershipRead, /\.gte\("local_date", ownershipFromDate\)/);
+assert.match(boundedOwnershipRead, /\.lte\("local_date", ownershipThroughDate\)/);
 for (const dataType of [
   "steps", "exercise", "body-fat", "heart-rate", "blood-glucose",
   "sleep", "hydration-log", "nutrition-log", "weight",

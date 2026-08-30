@@ -165,7 +165,16 @@ assert.match(
 assert.match(tabs, /next\.indexOf\("gym"\)[\s\S]{0,120}next\.splice/);
 assert.match(tabs, /route\.name === "gym" && hasActiveWorkoutTimer/);
 assert.match(tabs, /route\.name === "timers" && hasActiveActivityTimer/);
-assert.match(tabs, /<Tabs\.Screen name="timers" options=\{tabOptions\.timers\}/);
+assert.match(
+  tabs,
+  /\{orderedTabs\.map\(\(name\) => \([\s\S]{0,180}<Tabs\.Screen[\s\S]{0,100}name=\{name\}[\s\S]{0,100}options=\{tabOptions\[name\]\}/,
+  "ordered navigation entries must render their matching tab configuration",
+);
+assert.match(
+  tabs,
+  /!orderedTabs\.includes\("timers"\)[\s\S]{0,180}<Tabs\.Screen[\s\S]{0,100}name="timers"[\s\S]{0,100}options=\{tabOptions\.timers\}/,
+  "the conditional Timers route must remain registered while hidden",
+);
 assert.match(timersTab, /export \{ default \} from "\.\.\/timer"/);
 assert.match(
   display.slice(display.indexOf('title="Advanced"')),

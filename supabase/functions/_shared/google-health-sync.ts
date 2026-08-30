@@ -16,6 +16,7 @@ type Metric = JsonObject & {
   unit?: string;
   dataType?: string;
   defaultVisibility?: string;
+  stepFallback?: boolean;
   healthMapping?: Mapping;
   submetrics?: Array<JsonObject & { id?: string; unit?: string; showProgressBar?: boolean; linkedMetricId?: string; healthMapping?: Mapping }>;
 };
@@ -147,6 +148,25 @@ const FIELD_TO_NUTRITION_KEY: Record<string, string> = {
   vitamin_b9: "folateMcg", folic_acid: "folicAcidMcg", caffeine: "caffeineMg",
   biotin: "biotinMcg", chloride: "chlorideMg", chromium: "chromiumMcg",
   molybdenum: "molybdenumMcg",
+};
+
+type MappedImportRecord = {
+  externalId: string;
+  dataType: string;
+  localDate: string;
+  entry: JsonObject;
+};
+
+type ImportReplacement = {
+  dataType: string;
+  fromDate: string;
+  throughDate: string;
+};
+
+type ImportOwnership = {
+  entry_id: string;
+  data_type: string;
+  local_date: string;
 };
 
 // Canonical nutrition tracker ids deliberately mirror their Health mapping
@@ -435,6 +455,7 @@ async function normalizeReconciled(
       if (!(minutes > 0)) continue;
       const activeCalories = positive(summary.caloriesKcal);
       const distanceMm = positive(summary.distanceMillimeters);
+      const workoutSteps = positive(summary.steps);
       const exerciseType = String(payload.exerciseType ?? "OTHER");
       records.push({
         externalId: id,
@@ -450,6 +471,7 @@ async function normalizeReconciled(
           durationMinutes: minutes,
           ...(activeCalories ? { activeCalories } : {}),
           ...(distanceMm ? { distanceKm: distanceMm / 1_000_000 } : {}),
+          ...(workoutSteps ? { steps: workoutSteps } : {}),
         },
       });
     } else if (definition.internalType === "water") {
@@ -511,6 +533,12 @@ function baseEntry(record: InternalRecord, userId: string, metric: Metric, value
     ? `aggregate:steps:${record.localDate}`
     : `google-health:${record.externalId}`;
   const mayCarryMealDetails = record.dataType !== "nutrition" || metricId === "food";
+  const label = record.label ?? (
+    record.dataType === "active_energy" &&
+      /(?:^|:)daily(?::|$)/i.test(record.externalId)
+      ? "Active energy total"
+      : undefined
+  );
   return {
     id: safeId(`google-health:${record.externalId}:${metricId}`),
     metricId,
@@ -523,7 +551,7 @@ function baseEntry(record: InternalRecord, userId: string, metric: Metric, value
     // per-entry override is preserved by reconciliation below.
     visibility,
     source: "imported",
-    ...(mayCarryMealDetails && record.label ? { label: record.label } : {}),
+    ...(mayCarryMealDetails && label ? { label } : {}),
     ...(mayCarryMealDetails
       ? { note: [record.note, "Synced from Google Health"].filter(Boolean).join(" · ") }
       : {}),
@@ -532,6 +560,10 @@ function baseEntry(record: InternalRecord, userId: string, metric: Metric, value
     sourceRecordId,
     sourceOrigin: record.sourceOrigin ?? "Google Health API",
     sourceUpdatedAt: syncedAt,
+    ...(record.dataType === "workouts" &&
+      positive(record.measurements?.steps) !== undefined
+      ? { sourceWorkoutSteps: positive(record.measurements?.steps) }
+      : {}),
   };
 }
 
@@ -568,6 +600,16 @@ function semanticallyMatchesNative(incoming: JsonObject, existing: JsonObject) {
 
 function stableEntry(entry: JsonObject) {
   const { sourceUpdatedAt: _sourceUpdatedAt, ...stable } = entry;
+  return canonicalJson(stable);
+}
+
+function stableStepFallbackEntry(entry: JsonObject) {
+  const {
+    sourceUpdatedAt: _sourceUpdatedAt,
+    recordedAt: _recordedAt,
+    sourceRecordedAt: _sourceRecordedAt,
+    ...stable
+  } = entry;
   return canonicalJson(stable);
 }
 
@@ -762,6 +804,1023 @@ function mapRecordsToEntries(records: InternalRecord[], snapshot: Snapshot, user
     }
   }
   return mapped;
+}
+
+const DERIVED_STEP_FALLBACK_DATA_TYPE = "derived_step_fallback";
+// A daily step total has no session pace. Keep its reverse conversion on one
+// ordinary-walk assumption, independent of every workout recorded that day.
+const UNRECORDED_WALKING_SPEED_MPS = 1.4;
+const ASSUMED_RUNNING_SPEED_KMH = 9;
+const LEGACY_STEP_LENGTH_M = 0.762;
+const LEGACY_RUNNING_STEP_LENGTH_M = 1;
+const LEGACY_WALKING_KCAL_PER_KG_KM = 0.53;
+
+// Opt-in estimates from Big Team Challenge's public conversion chart. They
+// explain an existing Step total; they never manufacture provider Step data.
+// https://www.bigteamchallenge.com/resources/activity-conversion-chart
+const STEP_EQUIVALENTS: Readonly<
+  Record<string, { stepsPerMinute: number; met: number }>
+> = {
+  basketball: { stepsPerMinute: 130, met: 6.5 },
+  table_tennis: { stepsPerMinute: 120, met: 4 },
+  golf: { stepsPerMinute: 110, met: 4.8 },
+  yoga: { stepsPerMinute: 45, met: 2.5 },
+  soccer: { stepsPerMinute: 145, met: 7 },
+  american_football: { stepsPerMinute: 170, met: 6 },
+  tennis: { stepsPerMinute: 170, met: 7 },
+  badminton: { stepsPerMinute: 131, met: 5.5 },
+  volleyball: { stepsPerMinute: 130, met: 4 },
+  baseball: { stepsPerMinute: 130, met: 5 },
+  cricket: { stepsPerMinute: 80, met: 5 },
+  rugby: { stepsPerMinute: 190, met: 7 },
+  hockey: { stepsPerMinute: 200, met: 7 },
+  ice_hockey: { stepsPerMinute: 200, met: 8 },
+  squash: { stepsPerMinute: 190, met: 8 },
+  racquetball: { stepsPerMinute: 130, met: 7 },
+  pilates: { stepsPerMinute: 91, met: 3 },
+  tai_chi: { stepsPerMinute: 40, met: 3 },
+  dance: { stepsPerMinute: 109, met: 5 },
+  social_dance: { stepsPerMinute: 109, met: 4.5 },
+  aerobics: { stepsPerMinute: 125, met: 6.5 },
+  cycling: { stepsPerMinute: 170, met: 6.8 },
+  stationary_cycling: { stepsPerMinute: 170, met: 6 },
+  swimming: { stepsPerMinute: 180, met: 6 },
+  pool_swimming: { stepsPerMinute: 180, met: 6 },
+  open_water_swimming: { stepsPerMinute: 180, met: 7 },
+  rowing: { stepsPerMinute: 210, met: 7 },
+  rowing_machine: { stepsPerMinute: 210, met: 7 },
+  boxing: { stepsPerMinute: 110, met: 8 },
+  kickboxing: { stepsPerMinute: 210, met: 8 },
+  strength_training: { stepsPerMinute: 100, met: 5 },
+  functional_strength_training: { stepsPerMinute: 100, met: 5 },
+  weightlifting: { stepsPerMinute: 100, met: 6 },
+  weight_machine: { stepsPerMinute: 100, met: 5 },
+  elliptical: { stepsPerMinute: 170, met: 5 },
+  stair_climbing: { stepsPerMinute: 180, met: 6 },
+  stair_machine: { stepsPerMinute: 180, met: 6 },
+  jump_rope: { stepsPerMinute: 160, met: 8 },
+  gardening: { stepsPerMinute: 60, met: 3.5 },
+};
+
+/**
+ * Session-level workout MET values mirrored from the app's 2024 Adult
+ * Compendium-backed activity catalog. Individual strength movements are
+ * intentionally absent. Published conversion-table rates above win; remaining
+ * activities use a low-confidence manual product estimate anchored at
+ * 3 MET=100 and 6 MET=130. These are not measured footfalls, and every
+ * non-direct conversion remains manual opt-in.
+ * https://pacompendium.com/adult-compendium/
+ */
+const SESSION_ACTIVITY_METS: Readonly<Record<string, number>> = {
+  walking: 3.5,
+  running: 7,
+  track_running: 7,
+  treadmill_running: 7,
+  cycling: 6.8,
+  stationary_cycling: 6,
+  mountain_biking: 8.5,
+  hand_cycling: 6,
+  elliptical: 5,
+  stair_climbing: 6,
+  stair_machine: 6,
+  rowing_machine: 7,
+  wheelchair_walk: 3.5,
+  wheelchair_run: 6,
+  strength_training: 5,
+  functional_strength_training: 5,
+  weightlifting: 6,
+  weight_machine: 5,
+  aerobics: 6.5,
+  boot_camp: 7,
+  calisthenics: 5,
+  circuit_training: 6,
+  cross_training: 6,
+  mixed_cardio: 6,
+  hiit: 8,
+  exercise_class: 5,
+  fitness_gaming: 4,
+  gymnastics: 4,
+  jump_rope: 8,
+  hula_hooping: 5,
+  jumping_jacks: 8,
+  skaters: 7,
+  high_knees: 8,
+  stretching: 2.5,
+  warm_up: 3,
+  cool_down: 2.5,
+  recovery: 2.5,
+  yoga: 2.5,
+  pilates: 3,
+  tai_chi: 3,
+  barre: 3.5,
+  core_training: 4,
+  guided_breathing: 2,
+  dance: 5,
+  ballet: 5,
+  ballroom_dance: 5,
+  cardio_dance: 6,
+  social_dance: 4.5,
+  zumba: 6.5,
+  baseball: 5,
+  softball: 5,
+  cricket: 5,
+  basketball: 6.5,
+  soccer: 7,
+  american_football: 6,
+  australian_football: 7,
+  rugby: 7,
+  handball: 7,
+  volleyball: 4,
+  beach_volleyball: 6,
+  hockey: 7,
+  ice_hockey: 8,
+  roller_hockey: 7,
+  lacrosse: 7,
+  disc_sports: 5,
+  badminton: 5.5,
+  tennis: 7,
+  table_tennis: 4,
+  squash: 8,
+  racquetball: 7,
+  pickleball: 5,
+  boxing: 8,
+  kickboxing: 8,
+  martial_arts: 7,
+  wrestling: 7,
+  fencing: 6,
+  hiking: 6,
+  backpacking: 7,
+  orienteering: 8,
+  rock_climbing: 7,
+  paragliding: 3,
+  hang_gliding: 3,
+  horseback_riding: 4,
+  fishing: 3,
+  hunting: 5,
+  golf: 4.8,
+  archery: 3.5,
+  bowling: 3,
+  inline_skating: 7,
+  roller_skating: 7,
+  play: 4,
+  swimming: 6,
+  pool_swimming: 6,
+  open_water_swimming: 7,
+  water_fitness: 5,
+  water_polo: 8,
+  paddling: 5,
+  canoeing: 5,
+  kayaking: 5,
+  rafting: 5,
+  rowing: 7,
+  sailing: 3,
+  yachting: 3,
+  surfing: 5,
+  windsurfing: 5,
+  kitesurfing: 7,
+  water_skiing: 6,
+  scuba_diving: 7,
+  snorkeling: 5,
+  skiing: 7,
+  cross_country_skiing: 8,
+  downhill_skiing: 6,
+  snowboarding: 6,
+  snowshoeing: 7,
+  ice_skating: 7,
+  ice_dancing: 6,
+  curling: 4,
+  triathlon: 8,
+  duathlon: 8,
+  aquathlon: 8,
+  aquabike: 8,
+  cross_triathlon: 8,
+  cross_duathlon: 8,
+  multisport_transition: 2,
+  workout_break: 1.5,
+  other_workout: 3.5,
+};
+
+function metCadenceStepEstimate(met: number) {
+  return Math.round(Math.min(160, Math.max(80, 70 + 10 * met)));
+}
+
+const NON_STEP_COVERAGE_SESSION_KEYS = new Set([
+  "multisport_transition",
+  "other_workout",
+  "workout_break",
+]);
+
+const STEP_ACTIVITY_LABELS: Readonly<Record<string, string>> = {
+  basketball: "basketball",
+  "table tennis": "table_tennis",
+  "ping pong": "table_tennis",
+  pingpong: "table_tennis",
+  golf: "golf",
+  yoga: "yoga",
+  soccer: "soccer",
+  football: "soccer",
+  "american football": "american_football",
+  tennis: "tennis",
+  badminton: "badminton",
+  volleyball: "volleyball",
+  baseball: "baseball",
+  cricket: "cricket",
+  rugby: "rugby",
+  hockey: "hockey",
+  "ice hockey": "ice_hockey",
+  squash: "squash",
+  racquetball: "racquetball",
+  pilates: "pilates",
+  "tai chi": "tai_chi",
+  dance: "dance",
+  dancing: "dance",
+  "social dance": "social_dance",
+  aerobics: "aerobics",
+  cycling: "cycling",
+  biking: "cycling",
+  bicycle: "cycling",
+  "stationary cycling": "stationary_cycling",
+  "stationary biking": "stationary_cycling",
+  "stationary bike": "stationary_cycling",
+  "exercise bike": "stationary_cycling",
+  "indoor cycling": "stationary_cycling",
+  swimming: "swimming",
+  "pool swimming": "pool_swimming",
+  "lap swimming": "pool_swimming",
+  "open water swimming": "open_water_swimming",
+  rowing: "rowing",
+  "rowing machine": "rowing_machine",
+  boxing: "boxing",
+  kickboxing: "kickboxing",
+  "strength training": "strength_training",
+  "traditional strength training": "strength_training",
+  "functional strength training": "functional_strength_training",
+  weights: "weightlifting",
+  weightlifting: "weightlifting",
+  "weight lifting": "weightlifting",
+  "weight machine": "weight_machine",
+  elliptical: "elliptical",
+  "cross trainer": "elliptical",
+  "stair climbing": "stair_climbing",
+  "stair climbing machine": "stair_machine",
+  "stair machine": "stair_machine",
+  "step machine": "stair_machine",
+  "jump rope": "jump_rope",
+  "skipping rope": "jump_rope",
+  "high intensity interval training": "hiit",
+  "preparation and recovery": "recovery",
+  "wheelchair walk pace": "wheelchair_walk",
+  "wheelchair run pace": "wheelchair_run",
+  gardening: "gardening",
+};
+
+const DIRECT_STEP_ACTIVITY_KEYS = new Set([
+  "walking",
+  "running",
+  "track_running",
+  "treadmill_running",
+  "hiking",
+  "backpacking",
+]);
+
+function normalizedActivityLabel(value: unknown) {
+  return String(value ?? "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function stepCoverageActivityFromKey(value: unknown) {
+  const key = String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+  if (NON_STEP_COVERAGE_SESSION_KEYS.has(key)) return undefined;
+  if (DIRECT_STEP_ACTIVITY_KEYS.has(key))
+    return { key, mode: "direct" as const };
+  const met = SESSION_ACTIVITY_METS[key];
+  const equivalent = STEP_EQUIVALENTS[key] ??
+    (met > 0
+      ? { stepsPerMinute: metCadenceStepEstimate(met), met }
+      : undefined);
+  return equivalent
+    ? { key, mode: "equivalent" as const, ...equivalent }
+    : undefined;
+}
+
+function stepCoverageActivity(value: unknown) {
+  const label = normalizedActivityLabel(value);
+  if (!label) return undefined;
+  // Preserve exact catalog identities (notably track_running) before applying
+  // broader family aliases such as any label containing "running".
+  const canonical = stepCoverageActivityFromKey(
+    STEP_ACTIVITY_LABELS[label] ?? label.replace(/\s+/g, "_"),
+  );
+  if (canonical) return canonical;
+  if (/\btreadmill\b/.test(label))
+    return { key: "treadmill_running", mode: "direct" as const };
+  if (/\b(?:run|running|jog|jogging)\b/.test(label))
+    return { key: "running", mode: "direct" as const };
+  if (/\b(?:hike|hiking)\b/.test(label))
+    return { key: "hiking", mode: "direct" as const };
+  if (/\bbackpacking\b/.test(label))
+    return { key: "backpacking", mode: "direct" as const };
+  if (/\b(?:walk|walking)\b/.test(label))
+    return { key: "walking", mode: "direct" as const };
+  return undefined;
+}
+
+function stepCoverageSessionIdentity(entry: JsonObject) {
+  const id = String(entry.id ?? "").replace(
+    /^energy-breakdown:activity:/,
+    "",
+  );
+  if (
+    String(entry.sourceRecordId ?? "").startsWith("step-fallback:") ||
+    id.includes(":step-fallback:")
+  ) return undefined;
+  const gym = id.match(
+    /^gym-sync:(.+):(?:workout|workout_duration|workout_distance|exercise)$/,
+  );
+  if (gym?.[1]) return `gym:${encodeURIComponent(gym[1])}`;
+  let sourceRecordId = String(entry.sourceRecordId ?? "");
+  if (
+    sourceRecordId.startsWith("samsung-total-workout:") &&
+    sourceRecordId.endsWith(":workout-energy")
+  ) {
+    const body = sourceRecordId.slice(
+      "samsung-total-workout:".length,
+      -":workout-energy".length,
+    );
+    const separator = body.indexOf(":");
+    if (separator > 0 && separator < body.length - 1)
+      sourceRecordId = body.slice(separator + 1);
+  }
+  return sourceRecordId
+    ? `source:${encodeURIComponent(
+      String(entry.sourceProvider ?? "health"),
+    )}:${encodeURIComponent(sourceRecordId)}`
+    : String(entry.source ?? "") === "manual" &&
+        String(entry.metricId ?? "") === "workout"
+      ? `manual:${encodeURIComponent(String(entry.userId ?? ""))}:${encodeURIComponent(id)}`
+      : undefined;
+}
+
+function eligibleStandaloneActiveEnergyForStepCoverage(entry: JsonObject) {
+  const label = normalizedActivityLabel(entry.label);
+  const sourceOrigin = normalizedActivityLabel(entry.sourceOrigin);
+  const sourceRecordId = String(entry.sourceRecordId ?? entry.id ?? "");
+  const genericActiveEnergy = /^(active (calories|energy)( total)?|calories burned)$/.test(
+    label,
+  );
+  if (
+    label === "estimated unrecorded walking from steps" ||
+    /(?:resting energy|basal metabolic|\bbmr\b)/.test(label) ||
+    (sourceOrigin.includes("fitbit") && genericActiveEnergy) ||
+    (genericActiveEnergy &&
+      (label.endsWith("total") ||
+        (String(entry.sourceProvider ?? "") === "google_health" &&
+          /(?:^|:)daily(?::|$)/i.test(sourceRecordId))))
+  ) return false;
+  return true;
+}
+
+function inferredGymStepActivities(snapshot: Snapshot) {
+  const byIdentity = new Map<string, NonNullable<ReturnType<typeof stepCoverageActivity>>>();
+  const sessions = Array.isArray(snapshot.gymSessions)
+    ? snapshot.gymSessions
+    : [];
+  for (const value of sessions) {
+    const session = asObject(value);
+    const id = String(session.id ?? "");
+    if (!id) continue;
+    const named = stepCoverageActivity(session.name);
+    if (named) {
+      byIdentity.set(`gym:${encodeURIComponent(id)}`, named);
+      continue;
+    }
+    const candidates = new Map<string, NonNullable<ReturnType<typeof stepCoverageActivity>>>();
+    const exercises = Array.isArray(session.exercises) ? session.exercises : [];
+    for (const exerciseValue of exercises) {
+      const exercise = asObject(exerciseValue);
+      const sets = Array.isArray(exercise.sets) ? exercise.sets : [];
+      const completedSets = sets
+        .map(asObject)
+        .filter((set) => set.completed === true);
+      if (exercise.completed !== true && !completedSets.length) continue;
+      const activity =
+        stepCoverageActivityFromKey(exercise.exerciseKey) ??
+        stepCoverageActivity(exercise.name);
+      if (activity) candidates.set(activity.key, activity);
+      for (const set of completedSets) {
+        const superset = asObject(set.superset);
+        const supersetActivity =
+          stepCoverageActivityFromKey(superset.exerciseKey) ??
+          stepCoverageActivity(superset.name);
+        if (supersetActivity)
+          candidates.set(supersetActivity.key, supersetActivity);
+      }
+    }
+    if (candidates.size === 1)
+      byIdentity.set(
+        `gym:${encodeURIComponent(id)}`,
+        [...candidates.values()][0],
+      );
+  }
+  return byIdentity;
+}
+
+function resolvedStepCoverageActivity(
+  entry: JsonObject,
+  snapshot: Snapshot,
+  inferredGymActivities: ReadonlyMap<
+    string,
+    NonNullable<ReturnType<typeof stepCoverageActivity>>
+  >,
+) {
+  const identity = stepCoverageSessionIdentity(entry);
+  const preferences = asObject(
+    asObject(snapshot.settings).stepCoveragePreferences,
+  );
+  const session = identity
+    ? asObject(asObject(preferences.sessions)[identity])
+    : {};
+  return (
+    stepCoverageActivityFromKey(session.activityKey) ??
+    stepCoverageActivityFromKey(entry.stepCoverageActivityKey) ??
+    (identity ? inferredGymActivities.get(identity) : undefined) ??
+    stepCoverageActivity(entry.label)
+  );
+}
+
+function stepCoverageIncluded(
+  entry: JsonObject,
+  activity: NonNullable<ReturnType<typeof stepCoverageActivity>>,
+  snapshot: Snapshot,
+  inferredGymActivities: ReadonlyMap<
+    string,
+    NonNullable<ReturnType<typeof stepCoverageActivity>>
+  >,
+) {
+  const identity = stepCoverageSessionIdentity(entry);
+  if (!identity) return false;
+  const preferences = asObject(
+    asObject(snapshot.settings).stepCoveragePreferences,
+  );
+  const session = asObject(asObject(preferences.sessions)[identity]);
+  const sessionChoice = String(session.choice ?? "");
+  if (sessionChoice === "include" || sessionChoice === "exclude")
+    return sessionChoice === "include";
+  const activityRule = asObject(
+    asObject(preferences.activityRules)[activity.key],
+  );
+  const ruleChoice = String(activityRule.choice ?? "");
+  const effectiveFrom = String(activityRule.effectiveFrom ?? "");
+  if (
+    (ruleChoice === "include" || ruleChoice === "exclude") &&
+    /^\d{4}-\d{2}-\d{2}$/.test(effectiveFrom) &&
+    String(entry.localDate ?? "") >= effectiveFrom
+  ) return ruleChoice === "include";
+  return activity.mode === "direct";
+}
+
+function equivalentSteps(
+  activity: NonNullable<ReturnType<typeof stepCoverageActivity>>,
+  input: { durationMinutes: number; activeCalories: number },
+  snapshot: Snapshot,
+) {
+  if (activity.mode !== "equivalent") return 0;
+  let durationMinutes = Math.max(0, input.durationMinutes);
+  if (!(durationMinutes > 0) && input.activeCalories > 0) {
+    // Active calories exclude resting expenditure. Use net intensity only for
+    // this calorie-to-duration fallback; measured duration remains authoritative.
+    const kcalPerMinute =
+      ((activity.met - 1) * 3.5 * stepActivityProfile(snapshot).weightKg) /
+      200;
+    if (activity.met > 1 && kcalPerMinute > 0)
+      durationMinutes = input.activeCalories / kcalPerMinute;
+  }
+  return durationMinutes > 0
+    ? activity.stepsPerMinute * durationMinutes
+    : 0;
+}
+
+function bounded(value: number, minimum: number, maximum: number) {
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+function stepActivityProfile(snapshot: Snapshot) {
+  const profile = asObject(asObject(snapshot.settings).energyProfile);
+  return {
+    age: bounded(number(profile.age) ?? 35, 18, 90),
+    sex: String(profile.sex ?? "unspecified"),
+    heightCm: number(profile.heightCm) ?? 0,
+    weightKg: bounded(number(profile.weightKg) ?? 70, 35, 300),
+  };
+}
+
+/**
+ * Profile-aware step length for one recorded walking, hiking, or running
+ * workout. Both clients use these exact equations and units:
+ *
+ * walking/hiking (Lee et al.):
+ *   length_m = (-16.14 - 0.06*age_y + 0.31*height_cm
+ *     - 0.04*weight_kg + 0.02*sex_female + 0.30*speed_cm_s) / 100
+ * running (Malisoux et al.):
+ *   length_m = -0.255 - 0.001*age_y + 0.279*height_m
+ *     + 0.083*speed_kmh
+ *
+ * When distance and duration are both measured, their exact pace is used.
+ * Otherwise the activity-family fallback affects this workout only.
+ * https://doi.org/10.1080/1091367X.2026.2634091
+ * https://doi.org/10.1177/23259671231204629
+ */
+function movementStepLengthForCoverage(
+  input: {
+    distanceKm?: number;
+    durationMinutes?: number;
+    running?: boolean;
+  },
+  snapshot: Snapshot,
+) {
+  const profile = stepActivityProfile(snapshot);
+  const distanceKm = Math.max(0, Number(input.distanceKm) || 0);
+  const durationMinutes = Math.max(0, Number(input.durationMinutes) || 0);
+  const running = input.running === true;
+  const hasMeasuredSpeed = distanceKm > 0 && durationMinutes > 0;
+  const speedKmh = hasMeasuredSpeed
+    ? distanceKm / (durationMinutes / 60)
+    : running
+      ? ASSUMED_RUNNING_SPEED_KMH
+      : UNRECORDED_WALKING_SPEED_MPS * 3.6;
+  const hasProfileHeight = profile.heightCm >= 130 && profile.heightCm <= 220;
+  if (!hasProfileHeight) {
+    return {
+      stepLengthM: running
+        ? LEGACY_RUNNING_STEP_LENGTH_M
+        : LEGACY_STEP_LENGTH_M,
+      speedKmh,
+      speedSource: hasMeasuredSpeed ? "measured" as const : "assumed" as const,
+    };
+  }
+  if (running) {
+    const predictedStepLengthM =
+      -0.255 -
+      0.001 * profile.age +
+      0.279 * (profile.heightCm / 100) +
+      0.083 * speedKmh;
+    return {
+      stepLengthM: bounded(predictedStepLengthM, 0.6, 2),
+      speedKmh,
+      speedSource: hasMeasuredSpeed ? "measured" as const : "assumed" as const,
+    };
+  }
+  const sexTerm = profile.sex === "female" ? 1 : 0;
+  const predictedStepLengthM =
+    (-16.14 -
+      0.06 * profile.age +
+      0.31 * profile.heightCm -
+      0.04 * profile.weightKg +
+      0.02 * sexTerm +
+      0.3 * ((speedKmh / 3.6) * 100)) / 100;
+  return {
+    stepLengthM: bounded(predictedStepLengthM, 0.4, 1.05),
+    speedKmh,
+    speedSource: hasMeasuredSpeed ? "measured" as const : "assumed" as const,
+  };
+}
+
+function estimateWalkingFromSteps(steps: number, snapshot: Snapshot) {
+  const profile = stepActivityProfile(snapshot);
+  const safeSteps = Math.max(0, steps);
+  const hasProfileHeight = profile.heightCm >= 130 && profile.heightCm <= 220;
+  const sexTerm = profile.sex === "female" ? 1 : 0;
+  const predictedStepLengthM = hasProfileHeight
+    ? (-16.14 -
+      0.06 * profile.age +
+      0.31 * profile.heightCm -
+      0.04 * profile.weightKg +
+      0.02 * sexTerm +
+      0.3 * (UNRECORDED_WALKING_SPEED_MPS * 100)) / 100
+    : LEGACY_STEP_LENGTH_M;
+  const stepLengthM = hasProfileHeight
+    ? bounded(predictedStepLengthM, 0.4, 1.05)
+    : LEGACY_STEP_LENGTH_M;
+  const distanceKm = (safeSteps * stepLengthM) / 1_000;
+  const durationMinutes = distanceKm
+    ? (distanceKm * 1_000) / UNRECORDED_WALKING_SPEED_MPS / 60
+    : 0;
+  const estimatedCalories = hasProfileHeight
+    ? ((3.85 +
+      (5.97 * UNRECORDED_WALKING_SPEED_MPS ** 2) / (profile.heightCm / 100)) *
+      profile.weightKg *
+      durationMinutes *
+      5) / 1_000
+    : distanceKm * LEGACY_WALKING_KCAL_PER_KG_KM * profile.weightKg;
+  return { stepLengthM, distanceKm, durationMinutes, estimatedCalories };
+}
+
+function movementDistanceForStepCoverage(
+  input: {
+    distanceKm?: number;
+    durationMinutes?: number;
+    activeCalories?: number;
+    running?: boolean;
+  },
+  snapshot: Snapshot,
+) {
+  const measuredDistance = Math.max(0, Number(input.distanceKm) || 0);
+  if (measuredDistance > 0) return measuredDistance;
+  const durationMinutes = Math.max(0, Number(input.durationMinutes) || 0);
+  const activeCalories = Math.max(0, Number(input.activeCalories) || 0);
+  const running = input.running === true;
+  const profile = stepActivityProfile(snapshot);
+  if (activeCalories > 0) {
+    let calorieDistanceKm = activeCalories /
+      (profile.weightKg * (running ? 1 : LEGACY_WALKING_KCAL_PER_KG_KM));
+    if (!running && durationMinutes > 0 && profile.heightCm >= 130 && profile.heightCm <= 220) {
+      const oxygenCostMlKgMin =
+        (activeCalories * 1_000) / (profile.weightKg * durationMinutes * 5);
+      const inferredSpeedMps = Math.sqrt(
+        Math.max(
+          0,
+          (oxygenCostMlKgMin - 3.85) * (profile.heightCm / 100) / 5.97,
+        ),
+      );
+      if (Number.isFinite(inferredSpeedMps) && inferredSpeedMps > 0) {
+        calorieDistanceKm =
+          (bounded(inferredSpeedMps, 0.5, 2.2) * durationMinutes * 60) /
+          1_000;
+      }
+    }
+    if (durationMinutes > 0) {
+      return bounded(
+        calorieDistanceKm,
+        (durationMinutes / 60) * (running ? 4 : 1),
+        (durationMinutes / 60) * (running ? 20 : 8),
+      );
+    }
+    return calorieDistanceKm;
+  }
+  return durationMinutes > 0
+    ? (durationMinutes / 60) * (running ? 9 : 5)
+    : 0;
+}
+
+function replacementContains(
+  replacement: ImportReplacement,
+  dataType: string,
+  localDate: string,
+) {
+  return replacement.dataType === dataType &&
+    localDate >= replacement.fromDate &&
+    localDate <= replacement.throughDate;
+}
+
+function derivedStepFallbackReplacements(
+  replacements: readonly ImportReplacement[],
+  snapshot: Snapshot,
+  mapped: readonly MappedImportRecord[],
+  ownership: readonly ImportOwnership[],
+) {
+  const derived = replacements
+    .filter((replacement) => ["steps", "workouts"].includes(replacement.dataType))
+    .map((replacement) => ({
+      ...replacement,
+      dataType: DERIVED_STEP_FALLBACK_DATA_TYPE,
+    }));
+  const entriesById = new Map(
+    (Array.isArray(snapshot.entries) ? snapshot.entries : [])
+      .map((entry) => [String(entry.id ?? ""), entry] as const),
+  );
+  const extraDates = new Set<string>();
+  for (const owned of ownership) {
+    if (!["steps", "workouts"].includes(owned.data_type)) continue;
+    if (!replacements.some((replacement) =>
+      replacementContains(replacement, owned.data_type, owned.local_date)
+    )) continue;
+    const displayDate = String(entriesById.get(owned.entry_id)?.localDate ?? "");
+    if (/^\d{4}-\d{2}-\d{2}$/.test(displayDate)) extraDates.add(displayDate);
+  }
+  for (const record of mapped) {
+    if (!["steps", "workouts"].includes(record.dataType)) continue;
+    const displayDate = String(record.entry.localDate ?? record.localDate);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(displayDate)) extraDates.add(displayDate);
+  }
+  for (const localDate of extraDates) {
+    if (derived.some((replacement) =>
+      replacementContains(replacement, DERIVED_STEP_FALLBACK_DATA_TYPE, localDate)
+    )) continue;
+    derived.push({
+      dataType: DERIVED_STEP_FALLBACK_DATA_TYPE,
+      fromDate: localDate,
+      throughDate: localDate,
+    });
+  }
+  return [...new Map(
+    derived.map((replacement) => [
+      `${replacement.dataType}\u0000${replacement.fromDate}\u0000${replacement.throughDate}`,
+      replacement,
+    ]),
+  ).values()];
+}
+
+function datesCoveredBy(replacements: readonly ImportReplacement[]) {
+  const dates = new Set<string>();
+  for (const replacement of replacements) {
+    if (replacement.dataType !== DERIVED_STEP_FALLBACK_DATA_TYPE) continue;
+    let localDate = replacement.fromDate;
+    // Google Health currently reconciles at most 90 days. Keep a hard safety
+    // bound so a corrupt cursor can never turn one worker invocation into an
+    // unbounded date loop.
+    for (let count = 0; count < 400 && localDate <= replacement.throughDate; count += 1) {
+      dates.add(localDate);
+      localDate = addDays(localDate, 1);
+    }
+  }
+  return dates;
+}
+
+function postImportEntries(
+  snapshot: Snapshot,
+  mapped: readonly MappedImportRecord[],
+  replacements: readonly ImportReplacement[],
+  ownership: readonly ImportOwnership[],
+) {
+  const removedIds = new Set(
+    ownership
+      .filter((owned) => replacements.some((replacement) =>
+        replacementContains(replacement, owned.data_type, owned.local_date)
+      ))
+      .map((owned) => owned.entry_id),
+  );
+  const incomingIds = new Set(mapped.map((record) => String(record.entry.id ?? "")));
+  const result = new Map<string, JsonObject>();
+  for (const entry of Array.isArray(snapshot.entries) ? snapshot.entries : []) {
+    const id = String(entry.id ?? "");
+    if (!id || removedIds.has(id) || incomingIds.has(id)) continue;
+    result.set(id, entry);
+  }
+  for (const record of mapped) {
+    const id = String(record.entry.id ?? "");
+    if (id) result.set(id, record.entry);
+  }
+  return [...result.values()];
+}
+
+function appendStepFallbackRecords(
+  mapped: readonly MappedImportRecord[],
+  snapshot: Snapshot,
+  userId: string,
+  syncedAt: string,
+  replacements: readonly ImportReplacement[],
+  ownership: readonly ImportOwnership[],
+) {
+  const derivedReplacements = derivedStepFallbackReplacements(
+    replacements,
+    snapshot,
+    mapped,
+    ownership,
+  );
+  if (!derivedReplacements.length) {
+    return { mapped: [...mapped], replacements: [...replacements] };
+  }
+  const allReplacements = [...replacements, ...derivedReplacements];
+  const entries = postImportEntries(
+    snapshot,
+    mapped,
+    allReplacements,
+    ownership,
+  );
+  const metrics = Array.isArray(snapshot.metrics) ? snapshot.metrics : [];
+  const existingById = new Map(
+    (Array.isArray(snapshot.entries) ? snapshot.entries : [])
+      .map((entry) => [String(entry.id ?? ""), entry] as const),
+  );
+  const stepMetricIds = new Set(metrics
+    .filter((metric) =>
+      metric.healthMapping?.dataType === "steps" &&
+      metric.healthMapping.field === "value"
+    )
+    .map((metric) => String(metric.id)));
+  const fallbackMetrics = metrics.filter((metric) =>
+    metric.stepFallback === true ||
+    ["exercise", "workout_duration", "workout_distance"].includes(String(metric.id))
+  );
+  if (!stepMetricIds.size || !fallbackMetrics.length) {
+    return { mapped: [...mapped], replacements: allReplacements };
+  }
+  const workoutMetricIds = new Set(metrics
+    .filter((metric) => metric.healthMapping?.dataType === "workouts")
+    .map((metric) => String(metric.id)));
+  const distanceMetricIds = new Set(metrics
+    .filter((metric) =>
+      metric.healthMapping?.dataType === "workouts" &&
+      metric.healthMapping.field === "distance_km"
+    )
+    .map((metric) => String(metric.id)));
+  const durationMetricIds = new Set(metrics
+    .filter((metric) =>
+      metric.healthMapping?.dataType === "workouts" &&
+      metric.healthMapping.field === "duration_minutes"
+    )
+    .map((metric) => String(metric.id)));
+  const calorieMetricIds = new Set(metrics
+    .filter((metric) =>
+      metric.healthMapping?.dataType === "workouts" &&
+      metric.healthMapping.field === "active_calories"
+    )
+    .map((metric) => String(metric.id)));
+  const activeEnergyMetricIds = new Set(metrics
+    .filter((metric) =>
+      metric.healthMapping?.dataType === "active_energy" &&
+      metric.healthMapping.field === "value"
+    )
+    .map((metric) => String(metric.id)));
+  const inferredGymActivities = inferredGymStepActivities(snapshot);
+  const byDay = new Map<string, JsonObject[]>();
+  for (const entry of entries) {
+    const localDate = String(entry.localDate ?? "");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(localDate)) continue;
+    const rows = byDay.get(localDate);
+    if (rows) rows.push(entry);
+    else byDay.set(localDate, [entry]);
+  }
+  const derived: MappedImportRecord[] = [];
+  for (const localDate of datesCoveredBy(derivedReplacements)) {
+    const dayEntries = byDay.get(localDate) ?? [];
+    const stepEntries = dayEntries.filter((entry) =>
+      stepMetricIds.has(String(entry.metricId ?? "")) &&
+      (number(entry.value) ?? 0) > 0
+    );
+    const nativeSteps = stepEntries.filter((entry) =>
+      ["apple_health", "health_connect"].includes(String(entry.sourceProvider ?? ""))
+    );
+    const selectedStepEntries = nativeSteps.length ? nativeSteps : stepEntries;
+    const stepEntry = selectedStepEntries
+      .slice()
+      .sort((left, right) => (number(right.value) ?? 0) - (number(left.value) ?? 0))[0];
+    const steps = number(stepEntry?.value) ?? 0;
+    if (!(steps > 0)) continue;
+    const linkedRows = new Map<string, JsonObject[]>();
+    for (const entry of dayEntries) {
+      if (String(entry.label ?? "") === "Estimated unrecorded walking from steps") continue;
+      const key = stepCoverageSessionIdentity(entry);
+      if (!key) continue;
+      const rows = linkedRows.get(key);
+      if (rows) rows.push(entry);
+      else linkedRows.set(key, [entry]);
+    }
+    let coveredSteps = 0;
+    for (const rows of linkedRows.values()) {
+      const activityEntry = rows.find((entry) => {
+        const metricId = String(entry.metricId ?? "");
+        const identity = stepCoverageSessionIdentity(entry);
+        const preferences = asObject(
+          asObject(snapshot.settings).stepCoveragePreferences,
+        );
+        const explicitlyClassifiedActiveEnergy =
+          activeEnergyMetricIds.has(metricId) &&
+          eligibleStandaloneActiveEnergyForStepCoverage(entry) &&
+          Boolean(
+            identity &&
+              stepCoverageActivityFromKey(
+                asObject(asObject(preferences.sessions)[identity]).activityKey,
+              ),
+          );
+        return (
+          (workoutMetricIds.has(metricId) ||
+            explicitlyClassifiedActiveEnergy) &&
+          Boolean(
+            resolvedStepCoverageActivity(
+              entry,
+              snapshot,
+              inferredGymActivities,
+            ),
+          )
+        );
+      });
+      const activity = activityEntry
+        ? resolvedStepCoverageActivity(
+            activityEntry,
+            snapshot,
+            inferredGymActivities,
+          )
+        : undefined;
+      if (
+        !activityEntry ||
+        !activity ||
+        !stepCoverageIncluded(
+          activityEntry,
+          activity,
+          snapshot,
+          inferredGymActivities,
+        )
+      ) continue;
+      const running = [
+        "running",
+        "track_running",
+        "treadmill_running",
+      ].includes(activity.key);
+      const distanceKm = Math.max(0, ...rows
+        .filter((entry) => distanceMetricIds.has(String(entry.metricId ?? "")))
+        .map((entry) => number(entry.value) ?? 0));
+      const durationMinutes = Math.max(0, ...rows
+        .filter((entry) => durationMetricIds.has(String(entry.metricId ?? "")))
+        .map((entry) => number(entry.value) ?? 0));
+      const activeCalories = Math.max(
+        0,
+        ...rows
+          .filter((entry) =>
+            calorieMetricIds.has(String(entry.metricId ?? "")) ||
+            activeEnergyMetricIds.has(String(entry.metricId ?? ""))
+          )
+          .map((entry) => number(entry.value) ?? 0),
+        ...rows.map((entry) =>
+          number(asObject(entry.submetricValues).exercise) ?? 0
+        ),
+      );
+      const directWorkoutSteps = Math.max(
+        0,
+        ...rows.map((entry) => number(entry.sourceWorkoutSteps) ?? 0),
+      );
+      const estimatedDistanceKm = movementDistanceForStepCoverage(
+        { distanceKm, durationMinutes, activeCalories, running },
+        snapshot,
+      );
+      if (directWorkoutSteps > 0) {
+        coveredSteps += directWorkoutSteps;
+      } else if (activity.mode === "equivalent") {
+        coveredSteps += equivalentSteps(
+          activity,
+          { durationMinutes, activeCalories },
+          snapshot,
+        );
+      } else {
+        const workoutStepLength = movementStepLengthForCoverage(
+          { distanceKm, durationMinutes, running },
+          snapshot,
+        );
+        coveredSteps += (estimatedDistanceKm * 1_000) /
+          workoutStepLength.stepLengthM;
+      }
+    }
+    const uncoveredSteps = Math.max(0, steps - coveredSteps);
+    const estimate = estimateWalkingFromSteps(uncoveredSteps, snapshot);
+    const recordedAt = String(stepEntry?.recordedAt ?? syncedAt);
+    for (const metric of fallbackMetrics) {
+      const mapping = metric.healthMapping;
+      let value = 0;
+      let suffix = "";
+      if (mapping?.dataType === "active_energy" && mapping.field === "value") {
+        value = estimate.estimatedCalories;
+        suffix = "calories";
+      } else if (mapping?.dataType === "workouts" && mapping.field === "distance_km") {
+        value = estimate.distanceKm;
+        suffix = "distance";
+      } else if (mapping?.dataType === "workouts" && mapping.field === "duration_minutes") {
+        value = estimate.durationMinutes;
+        suffix = "duration";
+      }
+      if (!(value > 0) || !suffix || !metric.id) continue;
+      const metricId = String(metric.id);
+      const entryId = safeId(
+        `google-health:step-fallback:${localDate}:${metricId}:${suffix}`,
+      );
+      const nextEntry: JsonObject = {
+        id: entryId,
+        metricId,
+        userId,
+        value: Math.round(value * 10) / 10,
+        localDate,
+        recordedAt,
+        visibility: validVisibility(metric.defaultVisibility) ?? "private",
+        source: "calculated",
+        label: "Estimated unrecorded walking from steps",
+        note: `Uses ${Math.round(uncoveredSteps).toLocaleString("en-US")} steps not already explained by workouts included in Step coverage.`,
+        sourceProvider: "google_health",
+        sourceRecordId: `step-fallback:${localDate}`,
+        sourceOrigin: String(stepEntry?.sourceOrigin ?? "Google Health API"),
+        sourceUpdatedAt: syncedAt,
+      };
+      const existingEntry = existingById.get(entryId);
+      const retainedEntry =
+        existingEntry &&
+          stableStepFallbackEntry(existingEntry) ===
+            stableStepFallbackEntry(nextEntry)
+          ? existingEntry
+          : nextEntry;
+      derived.push({
+        externalId: `step-fallback:${localDate}`,
+        dataType: DERIVED_STEP_FALLBACK_DATA_TYPE,
+        localDate,
+        entry: retainedEntry,
+      });
+    }
+  }
+  return { mapped: [...mapped, ...derived], replacements: allReplacements };
 }
 
 function preferNativeStepOwner(
@@ -1207,6 +2266,37 @@ async function performGoogleHealthSync(
       item.authoritativeDailyDates,
     )
   );
+  let effectiveReplacements: ImportReplacement[] = replacements;
+  const stepContextReplacements = replacements.filter((replacement) =>
+    ["steps", "workouts"].includes(replacement.dataType)
+  );
+  let importOwnership: Array<Record<string, unknown>> = [];
+  if (stepContextReplacements.length) {
+    const ownershipFromDate = stepContextReplacements
+      .map((replacement) => replacement.fromDate)
+      .sort()[0];
+    const ownershipThroughDate = stepContextReplacements
+      .map((replacement) => replacement.throughDate)
+      .sort()
+      .at(-1)!;
+    const ownership = await admin.from("google_health_import_records")
+      .select("entry_id,data_type,local_date")
+      .eq("user_id", userId)
+      .in("data_type", ["steps", "workouts", DERIVED_STEP_FALLBACK_DATA_TYPE])
+      .gte("local_date", ownershipFromDate)
+      .lte("local_date", ownershipThroughDate);
+    if (ownership.error) throw ownership.error;
+    importOwnership = (ownership.data ?? []) as Array<Record<string, unknown>>;
+  }
+  const stepFallbackOwnership = importOwnership.map((owned) => ({
+    entry_id: String(owned.entry_id ?? ""),
+    data_type: String(owned.data_type ?? ""),
+    local_date: String(owned.local_date ?? ""),
+  })).filter((owned) =>
+    Boolean(owned.entry_id) &&
+    Boolean(owned.data_type) &&
+    /^\d{4}-\d{2}-\d{2}$/.test(owned.local_date)
+  );
   const fetchedRecords = successful.flatMap((item) => item.records);
   let currentSnapshot = snapshot;
   let currentRevision = Number(snapshotRow.revision);
@@ -1223,11 +2313,29 @@ async function performGoogleHealthSync(
     mapped = mappedFromProvider;
     mapped = preferNativeStepOwner(mapped, currentSnapshot);
     mapped = preserveUserIntentAndDeduplicate(mapped, currentSnapshot);
+    const withStepFallback = appendStepFallbackRecords(
+      mapped,
+      currentSnapshot,
+      userId,
+      now.toISOString(),
+      replacements,
+      stepFallbackOwnership,
+    );
+    mapped = withStepFallback.mapped;
+    effectiveReplacements = withStepFallback.replacements;
+    seenRecords.push(...mapped
+      .filter((record) => record.dataType === DERIVED_STEP_FALLBACK_DATA_TYPE)
+      .map((record) => ({
+        entryId: String(record.entry.id ?? ""),
+        dataType: record.dataType,
+        localDate: record.localDate,
+      }))
+      .filter((record) => record.entryId));
     const result = await admin.rpc("apply_google_health_import", {
       p_user_id: userId,
       p_records: mapped,
       p_seen_records: seenRecords,
-      p_replacements: replacements,
+      p_replacements: effectiveReplacements,
       p_synced_at: now.toISOString(),
       p_expected_revision: currentRevision,
       p_lease_id: leaseId,
@@ -1403,6 +2511,14 @@ export const googleHealthSyncTestHooks = {
   dailyValueDates,
   replacementRangesForFetch,
   mapRecordsToEntries,
+  appendStepFallbackRecords,
+  estimateWalkingFromSteps,
+  movementStepLengthForCoverage,
+  metCadenceStepEstimate,
+  stepCoverageActivity,
+  stepCoverageActivityFromKey,
+  eligibleStandaloneActiveEnergyForStepCoverage,
+  derivedStepFallbackReplacements,
   preserveUserIntentAndDeduplicate,
   preferNativeStepOwner,
   semanticallyMatchesNative,

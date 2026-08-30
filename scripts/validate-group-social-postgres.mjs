@@ -1,0 +1,354 @@
+import { PGlite } from "npm:@electric-sql/pglite@0.3.10";
+
+const root = new URL("../", import.meta.url);
+const migrations = await Promise.all(
+  [
+    "supabase/migrations/202608280001_durable_group_log_social_identity.sql",
+    "supabase/migrations/202608300001_social_cheers.sql",
+  ].map((path) => Deno.readTextFile(new URL(path, root))),
+);
+
+function sqlStatements(source) {
+  const statements = [];
+  let start = 0;
+  let single = false;
+  let double = false;
+  let lineComment = false;
+  let blockComment = false;
+  let dollarTag = "";
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    const next = source[index + 1];
+    if (lineComment) {
+      if (char === "\n") lineComment = false;
+      continue;
+    }
+    if (blockComment) {
+      if (char === "*" && next === "/") {
+        blockComment = false;
+        index += 1;
+      }
+      continue;
+    }
+    if (dollarTag) {
+      if (source.startsWith(dollarTag, index)) {
+        index += dollarTag.length - 1;
+        dollarTag = "";
+      }
+      continue;
+    }
+    if (single) {
+      if (char === "'" && next === "'") index += 1;
+      else if (char === "'") single = false;
+      continue;
+    }
+    if (double) {
+      if (char === '"' && next === '"') index += 1;
+      else if (char === '"') double = false;
+      continue;
+    }
+    if (char === "-" && next === "-") {
+      lineComment = true;
+      index += 1;
+      continue;
+    }
+    if (char === "/" && next === "*") {
+      blockComment = true;
+      index += 1;
+      continue;
+    }
+    if (char === "'") {
+      single = true;
+      continue;
+    }
+    if (char === '"') {
+      double = true;
+      continue;
+    }
+    if (char === "$") {
+      const match = source.slice(index).match(/^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/);
+      if (match) {
+        dollarTag = match[0];
+        index += dollarTag.length - 1;
+        continue;
+      }
+    }
+    if (char === ";") {
+      const statement = source.slice(start, index + 1).trim();
+      if (statement) statements.push(statement);
+      start = index + 1;
+    }
+  }
+  const remainder = source.slice(start).trim();
+  if (remainder) statements.push(remainder);
+  return statements;
+}
+
+const db = new PGlite();
+await db.exec(`
+  create role anon;
+  create role authenticated;
+  create schema auth;
+  create function auth.uid() returns uuid language sql stable as $$
+    select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid
+  $$;
+
+  create table public.groups (id uuid primary key);
+  create table public.profiles (id uuid primary key, display_name text);
+  create table public.group_members (
+    group_id uuid not null,
+    user_id uuid not null,
+    status text not null,
+    primary key (group_id, user_id)
+  );
+  create function public.is_group_member(p_group_id uuid)
+  returns boolean language sql stable as $$
+    select exists (
+      select 1 from public.group_members member
+       where member.group_id = p_group_id
+         and member.user_id = auth.uid()
+         and member.status = 'active'
+    )
+  $$;
+  create function public.group_challenge_occurs_on(jsonb, date, date)
+  returns boolean language sql immutable as $$ select false $$;
+
+  create table public.metric_definitions (
+    id uuid primary key,
+    group_id uuid not null,
+    slug text not null,
+    name text not null,
+    archived_at timestamptz
+  );
+  create table public.metric_entries (
+    id uuid primary key,
+    client_generated_id text not null,
+    metric_id uuid not null,
+    user_id uuid not null,
+    local_date date not null,
+    visibility text not null,
+    account_revision bigint,
+    updated_at timestamptz not null default now()
+  );
+  create table public.metric_privacy_cache_fences (
+    group_id uuid not null,
+    user_id uuid not null,
+    metric_id uuid not null,
+    revision bigint not null
+  );
+  create table public.photo_updates (
+    group_id uuid not null,
+    owner_user_id uuid not null,
+    client_generated_id text not null,
+    visibility text not null,
+    local_date date not null,
+    created_at timestamptz not null default now()
+  );
+  create table public.group_todos (id uuid primary key, group_id uuid not null);
+  create table public.daily_metric_status (
+    group_id uuid not null,
+    metric_id uuid not null,
+    user_id uuid not null,
+    local_date date not null,
+    visibility text
+  );
+  create table public.group_challenges (
+    id uuid primary key,
+    group_id uuid not null,
+    local_date date not null,
+    recurrence jsonb,
+    deleted_at timestamptz
+  );
+  create table public.group_social_reactions (
+    group_id uuid not null,
+    target_type text not null,
+    target_id text not null check (char_length(target_id) between 1 and 240),
+    user_id uuid not null,
+    reaction text not null,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    primary key (group_id, target_type, target_id, user_id)
+  );
+  create table public.group_social_comments (
+    id uuid primary key default gen_random_uuid(),
+    group_id uuid not null,
+    target_type text not null,
+    target_id text not null check (char_length(target_id) between 1 and 240),
+    user_id uuid not null,
+    content text not null,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
+  );
+  create table public.group_notification_events (
+    event_key text not null,
+    group_id uuid not null,
+    recipient_id uuid not null,
+    actor_id uuid,
+    event_type text not null,
+    challenge_id uuid,
+    title text,
+    detail text,
+    occurrence_date date,
+    target_type text,
+    target_id text,
+    reaction text,
+    created_at timestamptz,
+    unique (recipient_id, event_key)
+  );
+  create table public.push_dispatch_events (
+    event_key text primary key,
+    group_id uuid,
+    dispatcher_id uuid,
+    category text,
+    event_type text,
+    audience text,
+    recipient_id uuid,
+    metric_slug text,
+    title text,
+    body text,
+    data jsonb,
+    expires_at timestamptz
+  );
+`);
+
+for (const [index, statement] of sqlStatements(migrations.join("\n")).entries()) {
+  try {
+    await db.exec(statement);
+  } catch (error) {
+    throw new Error(
+      `Social migration statement ${index + 1} failed (${statement.slice(0, 100).replaceAll("\n", " ")} ... ${statement.slice(-180).replaceAll("\n", " ")}): ${error}`,
+    );
+  }
+}
+
+const groupId = "10000000-0000-4000-8000-000000000001";
+const viewerId = "20000000-0000-4000-8000-000000000001";
+const ownerId = "20000000-0000-4000-8000-000000000002";
+const otherOwnerId = "20000000-0000-4000-8000-000000000003";
+const metricId = "30000000-0000-4000-8000-000000000001";
+const entryId = "40000000-0000-4000-8000-000000000001";
+// Deliberately UUID-shaped: this was the production failure mode.
+const legacyEntryId = "50000000-0000-4000-8000-000000000001";
+const photoId = "photo-client-id";
+const todoId = "60000000-0000-4000-8000-000000000001";
+const challengeId = "70000000-0000-4000-8000-000000000001";
+
+await db.exec(`
+  set request.jwt.claim.sub = '${viewerId}';
+  insert into public.groups values ('${groupId}');
+  insert into public.profiles values
+    ('${viewerId}', 'Viewer'), ('${ownerId}', 'Owner'),
+    ('${otherOwnerId}', 'Other owner');
+  insert into public.group_members values
+    ('${groupId}', '${viewerId}', 'active'),
+    ('${groupId}', '${ownerId}', 'active'),
+    ('${groupId}', '${otherOwnerId}', 'active');
+  insert into public.metric_definitions values
+    ('${metricId}', '${groupId}', 'food', 'Food', null);
+  insert into public.metric_entries values
+    ('${entryId}', '${legacyEntryId}', '${metricId}', '${ownerId}',
+     date '2026-08-28', 'group', 5, now());
+  insert into public.photo_updates values
+    ('${groupId}', '${ownerId}', '${photoId}', 'group', date '2026-08-28', now());
+  insert into public.group_todos values ('${todoId}', '${groupId}');
+  insert into public.daily_metric_status values
+    ('${groupId}', '${metricId}', '${ownerId}', date '2026-08-28', 'group');
+  insert into public.group_challenges values
+    ('${challengeId}', '${groupId}', date '2026-08-28', null, null);
+`);
+
+async function scalar(sql) {
+  const result = await db.query(sql);
+  return Object.values(result.rows[0] ?? {})[0];
+}
+
+if (
+  (await scalar(
+    `select public.resolve_group_social_metric_entry_id('${groupId}', '${entryId}')::text`,
+  )) !== entryId
+)
+  throw new Error("Canonical shared-log UUID did not resolve.");
+if (
+  (await scalar(
+    `select public.resolve_group_social_metric_entry_id('${groupId}', '${legacyEntryId}')::text`,
+  )) !== entryId
+)
+  throw new Error("UUID-shaped legacy shared-log id did not resolve.");
+
+const metricReaction = await db.query(`
+  select (public.set_group_social_reaction(
+    '${groupId}', 'metric_entry', '${legacyEntryId}', 'cheer'
+  )).target_id
+`);
+if (metricReaction.rows[0]?.target_id !== entryId)
+  throw new Error("Metric reaction was not persisted on the canonical UUID.");
+
+await db.exec(`
+  insert into public.group_social_comments (
+    group_id, target_type, target_id, user_id, content
+  ) values (
+    '${groupId}', 'metric_entry', '${legacyEntryId}', '${viewerId}', 'Nice meal'
+  );
+`);
+if (
+  (await scalar(
+    `select target_id from public.group_social_comments where content = 'Nice meal'`,
+  )) !== entryId
+)
+  throw new Error("Metric comment did not canonicalize before storage.");
+
+for (const [type, id] of [
+  ["photo_update", photoId],
+  ["group_todo", todoId],
+  ["recap_feed", "leader:2026-08-28"],
+  ["badge", `${ownerId}:first-log:2026-08-28`],
+  ["group_challenge", `${challengeId}:2026-08-28:started`],
+]) {
+  const accepted = await scalar(`
+    select (public.set_group_social_reaction(
+      '${groupId}', '${type}', '${id}', 'thumbs_up'
+    )).target_id
+  `);
+  if (accepted !== id)
+    throw new Error(`${type} feed target was rejected or rewritten unexpectedly.`);
+}
+
+await db.exec(`
+  insert into public.metric_privacy_cache_fences values
+    ('${groupId}', '${ownerId}', '${metricId}', 5);
+`);
+if (
+  (await scalar(
+    `select public.valid_group_social_target('${groupId}', 'metric_entry', '${entryId}')`,
+  )) !== false
+)
+  throw new Error("A privacy-fenced log remained a valid social target.");
+let privateMutationRejected = false;
+try {
+  await db.query(`
+    select public.set_group_social_reaction(
+      '${groupId}', 'metric_entry', '${entryId}', 'thumbs_down'
+    )
+  `);
+} catch {
+  privateMutationRejected = true;
+}
+if (!privateMutationRejected)
+  throw new Error("The reaction RPC accepted a privacy-fenced log.");
+
+await db.exec(`
+  delete from public.metric_privacy_cache_fences;
+  insert into public.metric_entries values
+    ('40000000-0000-4000-8000-000000000002', '${legacyEntryId}', '${metricId}',
+     '${otherOwnerId}', date '2026-08-28', 'group', 6, now());
+`);
+if (
+  (await scalar(
+    `select public.resolve_group_social_metric_entry_id('${groupId}', '${legacyEntryId}')`,
+  )) !== null
+)
+  throw new Error("An ambiguous legacy client id was guessed instead of rejected.");
+
+console.log(
+  "Group social PostgreSQL validation passed: Cheer, canonical and UUID-shaped legacy identities, mixed-version comments, all feed targets, collision rejection, and privacy fences.",
+);

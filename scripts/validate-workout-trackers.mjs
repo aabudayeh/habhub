@@ -6,7 +6,11 @@ import {
   consolidateWorkoutTrackers,
 } from "../src/domain/workoutTrackers.ts";
 import {
+  completedGymDistanceKm,
   completeGymWorkout,
+  estimateGymActiveCalories,
+  gymExerciseTrackingFields,
+  gymSessionWorkoutSample,
   gymSessionVisibilityForMetric,
   setGymExerciseCompletion,
 } from "../src/domain/gym.ts";
@@ -26,6 +30,101 @@ import {
   isDefaultWorkoutQualification,
   workoutQualifies,
 } from "../src/domain/workoutQualification.ts";
+
+const walkingExercise = {
+  id: "walk",
+  exerciseKey: "walking",
+  name: "Walking",
+  customMet: 3.5,
+  sets: [
+    {
+      id: "walk-set",
+      reps: 0,
+      weightKg: 0,
+      workSeconds: 30 * 60,
+      distanceKm: 2.4,
+      completed: true,
+    },
+  ],
+};
+assert.deepEqual(
+  gymExerciseTrackingFields(walkingExercise),
+  ["duration", "distance"],
+  "distance-capable catalog cardio must expose minutes and distance",
+);
+assert.deepEqual(
+  gymExerciseTrackingFields({
+    ...walkingExercise,
+    exerciseKey: "custom:hybrid",
+    trackingFields: ["distance", "weight", "duration", "reps"],
+  }),
+  ["duration", "reps", "weight", "distance"],
+  "custom exercise fields must allow every non-empty combination in a stable order",
+);
+assert.equal(completedGymDistanceKm([walkingExercise]), 2.4);
+assert.equal(
+  completedGymDistanceKm([
+    {
+      ...walkingExercise,
+      sets: [
+        ...walkingExercise.sets,
+        { ...walkingExercise.sets[0], id: "pending", distanceKm: 99, completed: false },
+      ],
+    },
+  ]),
+  2.4,
+  "only completed set distance may reach Workout distance",
+);
+const lightWalkCalories = estimateGymActiveCalories(
+  { weightKg: 80, heightCm: 180 },
+  30,
+  "light",
+  [walkingExercise],
+);
+const vigorousWalkCalories = estimateGymActiveCalories(
+  { weightKg: 80, heightCm: 180 },
+  30,
+  "vigorous",
+  [walkingExercise],
+);
+const longerWalkCalories = estimateGymActiveCalories(
+  { weightKg: 80, heightCm: 180 },
+  60,
+  "light",
+  [walkingExercise],
+);
+const lighterWalkCalories = estimateGymActiveCalories(
+  { weightKg: 55, heightCm: 165 },
+  30,
+  "light",
+  [walkingExercise],
+);
+const moderateWalkCalories = estimateGymActiveCalories(
+  { weightKg: 80, heightCm: 180 },
+  30,
+  "moderate",
+  [walkingExercise],
+);
+const moderateRunCalories = estimateGymActiveCalories(
+  { weightKg: 80, heightCm: 180 },
+  30,
+  "moderate",
+  [{ ...walkingExercise, exerciseKey: "running", name: "Running", customMet: 7 }],
+);
+assert.ok(lightWalkCalories > 0);
+assert.ok(
+  vigorousWalkCalories > lightWalkCalories,
+  "the pure MET estimate must respond to selected workout intensity",
+);
+assert.ok(
+  longerWalkCalories > lightWalkCalories &&
+    lightWalkCalories > lighterWalkCalories,
+  "the pure MET estimate must respond to duration and body profile",
+);
+assert.ok(
+  moderateRunCalories > moderateWalkCalories,
+  "the catalog exercise type and its MET must affect active calories",
+);
 
 assert.equal(
   workoutQualifies(
@@ -99,16 +198,21 @@ const backgroundWorkoutDraft = {
   calorieCalculationMode: "session_met",
   intensity: "moderate",
   sessionNotes: "",
+  sessionImageUri: "file:///workout-photo.jpg",
   visibility: "group",
   selectedPlanId: null,
   setStartDelaySeconds: 0,
   exercises: [
     {
       id: "background-exercise",
-      name: "Bench press",
+      exerciseKey: "walking",
+      name: "Walking",
+      trackingMode: "duration",
+      trackingFields: ["duration", "distance"],
+      customMet: 3.5,
       sets: [
-        { id: "background-set-1", reps: 8, weightKg: 70, completed: false },
-        { id: "background-set-2", reps: 8, weightKg: 70, completed: false },
+        { id: "background-set-1", reps: 0, weightKg: 0, distanceKm: 1.1, completed: false },
+        { id: "background-set-2", reps: 0, weightKg: 0, distanceKm: 1.1, completed: false },
       ],
     },
   ],
@@ -197,6 +301,7 @@ const backgroundState = {
   metrics: [
     { id: "workout", defaultVisibility: "group" },
     { id: "workout_duration", defaultVisibility: "group" },
+    { id: "workout_distance", defaultVisibility: "group" },
     { id: "exercise", defaultVisibility: "group" },
   ],
   settings: {
@@ -220,17 +325,39 @@ const backgroundSession = finishStoredWorkoutDraft(
 );
 assert.equal(backgroundSession.exercises[0].sets[1].completed, true);
 assert.equal(backgroundSession.pausedSeconds, 5);
+assert.equal(backgroundSession.distanceKm, 2.2);
+assert.equal(backgroundSession.imageUri, "file:///workout-photo.jpg");
+assert.equal(gymSessionWorkoutSample(backgroundSession).activity, "walking");
 assert.equal(backgroundSession.completedAt, new Date(backgroundTimerBase + 34_000).toISOString());
 const backgroundApplied = applyBackgroundGymSession(
   backgroundState,
   backgroundSession,
 );
 assert.equal(backgroundApplied.gymSessions[0].id, "background-session");
+assert.equal(
+  backgroundApplied.gymSessions[0].imageUri,
+  undefined,
+  "a completed session must not retain a duplicate device-local photo URI",
+);
+assert.equal(
+  backgroundApplied.entries.filter(
+    (entry) => entry.imageUri === "file:///workout-photo.jpg",
+  ).length,
+  1,
+  "foreground/background workout media must live on exactly one linked entry",
+);
 assert.ok(
   backgroundApplied.entries.some(
     (entry) => entry.id === "gym-sync:background-session:workout_duration",
   ),
   "headless Finish must materialize the same Workout duration row as foreground save",
+);
+assert.equal(
+  backgroundApplied.entries.find(
+    (entry) => entry.id === "gym-sync:background-session:workout_distance",
+  )?.value,
+  2.2,
+  "headless Finish must materialize completed cardio distance exactly once",
 );
 assert.equal(
   applyBackgroundGymSession(backgroundApplied, backgroundSession),
@@ -917,6 +1044,10 @@ const migration = fs.readFileSync("src/domain/stateMigration.ts", "utf8");
 const editor = fs.readFileSync("app/metric-editor.tsx", "utf8");
 const health = fs.readFileSync("src/domain/health.ts", "utf8");
 const log = fs.readFileSync("app/(tabs)/log.tsx", "utf8");
+const manualWorkout = fs.readFileSync(
+  "src/domain/manualWorkout.ts",
+  "utf8",
+);
 const gymScreen = fs.readFileSync("app/(tabs)/gym.tsx", "utf8");
 const metricDetail = fs.readFileSync("app/metric-detail.tsx", "utf8");
 const types = fs.readFileSync("src/types.ts", "utf8");
@@ -963,11 +1094,18 @@ assert.match(
   "Workout logging must use its detail/Add flow rather than a redundant Mark as complete toggle",
 );
 assert.match(
-  log,
-  /\["exercise", workoutCalories\]/,
-  "a manually logged workout must save calories directly to Active energy",
+  manualWorkout,
+  /exercise: positive\(activeCalories\)/,
+  "the atomic manual-workout mapping must save calories directly to Active energy",
 );
+assert.match(
+  manualWorkout,
+  /sourceRecordId = `manual-workout:\$\{eventId\}`[\s\S]{0,1400}metricId,[\s\S]{0,120}visibility: gymSessionVisibilityForMetric/,
+  "manual Workout, duration, distance, and Active-energy rows must share one private session identity while retaining tracker privacy",
+);
+assert.match(log, /logWorkout\(\{[\s\S]{0,260}activeCalories:/);
 assert.doesNotMatch(log, /\["workout_calories", workoutCalories\]/);
+assert.doesNotMatch(manualWorkout, /workout_calories/);
 assert.match(types, /gymTimerMode\?: GymTimerMode/);
 assert.match(
   gymScreen,
@@ -1020,17 +1158,32 @@ assert.match(
   /canManageGroup && !isPersonalSetupGroup\(state\.group\)/,
   "Share template with group must stay hidden until the user has an active group",
 );
-for (const trackingMode of ["duration", "reps", "load_reps"]) {
+for (const trackingField of ["duration", "reps", "weight", "distance"]) {
   assert.match(
     gymScreen,
-    new RegExp(`id: "${trackingMode}"`),
-    `Custom exercise creation must expose ${trackingMode} tracking`,
+    new RegExp(`id: "${trackingField}"`),
+    `Custom exercise creation must expose ${trackingField} tracking`,
   );
 }
 assert.match(
   gymScreen,
-  /trackingMode: customExerciseTrackingMode/,
-  "A custom exercise must retain the selected time, reps, or load/reps mode",
+  /trackingFields,[\s\S]{0,160}supportsDistance: trackingFields\.includes\("distance"\)/,
+  "A custom exercise must retain any selected minutes, reps, kg, and distance combination",
+);
+assert.match(
+  gymScreen,
+  /const \[customTrackingOpen, setCustomTrackingOpen\] = useState\(false\)/,
+  "Track each set by must start collapsed",
+);
+assert.match(
+  gymScreen,
+  /function changeCustomExerciseName[\s\S]{0,420}else if \(!hadName\) setCustomTrackingOpen\(true\)/,
+  "Track each set by must remain collapsed until a custom exercise has a name",
+);
+assert.match(
+  gymScreen,
+  /trackingFields\.map\(\(field\)[\s\S]{0,2200}distanceKm: Math\.max\(0, value\)/,
+  "The set editor must persist every selected field, including distance",
 );
 assert.match(
   gymScreen,
@@ -1056,19 +1209,39 @@ for (const privacySource of [provider, groupCloud, metricsDomain, backgroundFini
   );
 }
 assert.match(
+  provider,
+  /case "saveGymSession"[\s\S]{0,1300}\{ metricId: "workout_distance", value: distanceValue \}/,
+  "foreground workout saves must project completed distance",
+);
+assert.match(
+  backgroundFinish,
+  /applyBackgroundGymSession[\s\S]{0,1500}\{ metricId: "workout_distance", value: distanceValue \}/,
+  "background Finish must project the same completed distance",
+);
+assert.doesNotMatch(
+  provider,
+  /case "saveGymSession"[\s\S]{0,1600}\{ metricId: "energy_burned"/,
+  "Energy burned must derive from Active energy and BMR rather than duplicate workout calories",
+);
+assert.match(
   metricDetail,
   /function promptGymSessionRemoval[\s\S]{0,500}deleteGymSession\(session\.id\)/,
   "Holding a derived gym entry must delete its source session rather than only one metric projection",
 );
 assert.match(
   metricDetail,
-  /gymSourceSessions\.map[\s\S]{0,3200}onLongPress=\{\(\) => promptGymSessionRemoval\(session\)\}/,
-  "Saved gym sessions must expose deletion from the workout tracker detail page",
+  /function handleGymSessionEditTap\(session: GymSession\)[\s\S]{0,900}openStepCoveragePicker\(coverageEntry\)/,
+  "Double-tapping a saved gym session must open its subtle Step-activity classifier",
 );
 assert.match(
   metricDetail,
-  /accessibilityRole="button"[\s\S]{0,220}accessibilityLabel=\{t\(`Delete \$\{session\.name \|\| "Workout"\}`\)\}[\s\S]{0,220}onPress=\{\(\) => promptGymSessionRemoval\(session\)\}/,
-  "Saved gym sessions must expose a keyboard-accessible delete button on web",
+  /gymSourceSessions\.map[\s\S]{0,5200}handleGymSessionEditTap\(session\)[\s\S]{0,700}onLongPress=\{\(\) => \{[\s\S]{0,500}promptGymSessionRemoval\(session\)/,
+  "A saved workout must use double-tap for Step classification and long-press for confirmed deletion",
+);
+assert.doesNotMatch(
+  metricDetail,
+  /accessibilityLabel=\{t\("Edit Step coverage"\)\}/,
+  "Step control must remain a subtle entry gesture instead of an obvious header edit button",
 );
 assert.match(
   provider,
@@ -1172,6 +1345,81 @@ assert.doesNotMatch(
   exercisePicker,
   /autoFocus/,
   "Add Exercise must show its menu without forcing Search or the keyboard open",
+);
+const pickerSearchIndex = exercisePicker.indexOf('placeholder="Search exercise or muscle"');
+const pickerResultsIndex = exercisePicker.indexOf("pickerItems.map");
+const customExerciseIndex = exercisePicker.indexOf(
+  'placeholder="Can\'t find it? Name a custom exercise"',
+);
+const pickerExerciseFilterIndex = exercisePicker.indexOf('title="Exercise"');
+const pickerMuscleFilterIndex = exercisePicker.indexOf('title="Muscle"');
+assert.ok(
+  pickerSearchIndex >= 0 &&
+    pickerResultsIndex > pickerSearchIndex &&
+    customExerciseIndex > pickerResultsIndex &&
+    pickerExerciseFilterIndex > customExerciseIndex &&
+    pickerMuscleFilterIndex > customExerciseIndex,
+  "Search results and custom creation must stay above the separate Exercise and Muscle filters",
+);
+assert.match(
+  exercisePicker,
+  /accessibilityLabel="Add custom exercise"[\s\S]{0,180}onPress=\{focusCustomExerciseCreator\}[\s\S]{0,300}<Ionicons name="add"/,
+  "A separate custom-exercise plus action must remain visible without activating Search",
+);
+assert.match(
+  exercisePicker,
+  /<KeyboardAvoidingView[\s\S]*ref=\{pickerListRef\}[\s\S]{0,400}keyboardShouldPersistTaps="handled"/,
+  "The picker must keep search results visible and tappable while the keyboard is open",
+);
+assert.match(
+  gymScreen,
+  /const \[pickerExerciseFilters, setPickerExerciseFilters\] = useState<[\s\S]{0,80}ExerciseCategory\[][\s\S]{0,20}>\(\[\]\)/,
+  "Exercise type filters must support multiple selected categories",
+);
+assert.match(
+  gymScreen,
+  /const \[pickerMuscleFilters, setPickerMuscleFilters\] = useState<MuscleGroup\[]>\([\s\S]{0,20}\[\]/,
+  "Muscle filters must support multiple selected muscles",
+);
+assert.match(
+  exercisePicker,
+  /style=\{styles\.pickerFilterRow\}[\s\S]{0,500}title="Exercise"[\s\S]{0,420}selectedIds=\{pickerExerciseFilters\}[\s\S]{0,700}title="Muscle"[\s\S]{0,420}selectedIds=\{pickerMuscleFilters\}/,
+  "Exercise and Muscle filters must be separate compact multi-select menus on one row",
+);
+assert.doesNotMatch(
+  exercisePicker,
+  /pickerCategoryScroller|pickerMuscles|<Chip/,
+  "The Add Exercise picker must not regress to bubble-style category or muscle filters",
+);
+assert.match(
+  exercisePicker,
+  /title="Exercise type"[\s\S]{0,360}selectedIds=\{\[customExerciseCategory\]\}[\s\S]{0,700}title="Muscles"[\s\S]{0,360}selectedIds=\{customExerciseMuscles\}/,
+  "Custom exercises must expose editable type and muscle classifications with defaults",
+);
+assert.match(
+  gymScreen,
+  /const definition: CustomGymExerciseDefinition = \{[\s\S]{0,500}category: item\.category[\s\S]{0,500}muscles: item\.muscles[\s\S]{0,900}updateSettings\(\{[\s\S]{0,150}customGymExercises:/,
+  "Custom exercise classifications must persist in the account-owned catalog",
+);
+assert.match(
+  gymScreen,
+  /function fromCatalog[\s\S]{0,500}exerciseCategory: item\.category/,
+  "Custom exercise categories must be copied into workout sessions",
+);
+assert.match(
+  gymScreen,
+  /const instantiatePlan[\s\S]{0,1600}exerciseCategory:[\s\S]{0,180}catalogExercise\(key\)\?\.category/,
+  "Custom exercise categories must survive template instantiation",
+);
+assert.match(
+  gymScreen,
+  /function savePlan[\s\S]{0,1000}exerciseCategory: exercise\.exerciseCategory/,
+  "Personal templates must persist custom exercise categories",
+);
+assert.match(
+  gymScreen,
+  /search: \{[\s\S]{0,180}minHeight: 52[\s\S]{0,180}fontSize: 14/,
+  "Exercise Search must have a comfortably sized tap target and readable text",
 );
 assert.match(
   gymScreen,

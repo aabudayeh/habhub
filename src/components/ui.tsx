@@ -48,6 +48,7 @@ import {
 } from "@/src/components/TutorialSpotlight";
 import {
   resolveScreenBottomPadding,
+  TAB_SCENE_SAFE_AREA_EDGES,
   WebDisplayEnvironment,
 } from "@/src/domain/webSafeArea";
 
@@ -168,7 +169,7 @@ export function Screen({
     // screens keep their last control clear of the system gesture area.
     <SafeAreaView
       style={[styles.safe, { backgroundColor: colors.canvas }]}
-      edges={["top"]}
+      edges={TAB_SCENE_SAFE_AREA_EDGES}
     >
       <KeyboardAvoidingView
         style={styles.safe}

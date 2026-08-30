@@ -238,6 +238,15 @@ export function removeGroupActivityCache(groupId: string): Promise<void> {
   });
 }
 
+export function clearGroupActivityCaches(): Promise<void> {
+  return enqueueMutation(async () => {
+    const cacheKeys = (await AsyncStorage.getAllKeys()).filter((key) =>
+      key.startsWith(CACHE_KEY_PREFIX),
+    );
+    await AsyncStorage.multiRemove([...cacheKeys, CACHE_INDEX_KEY]);
+  });
+}
+
 export function pruneGroupActivityCaches(
   options?: GroupActivityCachePruneOptions,
 ): Promise<void> {

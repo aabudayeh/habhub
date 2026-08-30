@@ -36,6 +36,7 @@ export function HorizontalPager({
   testID,
   requestedPage,
   onPageChange,
+  onPageSettled,
   showPageDots = true,
   webNaturalHeight = false,
 }: {
@@ -48,6 +49,9 @@ export function HorizontalPager({
   requestedPage?: number;
   /** Mirrors swipe and dot navigation to compact indicators outside the pager. */
   onPageChange?: (page: number) => void;
+  /** Reports only a completed swipe/drag/dot transition. External tab bars
+   * should use this instead of reacting to intermediate Web scroll frames. */
+  onPageSettled?: (page: number) => void;
   /** Hide built-in dots when the surrounding screen already renders them. */
   showPageDots?: boolean;
   /**
@@ -111,8 +115,9 @@ export function HorizontalPager({
         scrollOffsetRef.current = page * pageWidth;
         scrollRef.current?.scrollTo({ x: page * pageWidth, animated });
       }
+      onPageSettled?.(page);
     },
-    [commitActivePage, pageWidth, pages.length],
+    [commitActivePage, onPageSettled, pageWidth, pages.length],
   );
   useEffect(() => {
     const next = clampPageIndex(activePageRef.current, pages.length);
@@ -152,6 +157,19 @@ export function HorizontalPager({
       );
     },
     [commitActivePage, pageWidth, pages.length],
+  );
+  const settleActivePage = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const page = pageIndexFromOffset(
+        event.nativeEvent.contentOffset.x,
+        pageWidth,
+        pages.length,
+      );
+      scrollOffsetRef.current = event.nativeEvent.contentOffset.x;
+      commitActivePage(page);
+      onPageSettled?.(page);
+    },
+    [commitActivePage, onPageSettled, pageWidth, pages.length],
   );
 
   const measure = useCallback((event: LayoutChangeEvent) => {
@@ -266,8 +284,10 @@ export function HorizontalPager({
         snapToAlignment="start"
         scrollEventThrottle={16}
         onScroll={Platform.OS === "web" ? updateActivePage : undefined}
-        onMomentumScrollEnd={updateActivePage}
-        onScrollEndDrag={updateActivePage}
+        onMomentumScrollEnd={settleActivePage}
+        onScrollEndDrag={
+          Platform.OS === "web" ? undefined : settleActivePage
+        }
         style={[
           styles.viewport,
           useNaturalWebHeight

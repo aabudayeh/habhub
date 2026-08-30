@@ -38,10 +38,13 @@ import {
 } from "../src/domain/healthDedup.ts";
 import {
   activeEnergyEntriesWithoutCoveredWorkoutFallbacks,
+  estimateLevelWalkingFromSteps,
   healthEnergyRecordCoversWorkout,
   healthFallbackContextForRead,
   isFitbitRestingEnergyRecord,
   mapHealthRecordsToEntries,
+  movementDistanceForStepCoverage,
+  movementStepLengthForCoverage,
   reconciledActiveEnergyValue,
   reconcileGoogleHealthNativeMirrors,
   samsungWorkoutEnergyRecords,
@@ -1014,6 +1017,135 @@ const energyProfile = {
   activityLevel: "sedentary",
   desiredWeeklyLossKg: 0,
 };
+const unexplainedWalking = estimateLevelWalkingFromSteps(6_000, energyProfile);
+assert.ok(
+  Math.abs(unexplainedWalking.speedMps - 1.4) < 1e-12 &&
+    Math.abs(unexplainedWalking.stepLengthM - 0.7521) < 1e-12,
+  "remaining daily steps must use the explicit 1.4 m/s walking equation, never a workout's pace",
+);
+const measuredWalkingStep = movementStepLengthForCoverage(
+  { distanceKm: 3, durationMinutes: 30 },
+  energyProfile,
+);
+assert.ok(
+  measuredWalkingStep.speedSource === "measured" &&
+    Math.abs(measuredWalkingStep.speedKmh - 6) < 1e-12 &&
+    Math.abs(measuredWalkingStep.stepLengthM - 0.8321) < 1e-12,
+  "a walking or hiking workout must put its measured distance/duration speed into the profile equation",
+);
+const measuredRunningStep = movementStepLengthForCoverage(
+  { distanceKm: 3, durationMinutes: 15, running: true },
+  energyProfile,
+);
+assert.ok(
+  measuredRunningStep.speedSource === "measured" &&
+    Math.abs(measuredRunningStep.speedKmh - 12) < 1e-12 &&
+    Math.abs(measuredRunningStep.stepLengthM - 1.19425) < 1e-12,
+  "running step length must use the age-height-speed regression instead of a fixed metre",
+);
+const assumedRunningStep = movementStepLengthForCoverage(
+  { distanceKm: 3, running: true },
+  energyProfile,
+);
+assert.ok(
+  assumedRunningStep.speedSource === "assumed" &&
+    Math.abs(assumedRunningStep.speedKmh - 9) < 1e-12 &&
+    Math.abs(assumedRunningStep.stepLengthM - 0.94525) < 1e-12,
+  "a running workout without both distance and duration must use the safe 9 km/h pace",
+);
+const hikingCoverageEntry = (metricId, value) => ({
+  id: `hiking-profile-coverage:${metricId}`,
+  metricId,
+  userId: "owner",
+  value,
+  localDate: "2026-08-13",
+  recordedAt: "2026-08-13T09:30:00.000Z",
+  visibility: "group",
+  source: "imported",
+  label: "Hiking",
+  sourceProvider: "health_connect",
+  sourceRecordId: "hiking-profile-coverage",
+});
+const hikingCoverage = unrecordedStepActivity(
+  [
+    hikingCoverageEntry("workout", true),
+    hikingCoverageEntry("workout_distance", 3),
+    hikingCoverageEntry("workout_duration", 30),
+  ],
+  workoutFallbackMetrics,
+  8_000,
+  energyProfile,
+);
+assert.ok(
+  Math.abs(hikingCoverage.coveredSteps - 3_000 / 0.8321) < 1e-9,
+  "Hiking must be recognized explicitly and use the walking profile equation at its measured pace",
+);
+assert.ok(
+  Math.abs(
+    hikingCoverage.distanceKm / hikingCoverage.uncoveredSteps - 0.7521 / 1_000,
+  ) < 1e-12,
+  "a workout's measured pace must not leak into the remaining-step distance conversion",
+);
+assert.equal(
+  movementDistanceForStepCoverage(
+    { distanceKm: 3.25, durationMinutes: 60, activeCalories: 900 },
+    energyProfile,
+  ),
+  3.25,
+  "measured workout distance must outrank duration/calorie estimates for covered steps",
+);
+const caloriesAndDurationDistance = movementDistanceForStepCoverage(
+  { durationMinutes: 45, activeCalories: 180 },
+  energyProfile,
+);
+assert.ok(
+  caloriesAndDurationDistance > 0.75 && caloriesAndDurationDistance < 6,
+  "when distance is absent, body-profile calories and active duration must jointly estimate a bounded walking distance",
+);
+assert.equal(
+  movementDistanceForStepCoverage({ durationMinutes: 30 }, energyProfile),
+  2.5,
+  "duration-only walking retains the conservative 5 km/h fallback",
+);
+const directWorkoutStepEstimate = unrecordedStepActivity(
+  [
+    {
+      id: "workout-with-direct-steps",
+      metricId: "workout",
+      userId: "owner",
+      value: true,
+      localDate: "2026-08-13",
+      recordedAt: "2026-08-13T09:00:00.000Z",
+      visibility: "group",
+      source: "imported",
+      label: "Walking",
+      sourceProvider: "health_connect",
+      sourceRecordId: "walking-session",
+      sourceWorkoutSteps: 2_000,
+    },
+    {
+      id: "implausible-distance-for-direct-step-test",
+      metricId: "workout_distance",
+      userId: "owner",
+      value: 20,
+      localDate: "2026-08-13",
+      recordedAt: "2026-08-13T09:00:00.000Z",
+      visibility: "group",
+      source: "imported",
+      label: "Walking",
+      sourceProvider: "health_connect",
+      sourceRecordId: "walking-session",
+    },
+  ],
+  workoutFallbackMetrics,
+  8_000,
+  energyProfile,
+);
+assert.equal(
+  directWorkoutStepEstimate.uncoveredSteps,
+  6_000,
+  "provider-reported workout steps must outrank inferred distance, calories and duration",
+);
 const energyBurnedMetric = {
   id: "energy_burned",
   name: "Energy burned",
@@ -1473,7 +1605,7 @@ assert.equal(
 );
 assert.equal(
   contextualFallbackValue("workout_duration"),
-  32,
+  30.6,
   "a Steps-only refresh must estimate duration from only workout-uncovered steps",
 );
 assert.equal(
@@ -1493,7 +1625,7 @@ assert.equal(
 );
 assert.equal(
   35 + Number(contextualFallbackValue("workout_duration")),
-  67,
+  65.6,
   "measured workout duration and uncovered-step duration must compose into the daily tracker total",
 );
 assert.equal(
@@ -1547,7 +1679,7 @@ assert.equal(
 );
 assert.equal(
   deletedWorkoutFallbackValue("workout_duration"),
-  56.9,
+  54.4,
   "deleted persisted workout duration must not survive as full-sync fallback context",
 );
 assert.equal(
@@ -2693,12 +2825,12 @@ assert.match(
 );
 assert.match(
   appProviderHydrationSource,
-  /case "saveGymSession"[\s\S]{0,900}\{ metricId: "exercise", value: calorieValue \}/,
+  /case "saveGymSession"[\s\S]{0,2000}\{ metricId: "exercise", value: calorieValue \}/,
   "saving an app gym session must materialize its calories into Active energy",
 );
 assert.doesNotMatch(
   appProviderHydrationSource,
-  /case "saveGymSession"[\s\S]{0,900}\{ metricId: "workout_calories"/,
+  /case "saveGymSession"[\s\S]{0,2000}\{ metricId: "workout_calories"/,
   "saving an app gym session must not recreate the retired Workout calories row",
 );
 const metricCalculationSource = fs.readFileSync(

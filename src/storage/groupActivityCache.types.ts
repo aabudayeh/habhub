@@ -36,6 +36,7 @@ export type GroupActivityCacheApi = {
     options?: GroupActivityCacheWriteOptions,
   ): Promise<void>;
   removeGroupActivityCache(groupId: string): Promise<void>;
+  clearGroupActivityCaches(): Promise<void>;
   pruneGroupActivityCaches(options?: GroupActivityCachePruneOptions): Promise<void>;
   purgeLegacyGroupActivityCaches(): Promise<void>;
 };

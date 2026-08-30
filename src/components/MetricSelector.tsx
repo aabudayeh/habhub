@@ -30,6 +30,7 @@ export function MetricSelector({
   collapsibleGroups = [],
   searchable = true,
   showSelectAll = true,
+  openWhenEmpty = false,
 }: {
   items: MetricSelectorItem[];
   selectedIds: string[];
@@ -41,6 +42,8 @@ export function MetricSelector({
   collapsibleGroups?: string[];
   searchable?: boolean;
   showSelectAll?: boolean;
+  /** Open the chooser whenever a routed screen has no current selection. */
+  openWhenEmpty?: boolean;
 }) {
   const colors = useAppColors();
   const accent = useGroupAccent();
@@ -75,11 +78,16 @@ export function MetricSelector({
       }),
     [items, language, t],
   );
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(
+    () => openWhenEmpty && selectedIds.length === 0,
+  );
   const [query, setQuery] = useState("");
   const [collapsed, setCollapsed] = useState(
     () => new Set(collapsibleGroups),
   );
+  React.useEffect(() => {
+    if (openWhenEmpty) setOpen(selectedIds.length === 0);
+  }, [openWhenEmpty, selectedIds.length]);
   const selected = localizedItems.filter((item) => selectedIds.includes(item.id));
   const visibleItems = React.useMemo(() => {
     const normalized = query.trim().toLowerCase();

@@ -42,6 +42,13 @@ export function useGroupChallenges(
     options.discoveryPollingEnabled !== false;
   const [challenges, setChallenges] = useState<GroupChallenge[]>([]);
   const [loading, setLoading] = useState(false);
+  const [initiallyLoadedGroupId, setInitiallyLoadedGroupId] = useState<
+    string | undefined
+  >(() =>
+    tutorial.active || !supabase || !isCloudGroupId(groupId)
+      ? groupId
+      : undefined,
+  );
   const [error, setError] = useState<string>();
   const challengesRef = useRef<GroupChallenge[]>([]);
   challengesRef.current = challenges;
@@ -59,11 +66,13 @@ export function useGroupChallenges(
         ),
       );
       setError(undefined);
+      setInitiallyLoadedGroupId(groupId);
       return Promise.resolve();
     }
     if (!isCloudGroupId(groupId) || !supabase) {
       setChallenges([]);
       setError(undefined);
+      setInitiallyLoadedGroupId(groupId);
       return Promise.resolve();
     }
     if (requestRef.current) return requestRef.current;
@@ -83,7 +92,14 @@ export function useGroupChallenges(
       })
       .finally(() => {
         if (requestRef.current === request) requestRef.current = null;
-        if (groupIdRef.current === groupId) setLoading(false);
+        if (groupIdRef.current === groupId) {
+          setLoading(false);
+          // Keep first-load readiness separate from `loading`: on a cloud
+          // group switch React renders once before the new effect can set
+          // loading=true. Consumers must not mistake that frame for loaded
+          // data and briefly render the wrong first challenge/story.
+          setInitiallyLoadedGroupId(groupId);
+        }
         if (groupIdRef.current === groupId && trailingRefreshRef.current) {
           trailingRefreshRef.current = false;
           setTimeout(() => refreshRunnerRef.current(), 0);
@@ -207,6 +223,10 @@ export function useGroupChallenges(
         creatorId: state.currentUserId,
         metricId: input.metricId,
         title: input.title?.trim() || undefined,
+        visualIcon: input.visualIcon,
+        visualImageStoragePath:
+          input.visualImageStoragePath ?? undefined,
+        visualImageUri: input.visualImageUploadUri,
         target: input.target,
         localDate: input.localDate,
         endDate: input.endDate ?? input.localDate,
@@ -286,9 +306,13 @@ export function useGroupChallenges(
       await sendGroupChallengeAcceptedPush(
         saved,
         state.currentUserId,
+        state.groups
+          .flatMap((group) => group.members)
+          .find((member) => member.id === state.currentUserId)?.name ??
+          "A member",
       ).catch(() => undefined);
     return saved;
-  }, [state.currentUserId, tutorial.active]);
+  }, [state.currentUserId, state.groups, tutorial.active]);
 
   const remove = useCallback(async (id: string) => {
     const sourceId =
@@ -302,5 +326,14 @@ export function useGroupChallenges(
     );
   }, [tutorial.active]);
 
-  return { challenges, loading, error, refresh, save, respond, remove };
+  return {
+    challenges,
+    loading,
+    initialLoadComplete: initiallyLoadedGroupId === groupId,
+    error,
+    refresh,
+    save,
+    respond,
+    remove,
+  };
 }

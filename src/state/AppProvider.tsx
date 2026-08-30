@@ -21,7 +21,7 @@ import {
   View,
 } from "react-native";
 
-import { createInitialState } from "@/src/data/seed";
+import { createInitialState, DEFAULT_METRICS } from "@/src/data/seed";
 import { entriesForMetric } from "@/src/domain/dataIndex";
 import { accountOwnedCollections } from "@/src/domain/accountCollections";
 import {
@@ -97,6 +97,8 @@ import { upgradeStateV21 } from "@/src/domain/stateMigration";
 import { formulaIdentifiers } from "@/src/domain/formula";
 import {
   completedGymSets,
+  gymSessionDistanceKm,
+  gymSessionWorkoutSample,
   gymSessionVisibilityForMetric,
 } from "@/src/domain/gym";
 import {
@@ -141,6 +143,14 @@ import {
   writeGoogleHealthStepCheckpoint,
 } from "@/src/storage/googleHealthStepCheckpoint";
 import { notifyProgressMilestones } from "@/src/notifications/push";
+import {
+  manualWorkoutEntries,
+  type ManualWorkoutLog,
+} from "@/src/domain/manualWorkout";
+import {
+  inferStepCoverageActivityFromGymSession,
+  withStepCoverageActivityOverride,
+} from "@/src/domain/stepCoveragePreferences";
 import {
   ActivityTimer,
   AppState,
@@ -454,6 +464,11 @@ type Action =
       details?: EntryDetails;
       mode: "add" | "replace";
       manualDeviceEntryCapability?: LogManualStepsCapability;
+    }
+  | {
+      type: "logWorkout";
+      eventId: string;
+      workout: ManualWorkoutLog;
     }
   | {
       type: "deviceScreenTime";
@@ -1122,9 +1137,19 @@ function reducer(state: AppState, action: Action): AppState {
     }
     case "log": {
       const localDate = action.details?.localDate ?? dateKey();
-      const metric = state.metrics.find(
+      const savedMetric = state.metrics.find(
         (candidate) => candidate.id === action.metricId,
       );
+      const restoredBodyCompositionMetric =
+        !savedMetric &&
+        ["body_fat", "lean_body_mass", "body_water_mass", "bone_mass"].includes(
+          action.metricId,
+        )
+          ? DEFAULT_METRICS.find(
+              (candidate) => candidate.id === action.metricId,
+            )
+          : undefined;
+      const metric = savedMetric ?? restoredBodyCompositionMetric;
       // Device-owned rows remain reducer-protected even if a caller bypasses
       // the native UI or a malformed cloud definition flips manualEntry.
       // Only the provider-minted Log capability can replace daily Steps.
@@ -1214,6 +1239,24 @@ function reducer(state: AppState, action: Action): AppState {
       }));
       let nextState: AppState = {
         ...state,
+        metrics: restoredBodyCompositionMetric
+          ? [
+              ...state.metrics,
+              {
+                ...restoredBodyCompositionMetric,
+                // Body composition is logged through Weight. Restoring an old
+                // missing definition must not silently add a Today/Leaderboard
+                // tile or move any existing tracker.
+                sections: {
+                  ...restoredBodyCompositionMetric.sections,
+                  today: false,
+                  group: false,
+                },
+                order: state.metrics.length,
+                activeFrom: localDate,
+              },
+            ]
+          : state.metrics,
         settings: replacedEntryIds.length
           ? {
               ...state.settings,
@@ -1299,6 +1342,101 @@ function reducer(state: AppState, action: Action): AppState {
             createdAt: new Date().toISOString(),
           },
         ];
+      }
+      return localDate < dateKey()
+        ? finalizeEndOfDayGoals(nextState, localDate)
+        : nextState;
+    }
+    case "logWorkout": {
+      const localDate = action.workout.localDate;
+      const workoutMetric = state.metrics.find(
+        (metric) => metric.id === "workout",
+      );
+      if (!workoutMetric || workoutMetric.manualEntry === false) return state;
+      const entries = manualWorkoutEntries({
+        ...action.workout,
+        metricVisibilities: new Map(
+          state.metrics
+            .filter((metric) => metric.manualEntry !== false)
+            .map((metric) => [metric.id, metric.defaultVisibility]),
+        ),
+        eventId: action.eventId,
+        savedAt: new Date().toISOString(),
+        userId: state.currentUserId,
+      });
+      if (!entries.length) return state;
+      const stepCoveragePreferences =
+        action.workout.activityKey && action.workout.includeInStepCoverage
+          ? withStepCoverageActivityOverride(
+              state.settings.stepCoveragePreferences,
+              entries[0],
+              action.workout.activityKey,
+              "include",
+            )
+          : state.settings.stepCoveragePreferences;
+      let nextState = {
+        ...state,
+        entries: [...state.entries, ...entries],
+        ...(stepCoveragePreferences !== state.settings.stepCoveragePreferences
+          ? {
+              settings: {
+                ...state.settings,
+                stepCoveragePreferences,
+              },
+            }
+          : {}),
+      };
+      if (
+        goalCelebrationTiming(workoutMetric) === "immediate" &&
+        state.settings.autoMessages &&
+        state.settings.banterTone !== "off" &&
+        entries[0].visibility !== "private" &&
+        !goalReached(
+          workoutMetric,
+          safeMetricValue(
+            state,
+            workoutMetric,
+            state.currentUserId,
+            localDate,
+          ),
+          effectiveGoalTarget(
+            state,
+            workoutMetric,
+            state.currentUserId,
+            localDate,
+          ),
+        ) &&
+        goalReached(
+          workoutMetric,
+          safeMetricValue(
+            nextState,
+            workoutMetric,
+            state.currentUserId,
+            localDate,
+          ),
+          effectiveGoalTarget(
+            nextState,
+            workoutMetric,
+            state.currentUserId,
+            localDate,
+          ),
+        )
+      ) {
+        nextState = {
+          ...nextState,
+          messages: [
+            ...nextState.messages,
+            {
+              id: uniqueId("auto"),
+              groupId: state.group.id,
+              senderId: "system",
+              conversationId: `group:${state.group.id}`,
+              kind: "cheer",
+              text: `${randomMessage("cheer", state.settings.banterTone)} ${workoutMetric.name} goal reached!`,
+              createdAt: new Date().toISOString(),
+            },
+          ],
+        };
       }
       return localDate < dateKey()
         ? finalizeEndOfDayGoals(nextState, localDate)
@@ -2201,27 +2339,35 @@ function reducer(state: AppState, action: Action): AppState {
     case "saveGymSession": {
       const session = action.session;
       const completedSets = completedGymSets(session.exercises);
+      const storedSession = { ...session };
+      if (completedSets > 0) {
+        // Completed workout media is canonicalized onto exactly one linked
+        // MetricEntry. Do not retain a second device-local URI in GymSession.
+        delete storedSession.imageUri;
+        delete storedSession.imageStoragePath;
+      }
       const calorieValue = Math.max(0, Number(session.calories ?? 0));
+      const distanceValue = gymSessionDistanceKm(session);
       const workoutMetric = state.metrics.find((metric) => metric.id === "workout");
       const qualifiesAsWorkout = workoutQualifies(
-        {
-          activity: "strength",
-          durationMinutes: session.durationMinutes,
-          activeCalories: calorieValue,
-        },
+        gymSessionWorkoutSample(session),
         workoutMetric?.workoutQualification,
       );
-      const synced = (completedSets > 0 ? [
+      const inferredStepActivity =
+        inferStepCoverageActivityFromGymSession(session);
+      const syncedValues = (completedSets > 0 ? [
         ...(qualifiesAsWorkout ? [{ metricId: "workout", value: true }] : []),
         { metricId: "workout_duration", value: session.durationMinutes },
+        { metricId: "workout_distance", value: distanceValue },
         { metricId: "exercise", value: calorieValue },
       ] : [])
         .filter(
           (item) =>
             state.metrics.some((metric) => metric.id === item.metricId) &&
             (item.metricId === "workout" || Number(item.value) > 0),
-        )
-        .map((item): MetricEntry => ({
+        );
+      const synced = syncedValues
+        .map((item, index): MetricEntry => ({
           id: `gym-sync:${session.id}:${item.metricId}`,
           metricId: item.metricId,
           userId: state.currentUserId,
@@ -2235,7 +2381,14 @@ function reducer(state: AppState, action: Action): AppState {
           ),
           source: "manual",
           label: session.name,
+          stepCoverageActivityKey: inferredStepActivity?.key,
           note: `Workout session · ${completedSets} sets${session.notes ? ` · ${session.notes}` : ""}`,
+          ...(index === 0 && (session.imageUri || session.imageStoragePath)
+            ? {
+                imageUri: session.imageUri,
+                imageStoragePath: session.imageStoragePath,
+              }
+            : {}),
         }));
       const existingSyncedIds = state.entries
         .filter(
@@ -2266,7 +2419,7 @@ function reducer(state: AppState, action: Action): AppState {
           ),
         },
         gymSessions: [
-          session,
+          storedSession,
           ...(state.gymSessions ?? []).filter((item) => item.id !== session.id),
         ],
         entries: [
@@ -3170,6 +3323,7 @@ type AppContextValue = {
     details?: EntryDetails,
     request?: LogMetricRequest,
   ) => void;
+  logWorkout: (workout: ManualWorkoutLog) => void;
   setDeviceScreenTime: (
     localDate: string,
     minutes: number,
@@ -3728,6 +3882,14 @@ export function AppProvider({
               badgeShowcaseByGroup: {
                 ...defaults.settings.badgeShowcaseByGroup,
                 ...restored.settings?.badgeShowcaseByGroup,
+              },
+              badgePinnedByGroup: {
+                ...defaults.settings.badgePinnedByGroup,
+                ...restored.settings?.badgePinnedByGroup,
+              },
+              badgePinnedLimitByGroup: {
+                ...defaults.settings.badgePinnedLimitByGroup,
+                ...restored.settings?.badgePinnedLimitByGroup,
               },
               notifications: {
                 ...defaults.settings.notifications,
@@ -4438,6 +4600,27 @@ export function AppProvider({
               previous,
               next,
               details?.localDate ?? dateKey(),
+            );
+          })
+          .catch(() => undefined);
+      },
+      logWorkout: (workout) => {
+        const previous = persistenceStateRef.current;
+        const next = withLocalDeletionTombstones(
+          previous,
+          reducer(previous, {
+            type: "logWorkout",
+            eventId: uniqueId("workout"),
+            workout,
+          }),
+        );
+        void commitReducedState(next)
+          .then(() => {
+            if (ephemeral) return;
+            return notifyProgressMilestones(
+              previous,
+              next,
+              workout.localDate,
             );
           })
           .catch(() => undefined);

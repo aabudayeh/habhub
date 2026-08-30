@@ -1,5 +1,6 @@
 import { dateWithOffsetFrom } from "@/src/domain/date";
 import {
+  catalogExerciseTrackingFields,
   catalogExercise,
   exerciseKey,
   MUSCLE_LABELS,
@@ -16,10 +17,100 @@ import {
   MuscleGroup,
   Visibility,
   WorkoutQualification,
+  WorkoutExerciseTrackingField,
   WorkoutExerciseTrackingMode,
 } from "@/src/types";
 import { gymSessionsForDay } from "@/src/domain/dataIndex";
-import { workoutQualifies } from "@/src/domain/workoutQualification";
+import {
+  workoutActivityFamily,
+  workoutQualifies,
+} from "@/src/domain/workoutQualification";
+
+const WORKOUT_TRACKING_FIELD_ORDER: WorkoutExerciseTrackingField[] = [
+  "duration",
+  "reps",
+  "weight",
+  "distance",
+];
+
+/** Resolve new multi-field exercises while keeping every legacy log readable. */
+export function gymExerciseTrackingFields(
+  exercise: Pick<
+    GymExercise,
+    "exerciseKey" | "trackingFields" | "trackingMode"
+  >,
+): WorkoutExerciseTrackingField[] {
+  const catalog = catalogExercise(exercise.exerciseKey);
+  const fields = exercise.trackingFields?.length
+    ? exercise.trackingFields
+    : catalog
+      ? catalogExerciseTrackingFields(catalog)
+      : exercise.trackingMode === "duration"
+        ? ["duration" as const]
+        : exercise.trackingMode === "reps"
+          ? ["reps" as const]
+          : (["weight", "reps"] as const);
+  const selected = new Set(fields);
+  const normalized = WORKOUT_TRACKING_FIELD_ORDER.filter((field) =>
+    selected.has(field),
+  );
+  if (normalized.length) return normalized;
+  if (exercise.trackingMode === "duration") return ["duration"];
+  if (exercise.trackingMode === "reps") return ["reps"];
+  return ["weight", "reps"];
+}
+
+/** Legacy mode retained for history/scoring code that expects one primary axis. */
+export function workoutTrackingModeForFields(
+  fields: readonly WorkoutExerciseTrackingField[],
+): WorkoutExerciseTrackingMode {
+  if (fields.includes("weight")) return "load_reps";
+  if (fields.includes("reps")) return "reps";
+  return "duration";
+}
+
+export function completedGymDistanceKm(exercises: GymExercise[]) {
+  const total = expandedGymExercises(exercises).reduce(
+    (total, exercise) =>
+      total +
+      exercise.sets.reduce(
+        (sets, set) =>
+          sets + (set.completed ? Math.max(0, set.distanceKm ?? 0) : 0),
+        0,
+      ),
+    0,
+  );
+  return Math.round(total * 1000) / 1000;
+}
+
+export function gymSessionDistanceKm(session: GymSession) {
+  const completedDistance = completedGymDistanceKm(session.exercises);
+  return completedDistance > 0
+    ? completedDistance
+    : Math.max(0, session.distanceKm ?? 0);
+}
+
+/** Inputs used by Workout completion rules for both foreground/background saves. */
+export function gymSessionWorkoutSample(session: GymSession) {
+  const activityFamilies = new Set(
+    session.exercises
+      .filter((exercise) => exercise.sets.some((set) => set.completed))
+      .map((exercise) => workoutActivityFamily(exerciseIdentity(exercise))),
+  );
+  const activity =
+    activityFamilies.size === 1
+      ? [...activityFamilies][0]
+      : activityFamilies.size > 0 &&
+          [...activityFamilies].every((family) => family === "strength")
+        ? "strength"
+        : "other";
+  return {
+    activity,
+    durationMinutes: Math.max(0, session.durationMinutes),
+    distanceKm: gymSessionDistanceKm(session),
+    activeCalories: Math.max(0, session.calories ?? 0),
+  };
+}
 
 export function completedGymSets(exercises: GymExercise[]) {
   return exercises.reduce(
@@ -80,11 +171,7 @@ export function gymMetricValue(
       return gymSessionMetricValue(session, mapping);
     if (completedGymSets(session.exercises) <= 0) return 0;
     return workoutQualifies(
-      {
-        activity: "strength",
-        durationMinutes: session.durationMinutes,
-        activeCalories: session.calories,
-      },
+      gymSessionWorkoutSample(session),
       workoutQualification,
     )
       ? 1
@@ -794,11 +881,29 @@ function estimateSessionMetCalories(
     .map((exercise) => ({
       met: exercise.customMet ?? METS[intensity],
       sets: exercise.sets.filter((set) => set.completed).length,
+      workSeconds: exercise.sets.reduce(
+        (total, set) =>
+          total +
+          (set.completed
+            ? Math.max(
+                0,
+                set.workSeconds ??
+                  Math.min(60, Math.max(12, Math.max(0, set.reps) * 3)),
+              )
+            : 0),
+        0,
+      ),
     }))
     .filter((item) => item.sets > 0);
-  const totalSets = completed.reduce((sum, item) => sum + item.sets, 0);
-  const catalogMet = totalSets
-    ? completed.reduce((sum, item) => sum + item.met * item.sets, 0) / totalSets
+  const totalWorkSeconds = completed.reduce(
+    (sum, item) => sum + item.workSeconds,
+    0,
+  );
+  const catalogMet = totalWorkSeconds
+    ? completed.reduce(
+        (sum, item) => sum + item.met * item.workSeconds,
+        0,
+      ) / totalWorkSeconds
     : METS[intensity];
   const met = intensityAdjustedMet(catalogMet, intensity);
   // This mode deliberately remains the plain, reproducible Compendium

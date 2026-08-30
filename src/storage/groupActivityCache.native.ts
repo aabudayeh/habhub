@@ -24,6 +24,13 @@ type CacheAuditRow = CacheRow & {
 };
 
 let databasePromise: Promise<SQLite.SQLiteDatabase> | undefined;
+let mutationQueue: Promise<void> = Promise.resolve();
+
+function enqueueMutation(task: () => Promise<void>) {
+  const next = mutationQueue.then(task, task);
+  mutationQueue = next.catch(() => undefined);
+  return next;
+}
 
 async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
   if (!databasePromise) {
@@ -98,46 +105,49 @@ export async function writeGroupActivityCache(
     throw new Error("A group ID is required to cache activity.");
   }
 
-  const database = await getDatabase();
-  const stored = createStoredGroupActivityCache({
-    ...payload,
-    groupId: normalizedGroupId,
-  });
-  const serialized = JSON.stringify(stored);
-  const maxGroups = normalizeMaxGroups(options?.maxGroups);
+  return enqueueMutation(async () => {
+    const database = await getDatabase();
+    const stored = createStoredGroupActivityCache({
+      ...payload,
+      groupId: normalizedGroupId,
+    });
+    const serialized = JSON.stringify(stored);
+    const maxGroups = normalizeMaxGroups(options?.maxGroups);
 
-  await database.withExclusiveTransactionAsync(async (transaction) => {
-    await transaction.runAsync(
-      `INSERT INTO group_activity_cache (
-         group_id, schema_version, remote_version, updated_at, payload
-       ) VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT(group_id) DO UPDATE SET
-         schema_version = excluded.schema_version,
-         remote_version = excluded.remote_version,
-         updated_at = excluded.updated_at,
-         payload = excluded.payload`,
-      normalizedGroupId,
-      stored.schemaVersion,
-      stored.payload.version ?? null,
-      stored.writtenAt,
-      serialized,
-    );
-    await transaction.runAsync(
-      `DELETE FROM group_activity_cache
-       WHERE group_id NOT IN (
-         SELECT group_id
-         FROM group_activity_cache
-         ORDER BY updated_at DESC
-         LIMIT ?
-       )`,
-      maxGroups,
-    );
+    await database.withExclusiveTransactionAsync(async (transaction) => {
+      await transaction.runAsync(
+        `INSERT INTO group_activity_cache (
+           group_id, schema_version, remote_version, updated_at, payload
+         ) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(group_id) DO UPDATE SET
+           schema_version = excluded.schema_version,
+           remote_version = excluded.remote_version,
+           updated_at = excluded.updated_at,
+           payload = excluded.payload`,
+        normalizedGroupId,
+        stored.schemaVersion,
+        stored.payload.version ?? null,
+        stored.writtenAt,
+        serialized,
+      );
+      await transaction.runAsync(
+        `DELETE FROM group_activity_cache
+         WHERE group_id NOT IN (
+           SELECT group_id
+           FROM group_activity_cache
+           ORDER BY updated_at DESC
+           LIMIT ?
+         )`,
+        maxGroups,
+      );
+    });
   });
 }
 
 export async function purgeLegacyGroupActivityCaches(): Promise<void> {
-  const database = await getDatabase();
-  await database.withExclusiveTransactionAsync(async (transaction) => {
+  return enqueueMutation(async () => {
+    const database = await getDatabase();
+    await database.withExclusiveTransactionAsync(async (transaction) => {
     await transaction.runAsync(
       "DELETE FROM group_activity_cache WHERE schema_version <> ?",
       GROUP_ACTIVITY_CACHE_SCHEMA_VERSION,
@@ -167,6 +177,7 @@ export async function purgeLegacyGroupActivityCaches(): Promise<void> {
         row.group_id,
       );
     }
+    });
   });
 }
 
@@ -174,41 +185,52 @@ export async function removeGroupActivityCache(groupId: string): Promise<void> {
   const normalizedGroupId = normalizeGroupId(groupId);
   if (!normalizedGroupId) return;
 
-  const database = await getDatabase();
-  await database.runAsync(
-    "DELETE FROM group_activity_cache WHERE group_id = ?",
-    normalizedGroupId,
-  );
+  return enqueueMutation(async () => {
+    const database = await getDatabase();
+    await database.runAsync(
+      "DELETE FROM group_activity_cache WHERE group_id = ?",
+      normalizedGroupId,
+    );
+  });
+}
+
+export async function clearGroupActivityCaches(): Promise<void> {
+  return enqueueMutation(async () => {
+    const database = await getDatabase();
+    await database.runAsync("DELETE FROM group_activity_cache");
+  });
 }
 
 export async function pruneGroupActivityCaches(
   options?: GroupActivityCachePruneOptions,
 ): Promise<void> {
-  const database = await getDatabase();
-  const maxGroups = normalizeMaxGroups(options?.maxGroups);
-  const keepGroupIds = Array.from(
-    new Set(
-      (options?.keepGroupIds ?? []).map(normalizeGroupId).filter(Boolean),
-    ),
-  );
-
-  await database.withExclusiveTransactionAsync(async (transaction) => {
-    const placeholders = keepGroupIds.map(() => "?").join(", ");
-    const keepClause =
-      keepGroupIds.length > 0
-        ? `AND group_id NOT IN (${placeholders})`
-        : "";
-    await transaction.runAsync(
-      `DELETE FROM group_activity_cache
-       WHERE group_id NOT IN (
-         SELECT group_id
-         FROM group_activity_cache
-         ORDER BY updated_at DESC
-         LIMIT ?
-       )
-       ${keepClause}`,
-      maxGroups,
-      ...keepGroupIds,
+  return enqueueMutation(async () => {
+    const database = await getDatabase();
+    const maxGroups = normalizeMaxGroups(options?.maxGroups);
+    const keepGroupIds = Array.from(
+      new Set(
+        (options?.keepGroupIds ?? []).map(normalizeGroupId).filter(Boolean),
+      ),
     );
+
+    await database.withExclusiveTransactionAsync(async (transaction) => {
+      const placeholders = keepGroupIds.map(() => "?").join(", ");
+      const keepClause =
+        keepGroupIds.length > 0
+          ? `AND group_id NOT IN (${placeholders})`
+          : "";
+      await transaction.runAsync(
+        `DELETE FROM group_activity_cache
+         WHERE group_id NOT IN (
+           SELECT group_id
+           FROM group_activity_cache
+           ORDER BY updated_at DESC
+           LIMIT ?
+         )
+         ${keepClause}`,
+        maxGroups,
+        ...keepGroupIds,
+      );
+    });
   });
 }

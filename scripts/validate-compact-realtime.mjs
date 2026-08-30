@@ -18,6 +18,9 @@ function sourceFiles(directory) {
 const migration = read(
   "supabase/migrations/202608250001_compact_group_realtime.sql",
 );
+const finalCutoverMigration = read(
+  "supabase/migrations/202608270006_finish_compact_realtime.sql",
+);
 const provider = read("src/cloud/CloudSyncProvider.tsx");
 const challenges = read("src/cloud/useGroupChallenges.ts");
 const notifications = read("src/cloud/useGroupNotificationEvents.ts");
@@ -57,6 +60,24 @@ for (const table of [
 ])
   assert.match(migration, new RegExp(`'${table}'`));
 assert.match(migration, /alter publication supabase_realtime drop table/);
+for (const table of ["groups", "profiles"])
+  assert.match(
+    finalCutoverMigration,
+    new RegExp(`'${table}'`),
+    `${table} must be removed from the legacy Postgres Changes publication`,
+  );
+assert.match(
+  finalCutoverMigration,
+  /alter publication supabase_realtime drop table public\.%I/i,
+);
+assert.match(finalCutoverMigration, /'todos'/);
+assert.match(finalCutoverMigration, /'todos_updated'/);
+assert.match(finalCutoverMigration, /broadcast_group_todo_change/);
+assert.doesNotMatch(
+  finalCutoverMigration,
+  /jsonb_build_object\([^)]*(?:title|description|due_at|recurrence|completed_at)/i,
+  "to-do Broadcast invalidations must not carry private task values",
+);
 assert.match(migration, /membership\.status = 'active'/);
 assert.doesNotMatch(
   migration,

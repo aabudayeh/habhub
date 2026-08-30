@@ -483,8 +483,13 @@ assert.match(
 );
 assert.match(
   pluginSource,
-  /val narrowCompact = size\.compact && size\.widthDp < 165f[\s\S]*fittedTextPaint\([\s\S]{0,100}eyebrowWidth,[\s\S]{0,80}if \(narrowCompact\) 4\.9f else 5\.1f,[\s\S]{0,60}if \(narrowCompact\) 3\.9f else 4\.1f/,
-  "The minimum 2x1 Featured header must fit TODAY'S FOCUS without truncating its last letters",
+  /val twoByOneFeatured = size\.compact && size\.widthDp < 165f[\s\S]*fittedTextPaint\([\s\S]{0,100}eyebrowWidth,[\s\S]{0,80}if \(twoByOneFeatured\) 4\.35f else 5\.1f,[\s\S]{0,60}if \(twoByOneFeatured\) 3\.5f else 4\.1f/,
+  "Only the minimum 2x1 Featured header must use the smaller TODAY'S FOCUS typography",
+);
+assert.match(
+  pluginSource,
+  /else if \(twoByOneFeatured\) \{[\s\S]{0,30}1\.2f/,
+  "Only the 2x1 Featured header must move slightly left",
 );
 assert.match(pluginSource, /item\.optString\("compactSubtitle", item\.optString\("subtitle"\)\)/);
 assert.match(
@@ -538,6 +543,34 @@ assert.equal(
 assert.ok(
   featuredEyebrowWidth > 48,
   "The compact date must leave enough width to show TODAY'S FOCUS in full",
+);
+const featured2x1GoalAreaWidth = featured2x1Width - 12 - 35;
+const featured2x1SevenTileSize = Math.min(
+  10.5,
+  (featured2x1GoalAreaWidth - 3 * (7 - 1)) / 7,
+);
+assert.ok(
+  featured2x1SevenTileSize >= 6,
+  "The minimum 2x1 Featured widget must fit a seventh tracker square above the visibility floor",
+);
+const compactGoalRenderer = pluginSource.slice(
+  pluginSource.indexOf("private fun drawCompactGoalTiles"),
+  pluginSource.indexOf("private fun drawProgressBadge"),
+);
+assert.match(
+  compactGoalRenderer,
+  /twoByOneFeatured -> 7[\s\S]*while \(twoByOneFeatured && count > 5 && tileSize < 6f\)/,
+  "The 2x1 Featured widget must allow seven squares and fall back safely on unusually narrow launchers",
+);
+assert.match(
+  pluginSource,
+  /val progress = if \([\s\S]{0,180}\(rawProgress \* 100f\)\.roundToInt\(\) == 0[\s\S]{0,30}\) 0f else rawProgress/,
+  "Featured widget visuals must be completely neutral while the visible percentage is 0%",
+);
+assert.match(
+  pluginSource,
+  /val goalProgress = if \(\(rawGoalProgress \* 100f\)\.roundToInt\(\) == 0\) 0f else rawGoalProgress/,
+  "Featured widget goal squares must not retain a lime sliver at visible 0%",
 );
 assert.equal(
   featured2x1Width - featured2x1Pad * 2,

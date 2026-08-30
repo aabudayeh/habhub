@@ -320,6 +320,8 @@ export type Member = {
 
 export type MetricEntry = {
   id: string;
+  /** Server-owned relational identity for reactions to an RLS-authorized shared log. */
+  cloudId?: string;
   metricId: string;
   userId: string;
   value: number | boolean | string;
@@ -341,6 +343,16 @@ export type MetricEntry = {
   sourceRecordId?: string;
   sourceOrigin?: string;
   sourceUpdatedAt?: string;
+  /** Provider-reported steps inside one workout; used only to avoid estimating that workout twice. */
+  sourceWorkoutSteps?: number;
+  /**
+   * Private activity classification used when a linked workout's display label
+   * is generic (for example, a saved gym session named "Workout"). This keeps
+   * Step coverage consistent across the session's Workout, duration, distance,
+   * Active energy, and Total energy projections without changing the label the
+   * user chose for the workout.
+   */
+  stepCoverageActivityKey?: string;
   /** Account snapshot revision that published this shared cloud projection. */
   sourceRevision?: number;
 };
@@ -548,6 +560,18 @@ export type TodoReminder = {
  * A dated group competition. Direct table history remains participant-scoped;
  * active group members may discover non-finished rows through a bounded RPC.
  */
+export type ChallengeVisualIcon =
+  | "trophy-outline"
+  | "flag-outline"
+  | "ribbon-outline"
+  | "star-outline"
+  | "flame-outline"
+  | "flash-outline"
+  | "walk-outline"
+  | "fitness-outline"
+  | "bicycle-outline"
+  | "nutrition-outline";
+
 export type GroupChallenge = {
   id: string;
   /** The persisted series row when `id` identifies a generated occurrence. */
@@ -556,6 +580,12 @@ export type GroupChallenge = {
   creatorId: string;
   metricId: string;
   title?: string;
+  /** Optional creator-selected fallback when no challenge image is present. */
+  visualIcon?: ChallengeVisualIcon;
+  /** Stable private-bucket path; clients render only a short-lived signed URL. */
+  visualImageStoragePath?: string;
+  /** Ephemeral display URL. Never persist this signed URL in account state. */
+  visualImageUri?: string;
   /** Group challenges stay member-scoped; public challenges are discoverable
    * by any signed-in HabHub account and joining is the sharing consent. */
   audience?: "group" | "public";
@@ -619,7 +649,7 @@ export type GroupNotificationEvent = {
   /** Optional privacy-authorized social target for likes/reactions. */
   targetType?: "metric_entry" | "photo_update";
   targetId?: string;
-  reaction?: "heart" | "thumbs_up" | "thumbs_down";
+  reaction?: "heart" | "thumbs_up" | "thumbs_down" | "cheer";
   createdAt: string;
   readAt?: string;
 };
@@ -760,7 +790,37 @@ export type MuscleGroup =
 export type GymIntensity = "light" | "moderate" | "vigorous";
 export type GymCalorieCalculationMode = "session_met" | "set_aware";
 export type GymTimerMode = "guided" | "whole_workout";
+export type ExerciseCategory =
+  | "strength"
+  | "cardio"
+  | "conditioning"
+  | "mobility"
+  | "mind_body"
+  | "team_sport"
+  | "racket_sport"
+  | "combat"
+  | "outdoor"
+  | "water"
+  | "winter"
+  | "multisport"
+  | "other";
 export type WorkoutExerciseTrackingMode = "load_reps" | "reps" | "duration";
+export type WorkoutExerciseTrackingField =
+  | "duration"
+  | "reps"
+  | "weight"
+  | "distance";
+/** Account-owned exercise definition used to keep custom picker filtering stable. */
+export type CustomGymExerciseDefinition = {
+  key: string;
+  name: string;
+  category: ExerciseCategory;
+  muscles: MuscleGroup[];
+  trackingMode: WorkoutExerciseTrackingMode;
+  trackingFields: WorkoutExerciseTrackingField[];
+  supportsDistance?: boolean;
+  met: number;
+};
 export type GymExerciseGoal = {
   targetOneRepMaxKg?: number;
   targetWeightKg?: number;
@@ -773,6 +833,8 @@ export type GymSet = {
   completed: boolean;
   /** Active time from starting to finishing this set. */
   workSeconds?: number;
+  /** Distance covered during this set, stored in kilometres. */
+  distanceKm?: number;
   /** Rest taken after this set. Optional for older saved sessions. */
   restSeconds?: number;
   restTargetSeconds?: number;
@@ -796,11 +858,18 @@ export type GymExercise = {
   exerciseKey?: string;
   name: string;
   muscleGroups?: MuscleGroup[];
+  /** Persisted for custom exercises that do not exist in the built-in catalog. */
+  exerciseCategory?: ExerciseCategory;
   sets: GymSet[];
   notes?: string;
   customMet?: number;
   /** Controls which set fields are meaningful for this exercise. */
   trackingMode?: WorkoutExerciseTrackingMode;
+  /**
+   * Multi-field replacement for the legacy single tracking mode. Older
+   * sessions keep resolving from `trackingMode` when this is absent.
+   */
+  trackingFields?: WorkoutExerciseTrackingField[];
   /** Exercise-level completion and rest between exercises. */
   completed?: boolean;
   restAfterSeconds?: number;
@@ -811,13 +880,17 @@ export type GymPlanExercise = {
   exerciseKey?: string;
   name: string;
   muscleGroups?: MuscleGroup[];
+  /** Keeps custom exercise filtering intact when a template is reopened/shared. */
+  exerciseCategory?: ExerciseCategory;
   targetSets: number;
   targetReps: number;
   targetDurationMinutes?: number;
+  targetDistanceKm?: number;
   startingWeightKg?: number;
   notes?: string;
   customMet?: number;
   trackingMode?: WorkoutExerciseTrackingMode;
+  trackingFields?: WorkoutExerciseTrackingField[];
   supersets?: {
     setIndex: number;
     superset: GymSuperset;
@@ -845,6 +918,8 @@ export type GymSession = {
   /** Seconds removed from every guided set for phone-placement time. */
   setStartDelaySeconds?: number;
   durationMinutes: number;
+  /** Sum of completed exercise-set distances in this saved session. */
+  distanceKm?: number;
   calories?: number;
   /** How estimated active calories were calculated for this saved workout. */
   calorieCalculationMode?: GymCalorieCalculationMode;
@@ -852,6 +927,13 @@ export type GymSession = {
   caloriesManual?: boolean;
   intensity?: GymIntensity;
   notes?: string;
+  /**
+   * Optional editor/background-Finish photo transport. Completed sessions
+   * canonicalize this media onto one linked gym-sync MetricEntry so uploads,
+   * sharing, and signed-URL hydration use the existing entry media pipeline.
+   */
+  imageUri?: string;
+  imageStoragePath?: string;
   exercises: GymExercise[];
   visibility: Visibility;
 };
@@ -898,6 +980,34 @@ export type LiveStepSource =
   | "physical_activity";
 
 export type LiveStepCombination = "highest" | "priority" | "sum";
+
+export type StepCoverageChoice = "include" | "exclude";
+
+/**
+ * One private, account-owned decision for a linked workout source. The map key
+ * is produced by the pure step-coverage identity helper; it is never published
+ * with group-visible entries or metric configuration.
+ */
+export type StepCoverageSessionPreference = {
+  choice: StepCoverageChoice;
+  /** User-selected activity when the source/session label is absent or generic. */
+  activityKey?: string;
+  updatedAt: string;
+};
+
+/** Apply one activity choice from a local date onward; 0000-01-01 means all history. */
+export type StepCoverageActivityPreference = {
+  choice: StepCoverageChoice;
+  effectiveFrom: string;
+  updatedAt: string;
+};
+
+/** Durable, syncable controls for deciding which workouts explain Step totals. */
+export type StepCoveragePreferences = {
+  version: 1;
+  sessions: Record<string, StepCoverageSessionPreference>;
+  activityRules: Record<string, StepCoverageActivityPreference>;
+};
 
 export type EnergyProfile = {
   age: number;
@@ -969,6 +1079,8 @@ export type UserSettings = {
   energyProfile: EnergyProfile;
   syncMode: SyncMode;
   healthSync: HealthSyncSettings;
+  /** Private account rules for workout-to-Step coverage; never group-published. */
+  stepCoveragePreferences?: StepCoveragePreferences;
   /** Explicit repair window; routine sync always uses a small overlap. */
   healthHistoryDays?: 30 | 90 | 365 | 730;
   banterTone: BanterTone;
@@ -1081,6 +1193,8 @@ export type UserSettings = {
   gymTimerMode?: GymTimerMode;
   /** Personal disclosure state for the saved-workout list on Workout. */
   gymLoggedTodayCollapsed?: boolean;
+  /** Reusable personal custom exercises and their picker classifications. */
+  customGymExercises?: CustomGymExerciseDefinition[];
   /** One-time repair marker for builds that temporarily retired Workout calories. */
   workoutCaloriesRestored?: boolean;
   showCalendar?: boolean;
@@ -1141,6 +1255,10 @@ export type UserSettings = {
   memberNicknamesByGroup: Record<string, Record<string, string>>;
   /** Up to five badge ids the current user chose to feature in each group. */
   badgeShowcaseByGroup: Record<string, string[]>;
+  /** Badge ids personally pinned to the badge-cabinet summary. */
+  badgePinnedByGroup: Record<string, string[]>;
+  /** Personal pinned-cabinet capacity per group; defaults to three, max nine. */
+  badgePinnedLimitByGroup: Record<string, number>;
   /** Group recap date controls begin collapsed and remember later disclosure. */
   recapDateNavigatorCollapsed?: boolean;
   progressMetricIds: string[];
@@ -1201,6 +1319,8 @@ export type UserSettings = {
 export type NotificationSettings = {
   pushEnabled: boolean;
   groupMetricActivity: boolean;
+  /** Likes, hearts, cheers, and other reactions to the user's shared items. */
+  socialReactions?: boolean;
   leadChanges: boolean;
   metricIds: string[];
   chatMessages: boolean;
@@ -1220,6 +1340,8 @@ export type NotificationSettings = {
   mutedConversationIds?: string[];
   /** Private read cursors used for lightweight unread chat indicators. */
   chatReadAtByConversation?: Record<string, string>;
+  /** Private read cursors for app-owned Today/Leaderboard activity cards. */
+  activityReadAtByCategory?: Record<string, string>;
   missedGoalNudges?: boolean;
   streakAlerts?: boolean;
   /** Private on-device estimates derived from the user's own period-start history. */
@@ -1239,6 +1361,8 @@ export type GroupNotificationPreferences = {
   enabled?: boolean;
   /** Fresh shared tracker logs. */
   trackerUpdates?: boolean;
+  /** Reactions to the current user's shared logs and feed items. */
+  socialReactions?: boolean;
   /** Legacy pre-release field retained while older local snapshots migrate. */
   progressUpdates?: boolean;
   /** Explicit overtakes and first-place changes. */

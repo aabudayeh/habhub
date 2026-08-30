@@ -75,6 +75,7 @@ import {
 } from "@/src/domain/googleHealthLocalPrivacy";
 import { cloudAccountEnergyProjection } from "@/src/domain/energy";
 import { suggestedAccountName } from "@/src/domain/profileName";
+import { chatSharePreview } from "@/src/domain/social";
 import {
   createPersonalSetupGroup,
   DEFAULT_GROUP_THEME,
@@ -102,11 +103,13 @@ import {
 import { AppStateStorageReadError } from "@/src/storage/appStateStorage";
 import { deleteGoogleHealthStepCheckpoint } from "@/src/storage/googleHealthStepCheckpoint";
 import {
+  deleteGoogleHealthGroupCheckpointsForAccount,
   deleteGoogleHealthGroupCheckpoint,
   readGoogleHealthGroupCheckpoint,
   writeGoogleHealthGroupCheckpoint,
 } from "@/src/storage/googleHealthGroupCheckpoint";
 import {
+  clearGroupActivityCaches,
   purgeLegacyGroupActivityCaches,
   readGroupActivityCache,
   removeGroupActivityCache,
@@ -123,6 +126,7 @@ import {
   ChatMessage,
   Group,
   GroupCreationOptions,
+  GymSession,
   Member,
   MetricEntry,
   PhotoUpdate,
@@ -146,6 +150,7 @@ import {
 } from "@/src/domain/cloudHash";
 import { networkReachability } from "@/src/domain/network";
 import { accountOwnedCollections } from "@/src/domain/accountCollections";
+import { mergeStepCoveragePreferences } from "@/src/domain/stepCoveragePreferences";
 import { cloudSourceTimestampIsNewer } from "@/src/domain/cloudMaintenance";
 import {
   canBootstrapCloudSnapshotCursor,
@@ -832,6 +837,14 @@ function isUploadableLocalUri(uri: string | null) {
   return Boolean(uri && /^(file:|content:|ph:|blob:|data:)/i.test(uri));
 }
 
+function isUploadableSharedAttachmentUri(message: ChatMessage) {
+  return Boolean(
+    message.imageUri &&
+      /^https:\/\//i.test(message.imageUri) &&
+      chatSharePreview(message.text).hasAttachment,
+  );
+}
+
 function safePart(value: string) {
   return value.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 100);
 }
@@ -937,7 +950,8 @@ async function uploadOwnedMedia(state: AppState): Promise<AppState> {
     if (
       message.senderId === userId &&
       !message.imageStoragePath &&
-      isUploadableLocalUri(message.imageUri ?? null)
+      (isUploadableLocalUri(message.imageUri ?? null) ||
+        isUploadableSharedAttachmentUri(message))
     ) {
       const path = await uploadMedia(
         userId,
@@ -968,6 +982,65 @@ async function uploadOwnedMedia(state: AppState): Promise<AppState> {
 }
 
 const snapshotPayloadCache = new WeakMap<AppState, AppState>();
+
+function gymSessionWithoutDeviceImage(session: GymSession) {
+  if (!session.imageUri && !session.imageStoragePath) return session;
+  const durable = { ...session };
+  // The matching gym-sync MetricEntry is the sole cloud media record. A
+  // planned workout can keep a local preview, but never upload its file URI in
+  // the private account JSON before it becomes a completed log.
+  delete durable.imageUri;
+  delete durable.imageStoragePath;
+  return durable;
+}
+
+/**
+ * Upload only Chat media needed by the lightweight outbox. Shared feed/log
+ * images can begin as short-lived signed URLs, so their durable storage path
+ * must exist before the message row is acknowledged and removed from the
+ * outbox. Keeping this targeted avoids putting entries/photos in Chat's
+ * latency-sensitive send path.
+ */
+async function uploadOwnedChatMessageMedia(
+  state: AppState,
+  messageId?: string,
+): Promise<AppState> {
+  const userId = state.currentUserId;
+  const candidateIds = new Set(
+    state.messages
+      .filter(
+        (message) =>
+          message.senderId === userId &&
+          (message.groupId
+            ? message.groupId === state.group.id
+            : message.conversationId === `group:${state.group.id}`) &&
+          (!messageId || message.id === messageId) &&
+          !message.imageStoragePath &&
+          (isUploadableLocalUri(message.imageUri ?? null) ||
+            isUploadableSharedAttachmentUri(message)),
+      )
+      .slice(-CHAT_OUTBOX_RECOVERY_LIMIT)
+      .map((message) => message.id),
+  );
+  if (!candidateIds.size) return state;
+  let changed = false;
+  const messages: ChatMessage[] = [];
+  for (const message of state.messages) {
+    if (!candidateIds.has(message.id)) {
+      messages.push(message);
+      continue;
+    }
+    const path = await uploadMedia(
+      userId,
+      "chat",
+      message.id,
+      message.imageUri!,
+    );
+    messages.push({ ...message, imageStoragePath: path });
+    changed = true;
+  }
+  return changed ? { ...state, messages } : state;
+}
 
 /** Never persist temporary signed URLs; only stable private-bucket paths. */
 function snapshotPayload(state: AppState): AppState {
@@ -1056,6 +1129,9 @@ function snapshotPayload(state: AppState): AppState {
     // account sync independent of a busy group chat.
     messages: owned.messages.map((message) =>
       message.imageStoragePath ? { ...message, imageUri: undefined } : message,
+    ),
+    gymSessions: (state.gymSessions ?? []).map(
+      gymSessionWithoutDeviceImage,
     ),
     dailyMetricStatuses: owned.dailyMetricStatuses,
     lastSavedAt: null,
@@ -1236,9 +1312,10 @@ const stableHashCache = new WeakMap<AppState, string>();
 const workspaceHashCache = new WeakMap<AppState, string>();
 const accountMetadataHashCache = new WeakMap<AppState, string>();
 // Bump when the relational group projection needs a one-time rebuild even if
-// the underlying account data did not change. Version 2 backfills item-level
-// meal/workout rows for accounts whose older client published only daily totals.
-const SHARED_ENTRY_DETAIL_PROJECTION_VERSION = 2;
+// the underlying account data did not change. Version 2 backfilled item-level
+// meal/workout rows; version 3 republishes still-shared detail rows whose old
+// account revision was invalidated by a later privacy cache fence.
+const SHARED_ENTRY_DETAIL_PROJECTION_VERSION = 3;
 
 function stableHash(state: AppState) {
   const cached = stableHashCache.get(state);
@@ -1345,21 +1422,27 @@ function accountMetadataHash(state: AppState) {
 function workspaceHash(state: AppState) {
   const cached = workspaceHashCache.get(state);
   if (cached) return cached;
-  const payload = snapshotPayload(state);
+  const owned = accountOwnedCollections(state);
   const hash = stableValueHash({
     sharedEntryDetailProjectionVersion:
       SHARED_ENTRY_DETAIL_PROJECTION_VERSION,
-    currentUserId: payload.currentUserId,
-    groupId: payload.group.id,
+    currentUserId: state.currentUserId,
+    groupId: state.group.id,
     // Profile and energy data use their own small global projection. Keeping
     // them out of this hash prevents a rename from uploading a year of group
     // activity or reopening the outbox once for every joined group.
-    aliases: payload.settings.memberNicknamesByGroup[payload.group.id] ?? {},
-    entries: orderedValueHash(payload.entries),
-    photos: orderedValueHash(payload.photos),
+    aliases:
+      state.settings.memberNicknamesByGroup[state.group.id] ?? {},
+    // Realtime/group hydration appends peers' authorized history to AppState.
+    // That history is read-only for this account and must never reopen its
+    // relational outbox: otherwise one member's log wakes every peer, whose
+    // no-op publication wakes the first member again. Keep the digest exactly
+    // aligned with pushCloudWorkspace's account-owned write boundary.
+    entries: orderedValueHash(owned.entries),
+    photos: orderedValueHash(owned.photos),
     pendingPrivacyFences:
       state.settings.pendingMetricPrivacyFenceIdsByGroup?.[
-        payload.group.id
+        state.group.id
       ] ?? [],
   });
   workspaceHashCache.set(state, hash);
@@ -1768,6 +1851,13 @@ function mergeStates(
   settings.advancedTutorialComplete = advancedTutorialComplete;
   settings.progressGridDateNavigatorCollapsed =
     local.settings.progressGridDateNavigatorCollapsed;
+  // Workout/source decisions are private account settings. Merge each dated
+  // choice independently so a save on one device cannot erase another
+  // device's unrelated Step-coverage edit.
+  settings.stepCoveragePreferences = mergeStepCoveragePreferences(
+    remote.settings.stepCoveragePreferences,
+    local.settings.stepCoveragePreferences,
+  );
   // Google entry mutations are applied locally only after authenticated server
   // acknowledgement. On every pull, the protected owner snapshot is therefore
   // the authority for which fields are explicit preferences; a time-only local
@@ -2225,6 +2315,14 @@ function mergeActivityEntries(
       (existing.userId !== currentUserId && !existingIsNewer)
     )
       entries.set(key, entry);
+    else if (
+      existing.userId === currentUserId &&
+      entry.cloudId &&
+      existing.cloudId !== entry.cloudId
+    )
+      // Preserve an owned pending/newer local value while accepting the
+      // server-owned relational identity needed by social engagement.
+      entries.set(key, { ...existing, cloudId: entry.cloudId });
   });
   return [...entries.values()].sort((a, b) =>
     a.recordedAt.localeCompare(b.recordedAt),
@@ -2278,11 +2376,6 @@ function cachedGroupActivity(
   state: AppState,
   groupId: string,
 ) {
-  const cacheStart = new Date();
-  cacheStart.setDate(
-    cacheStart.getDate() - GROUP_ACTIVITY_LOCAL_CACHE_DAYS,
-  );
-  const cacheSinceDate = dateKey(cacheStart);
   const metricIds = new Set(
     state.group.id === groupId
       ? (state.group.metricConfiguration ?? []).map((metric) => metric.id)
@@ -2297,7 +2390,6 @@ function cachedGroupActivity(
     entries: state.entries
       .filter(
         (entry) =>
-          entry.localDate >= cacheSinceDate &&
           entry.visibility === "group" &&
           entry.userId !== state.currentUserId &&
           metricIds.has(entry.metricId) &&
@@ -2750,6 +2842,17 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   );
   const historicalHydrationStartedRef = useRef(new Set<string>());
   const startupGroupCacheHydrationRef = useRef(new Set<string>());
+  const groupActivityCacheHydrationRef = useRef(
+    new Map<string, Promise<boolean>>(),
+  );
+  const groupActivityCacheWriteGenerationRef = useRef(
+    new Map<string, number>(),
+  );
+  const activeCacheAccountRef = useRef<string | null>(
+    auth.status === "signedIn" ? (auth.user?.id ?? null) : null,
+  );
+  activeCacheAccountRef.current =
+    auth.status === "signedIn" ? (auth.user?.id ?? null) : null;
   // undefined = no queued request, null = full activity refresh, string =
   // earliest local date requested by coalesced realtime events.
   const queuedActivitySinceRef = useRef<string | null | undefined>(undefined);
@@ -3017,6 +3120,26 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     [],
   );
 
+  const prepareChatMessageMedia = useCallback(
+    async (messageId?: string) => {
+      const beforeUpload = stateRef.current;
+      const uploaded = await uploadOwnedChatMessageMedia(
+        beforeUpload,
+        messageId,
+      );
+      if (uploaded === beforeUpload) return stateRef.current;
+      // Preserve mutations made while fetch/upload was in flight. Only the
+      // newly durable storage path is merged into the latest live state.
+      const next = mergeUploadedMediaMetadata(stateRef.current, uploaded);
+      if (next !== stateRef.current) {
+        stateRef.current = next;
+        replaceState(next, { source: "cloud" });
+      }
+      return stateRef.current;
+    },
+    [replaceState],
+  );
+
   const flushChatOutbox = useCallback(() => {
     if (
       chatOutboxPromiseRef.current ||
@@ -3041,7 +3164,8 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       let shouldRetry = false;
       for (const messageId of pending) {
         try {
-          await pushCloudMessagesNow(stateRef.current, messageId);
+          const prepared = await prepareChatMessageMedia(messageId);
+          await pushCloudMessagesNow(prepared, messageId);
           chatOutboxPendingRef.current.delete(messageId);
           chatOutboxAttemptsRef.current.delete(messageId);
         } catch {
@@ -3085,7 +3209,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       }
     });
     chatOutboxPromiseRef.current = operation;
-  }, [auth.status]);
+  }, [auth.status, prepareChatMessageMedia]);
 
   const recoverChatOutbox = useCallback(() => {
     if (
@@ -3097,7 +3221,8 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       return chatRecoveryPromiseRef.current ?? Promise.resolve();
     const boundary = chatOutboxBoundaryRef.current;
     const queuedIds = [...chatOutboxPendingRef.current];
-    const operation = pushCloudMessagesNow(stateRef.current)
+    const operation = prepareChatMessageMedia()
+      .then((prepared) => pushCloudMessagesNow(prepared))
       .then(() => {
         if (chatOutboxBoundaryRef.current !== boundary) return;
         queuedIds.forEach((messageId) => {
@@ -3121,7 +3246,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       });
     chatRecoveryPromiseRef.current = operation;
     return operation;
-  }, [auth.status, flushChatOutbox]);
+  }, [auth.status, flushChatOutbox, prepareChatMessageMedia]);
 
   useEffect(() => {
     const boundary = `${auth.user?.id ?? "signed-out"}:${state.group.id}`;
@@ -3156,16 +3281,18 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       // recent local history as newly sent and launching one request per row.
       if (networkAvailable) {
         const boundary = chatOutboxBoundaryRef.current;
-        void pushCloudMessagesNow(stateRef.current).catch(() => {
-          // A temporary failure must put the exact local rows back into the
-          // durable targeted outbox. The boundary guard prevents an old
-          // account/group recovery from leaking into the newly selected one.
-          if (chatOutboxBoundaryRef.current !== boundary) return;
-          ownedMessagesForRecovery.forEach((message) =>
-            chatOutboxPendingRef.current.add(message.id),
-          );
-          flushChatOutbox();
-        });
+        void prepareChatMessageMedia()
+          .then((prepared) => pushCloudMessagesNow(prepared))
+          .catch(() => {
+            // A temporary failure must put the exact local rows back into the
+            // durable targeted outbox. The boundary guard prevents an old
+            // account/group recovery from leaking into the newly selected one.
+            if (chatOutboxBoundaryRef.current !== boundary) return;
+            ownedMessagesForRecovery.forEach((message) =>
+              chatOutboxPendingRef.current.add(message.id),
+            );
+            flushChatOutbox();
+          });
       } else {
         // These messages were restored from local persistence while offline.
         // Keep them queued so the connectivity effect sends them without a
@@ -3186,6 +3313,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     auth.status,
     flushChatOutbox,
     networkAvailable,
+    prepareChatMessageMedia,
     state.currentUserId,
     state.group.id,
     state.messages,
@@ -3234,7 +3362,20 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   );
 
   const hydrateCachedGroupActivity = useCallback(
-    async (groupId: string, expectedUserId: string) => {
+    (groupId: string, expectedUserId: string) => {
+      const cacheBoundary = `${expectedUserId}:${groupId}`;
+      if (activeCacheAccountRef.current !== expectedUserId)
+        return Promise.resolve(false);
+      const existingHydration =
+        groupActivityCacheHydrationRef.current.get(cacheBoundary);
+      if (existingHydration) return existingHydration;
+      // A server response that starts while storage is being read owns the
+      // resulting state. The cache may still be older for harmless reasons,
+      // but it must never paint after a tombstone/fence response in this run.
+      if (activityRefreshPromiseRef.current) return Promise.resolve(false);
+      const startingActivitySequence = activityLoadSequenceRef.current;
+      let operation: Promise<boolean>;
+      operation = (async () => {
       const [cached, protectedGoogleActivity] = await Promise.all([
         readGroupActivityCache(groupId).catch(() => null),
         readGoogleHealthGroupCheckpoint(expectedUserId, groupId).catch(
@@ -3242,6 +3383,12 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         ),
       ]);
       await yieldCloudMaintenanceToUi();
+      if (
+        startingActivitySequence !== activityLoadSequenceRef.current ||
+        activityRefreshPromiseRef.current ||
+        activeCacheAccountRef.current !== expectedUserId
+      )
+        return false;
 
       const live = stateRef.current;
       const scopedCached = cached
@@ -3268,20 +3415,17 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         : null;
       if (!scopedCached && !scopedGoogleActivity) return false;
 
-      // A slow disk read must never reintroduce rows that a newer server
-      // snapshot already deleted or fenced after a visibility change.
+      // The cache contains only rows that were already RLS-authorized for this
+      // account/group and has just been scoped against the current membership
+      // shell. A group activity version advances for unrelated live totals too
+      // (especially Steps), so treating any newer version as a reason to throw
+      // away detailed meals/workouts caused a cold-open `No data` flash and
+      // made encrypted Google Health details disappear until the next fetch.
+      // Hydrate the authorized paint-ahead rows monotonically; the immediate
+      // server refresh applies precise tombstones and privacy revision fences.
       const observedVersion = activityVersionByGroupRef.current.get(groupId);
-      const reusableCached =
-        scopedCached &&
-        (observedVersion === undefined ||
-          (scopedCached.version !== undefined &&
-            scopedCached.version >= observedVersion))
-          ? scopedCached
-          : null;
-      const reusableGoogleActivity =
-        observedVersion === undefined || reusableCached
-          ? scopedGoogleActivity
-          : null;
+      const reusableCached = scopedCached;
+      const reusableGoogleActivity = scopedGoogleActivity;
       const entries = [
         ...(reusableCached?.entries ?? []),
         ...(reusableGoogleActivity?.entries ?? []),
@@ -3307,7 +3451,11 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         groupId,
         true,
       );
-      if (!stillAuthorized) return false;
+      if (
+        !stillAuthorized ||
+        activeCacheAccountRef.current !== expectedUserId
+      )
+        return false;
 
       const next = {
         ...current,
@@ -3335,6 +3483,15 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       // rows out of the local/account and relational group outboxes.
       replaceState(next, { source: "cloud" });
       return true;
+      })().finally(() => {
+        if (
+          groupActivityCacheHydrationRef.current.get(cacheBoundary) ===
+          operation
+        )
+          groupActivityCacheHydrationRef.current.delete(cacheBoundary);
+      });
+      groupActivityCacheHydrationRef.current.set(cacheBoundary, operation);
+      return operation;
     },
     [replaceState],
   );
@@ -3342,6 +3499,12 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   const evictUnavailableGroup = useCallback(
     async (groupId: string) => {
       const live = stateRef.current;
+      const cacheBoundary = `${live.currentUserId}:${groupId}`;
+      groupActivityCacheWriteGenerationRef.current.set(
+        cacheBoundary,
+        (groupActivityCacheWriteGenerationRef.current.get(cacheBoundary) ?? 0) +
+          1,
+      );
       const departed = live.groups.find((group) => group.id === groupId);
       if (!departed || !isCloudGroupId(groupId)) {
         await Promise.allSettled([
@@ -3641,7 +3804,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             recoverPersistedAccount,
             error instanceof AppStateStorageReadError ? 650 : 1_500,
           );
-        });
+          });
     };
     recoverPersistedAccount();
     return () => {
@@ -5077,9 +5240,11 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
                 existingGroups.find(
                   (group) => group.id === current.group.id,
                 ) ?? existingGroups[0];
+              await hydrateCachedGroupActivity(targetGroup.id, user.id);
+              const currentWithCachedActivity = stateRef.current;
               const loaded = await readCloudResponsively((signal) =>
                 loadCloudWorkspace(
-                  { ...current, groups: existingGroups },
+                  { ...currentWithCachedActivity, groups: existingGroups },
                   targetGroup.id,
                   (metadata) =>
                     recordActivityMetadata(targetGroup.id, metadata),
@@ -5270,7 +5435,12 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
                 existingGroups.find(
                   (group) => group.id === hydratedState.group.id,
                 ) ?? existingGroups[0];
-              if (targetGroup)
+              if (targetGroup) {
+                await hydrateCachedGroupActivity(targetGroup.id, user.id);
+                hydratedState = mergePrivateMediaUrls(
+                  stateRef.current,
+                  hydratedState,
+                );
                 hydratedState = await readCloudResponsively((signal) =>
                   loadCloudWorkspace(
                     { ...hydratedState, groups: existingGroups },
@@ -5282,6 +5452,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
                     signal,
                   ),
                 );
+              }
               await waitForUi(0, 2_500);
               if (cancelled) return;
               const next = mergeRemoteWorkspace(
@@ -5333,6 +5504,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
               );
               if (!existingGroups.length || cancelled) return;
               const targetGroup = existingGroups[0];
+              await hydrateCachedGroupActivity(targetGroup.id, user.id);
               const loaded = await readCloudResponsively((signal) =>
                 loadCloudWorkspace(
                   { ...stateRef.current, groups: existingGroups },
@@ -5444,6 +5616,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     ensureLatestCloudMergeBase,
     hydrated,
     hasUnsyncedLocalChanges,
+    hydrateCachedGroupActivity,
     initializationAttempt,
     loadDevices,
     markGroupReadSucceeded,
@@ -6181,8 +6354,36 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           stateRef.current = next;
           replaceState(next, { source: "cloud" });
           const cached = cachedGroupActivity(next, groupId);
-          scheduleResponsiveWork(() => {
-            void Promise.allSettled([
+          const cacheBoundary = `${next.currentUserId}:${groupId}`;
+          const cacheWriteGeneration =
+            (groupActivityCacheWriteGenerationRef.current.get(
+              cacheBoundary,
+            ) ?? 0) + 1;
+          groupActivityCacheWriteGenerationRef.current.set(
+            cacheBoundary,
+            cacheWriteGeneration,
+          );
+          const cacheWriteIsCurrent = () => {
+            const current = stateRef.current;
+            return (
+              activeCacheAccountRef.current === next.currentUserId &&
+              current.currentUserId === next.currentUserId &&
+              current.group.id === groupId &&
+              current.group.members.some(
+                (member) => member.id === next.currentUserId,
+              ) &&
+              groupActivityCacheWriteGenerationRef.current.get(
+                cacheBoundary,
+              ) === cacheWriteGeneration
+            );
+          };
+          const persistAuthorizedActivity = async () => {
+            if (!cacheWriteIsCurrent()) return;
+            if (Platform.OS !== "web") {
+              await waitForCloudCacheWriteTurn();
+              if (!cacheWriteIsCurrent()) return;
+            }
+            const results = await Promise.allSettled([
               writeGroupActivityCache({
                 groupId,
                 version: activity.version,
@@ -6196,11 +6397,31 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
                 dailyMetricStatuses: next.dailyMetricStatuses,
               }),
             ]);
-          }, {
-            minimumDelayMs: 120,
-            maximumDelayMs: 4_000,
-            minimumUserQuietMs: 1_600,
-          });
+            const failed = results.find(
+              (result): result is PromiseRejectedResult =>
+                result.status === "rejected",
+            );
+            if (failed) throw failed.reason;
+          };
+          const mustPersistBeforeSettle =
+            queuedForce ||
+            deletedEntryKeys.size > 0 ||
+            Boolean(activity.privacyFences?.length);
+          if (mustPersistBeforeSettle) {
+            // A user-opened detail range is not complete until its authorized
+            // rows are durable. Tombstones/privacy fences use the same barrier
+            // so a PWA suspension cannot let an older cache reappear.
+            await persistAuthorizedActivity();
+          } else {
+            scheduleResponsiveWork(() => {
+              if (cacheWriteIsCurrent())
+                void persistAuthorizedActivity().catch(() => undefined);
+            }, {
+              minimumDelayMs: 120,
+              maximumDelayMs: 4_000,
+              minimumUserQuietMs: 1_600,
+            });
+          }
         }
         clearActivityReadRetry(stateRef.current.group.id);
       })();
@@ -6443,7 +6664,29 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           markGroupReadSucceeded(groupId);
           setPendingChanges(hasUnsyncedLocalChanges());
           const cachePayload = cachedGroupActivity(next, groupId);
+          const cacheBoundary = `${next.currentUserId}:${groupId}`;
+          const cacheWriteGeneration =
+            (groupActivityCacheWriteGenerationRef.current.get(
+              cacheBoundary,
+            ) ?? 0) + 1;
+          groupActivityCacheWriteGenerationRef.current.set(
+            cacheBoundary,
+            cacheWriteGeneration,
+          );
           scheduleResponsiveWork(() => {
+            const current = stateRef.current;
+            if (
+              activeCacheAccountRef.current !== next.currentUserId ||
+              current.currentUserId !== next.currentUserId ||
+              current.group.id !== groupId ||
+              !current.group.members.some(
+                (member) => member.id === next.currentUserId,
+              ) ||
+              groupActivityCacheWriteGenerationRef.current.get(
+                cacheBoundary,
+              ) !== cacheWriteGeneration
+            )
+              return;
             void Promise.allSettled([
               writeGroupActivityCache({
                 groupId,
@@ -6871,10 +7114,12 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         const accountId = auth.user?.id ?? stateRef.current.currentUserId;
         const { error } = await supabase.functions.invoke("delete-account");
         if (error) throw error;
-        await deleteGoogleHealthStepCheckpoint(accountId).catch(
-          () => undefined,
-        );
         await supabase.auth.signOut({ scope: "global" });
+        await Promise.allSettled([
+          deleteGoogleHealthStepCheckpoint(accountId),
+          deleteGoogleHealthGroupCheckpointsForAccount(accountId),
+          clearGroupActivityCaches(),
+        ]);
       },
       createGroup: async (name, options) => {
         if (!auth.user)
@@ -7097,6 +7342,13 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           );
           stateRef.current = purged;
           replaceState(purged, { source: "local" });
+          const cacheBoundary = `${before.currentUserId}:${groupId}`;
+          groupActivityCacheWriteGenerationRef.current.set(
+            cacheBoundary,
+            (groupActivityCacheWriteGenerationRef.current.get(
+              cacheBoundary,
+            ) ?? 0) + 1,
+          );
           await Promise.allSettled([
             removeGroupActivityCache(groupId),
             deleteGoogleHealthGroupCheckpoint(before.currentUserId, groupId),
@@ -7150,7 +7402,8 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       },
       refreshMessages,
       syncMessagesNow: async (messageId) => {
-        await pushCloudMessagesNow(stateRef.current, messageId);
+        const prepared = await prepareChatMessageMedia(messageId);
+        await pushCloudMessagesNow(prepared, messageId);
         if (messageId) {
           chatOutboxPendingRef.current.delete(messageId);
           chatOutboxAttemptsRef.current.delete(messageId);
@@ -7210,6 +7463,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       pendingChanges,
       pendingGroup,
       performSync,
+      prepareChatMessageMedia,
       pullLatest,
       refreshGroup,
       refreshGroupActivity,

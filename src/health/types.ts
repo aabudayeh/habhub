@@ -35,7 +35,7 @@ export type HealthImportRecord = {
   note?: string;
   /** Device-only diagnostic surfaced in health settings; never mapped to logs. */
   liveStepDiagnostics?: LiveStepDiagnostics;
-  measurements?: { durationMinutes?: number; activeCalories?: number; distanceKm?: number; speedKmh?: number; systolic?: number; diastolic?: number };
+  measurements?: { durationMinutes?: number; activeCalories?: number; distanceKm?: number; speedKmh?: number; steps?: number; systolic?: number; diastolic?: number };
   updatedAt?: string;
 };
 

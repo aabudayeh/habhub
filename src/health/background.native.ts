@@ -77,6 +77,7 @@ function applyBackgroundHealthRecords(
     state.settings.energyProfile,
     sourcePreferences,
     healthFallbackContextForRead(state.entries, state.metrics, dataTypes),
+    state.settings.stepCoveragePreferences,
   );
   const stepMetricIds = dataTypes.includes('steps')
     ? metricIdsForHealthDataTypes(['steps'], state.metrics)

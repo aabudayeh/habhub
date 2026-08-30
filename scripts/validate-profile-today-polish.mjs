@@ -12,6 +12,8 @@ const seedSource = read("src/data/seed.ts");
 const todaySource = read("app/(tabs)/index.tsx");
 const profileSource = read("src/components/ProfileEditors.tsx");
 const profilePageSource = read("app/profile.tsx");
+const memberProfileSource = read("app/member-profile/[id].tsx");
+const memberComparisonSource = read("app/member/[id].tsx");
 const metricDetailSource = read("app/metric-detail.tsx");
 
 assert.match(
@@ -74,6 +76,44 @@ assert.match(
   /hero:\s*\{[^}]*minHeight:\s*135/,
   "The existing featured-card height contract must remain unchanged.",
 );
+assert.match(
+  todaySource,
+  /const heroVisualProgress\s*=\s*[\s\S]{0,160}Math\.round\([\s\S]{0,80}\* 100\) === 0[\s\S]{0,40}\? 0/,
+  "A Featured value displayed as 0% must normalize to an exactly empty visual state.",
+);
+assert.match(
+  heroSource,
+  /heroVisualProgress > 0 \? \([\s\S]{0,100}styles\.heroProgressFill/,
+  "The Featured progress bar must not mount a lime fill at 0%.",
+);
+const completionIndicatorStart = todaySource.indexOf(
+  "function CompletionShapeIndicator",
+);
+const completionIndicatorEnd = todaySource.indexOf(
+  "function ClockwiseIconReveal",
+  completionIndicatorStart,
+);
+const completionIndicatorSource = todaySource.slice(
+  completionIndicatorStart,
+  completionIndicatorEnd,
+);
+assert.match(
+  completionIndicatorSource,
+  /normalized > 0 \? \(/,
+  "The Featured completion icon must not mount a lime reveal layer at 0%.",
+);
+const goalDotStart = todaySource.indexOf("function GoalCompletionDot");
+const goalDotSource = todaySource.slice(goalDotStart);
+assert.match(
+  goalDotSource,
+  /Math\.round\(rawNormalized \* 100\) === 0 \? 0 : rawNormalized/,
+  "Featured tracker squares must remain neutral while their displayed value is 0%.",
+);
+assert.match(
+  goalDotSource,
+  /normalized > 0 \? \([\s\S]{0,100}styles\.dotLiquid/,
+  "Featured tracker squares must not mount a lime liquid layer at 0%.",
+);
 
 assert.match(
   profileSource,
@@ -129,9 +169,84 @@ assert.match(
   "The profile header must use the same Tracked goals terminology.",
 );
 assert.match(
+  profilePageSource,
+  /router\.push\(`\/member-profile\/\$\{me\.id\}` as never\)/,
+  "The own-profile preview must continue opening the shared public-profile route.",
+);
+const publicProfileHeroStart = memberProfileSource.indexOf(
+  "<Card style={styles.hero}>",
+);
+const publicProfileHeroEnd = memberProfileSource.indexOf(
+  "</Card>",
+  publicProfileHeroStart,
+);
+assert.ok(
+  publicProfileHeroStart >= 0 && publicProfileHeroEnd > publicProfileHeroStart,
+  "Public profile identity card not found.",
+);
+const publicProfileHeroSource = memberProfileSource.slice(
+  publicProfileHeroStart,
+  publicProfileHeroEnd,
+);
+assert.match(
+  publicProfileHeroSource,
+  /Joined group[\s\S]{0,420}Joined HabHub/,
+  "Both joined dates must live as compact subtext in the public identity card.",
+);
+assert.match(
+  memberProfileSource,
+  /friendlyDate\(member\.joinedGroupAt\.slice\(0, 10\), locale\)/,
+  "The public group-join date must use the selected app locale.",
+);
+assert.match(
+  memberProfileSource,
+  /friendlyDate\(member\.joinedAppAt\.slice\(0, 10\), locale\)/,
+  "The public HabHub-join date must use the selected app locale.",
+);
+assert.doesNotMatch(
+  memberProfileSource,
+  /<JoinedCard|function JoinedCard|styles\.joinedCard/,
+  "Joined dates must not return as standalone public-profile cards.",
+);
+assert.match(
+  memberProfileSource,
+  /hero:\s*\{[^}]*marginBottom:\s*12/,
+  "The public identity card must retain visible compact section spacing.",
+);
+assert.match(
+  memberProfileSource,
+  /levelCard:\s*\{[^}]*marginBottom:\s*12/,
+  "The public level card must retain visible compact section spacing.",
+);
+assert.match(
+  memberProfileSource,
+  /comparisonAction:\s*\{[^}]*marginBottom:\s*12/,
+  "The public comparison action must not touch the badge showcase below it.",
+);
+assert.match(
+  memberComparisonSource,
+  /dateSection:\s*\{[^}]*marginTop:\s*2/,
+  "Friend comparison must keep its date controls compact beneath the page title.",
+);
+assert.match(
+  memberComparisonSource,
+  /headToHeadTitle:\s*\{[\s\S]{0,140}marginTop:\s*7[\s\S]{0,80}marginBottom:\s*6/,
+  "Friend comparison must keep balanced compact spacing around Head-to-head.",
+);
+assert.match(
+  memberComparisonSource,
+  /metricCards:\s*\{[^}]*marginTop:\s*8/,
+  "Tracker statistics must remain visually related to Head-to-head without touching it.",
+);
+assert.match(
+  memberComparisonSource,
+  /selectors:\s*\{[^}]*marginTop:\s*12/,
+  "What to show must retain visible space after the tracker cards.",
+);
+assert.match(
   metricDetailSource,
-  /const canOpenWorkout = tracker\.id === "workout"/,
-  "Only the Workout tracker should receive the direct Gym shortcut.",
+  /const canOpenWorkout = loggingDestination === "workout"/,
+  "Workout-owned and workout-derived details must share the centralized Gym shortcut.",
 );
 assert.match(
   metricDetailSource,
@@ -140,5 +255,5 @@ assert.match(
 );
 
 console.log(
-  "Profile and Today polish validation passed: settings typography, custom weight pace, long-press editing, and persisted sticky summary.",
+  "Profile and Today polish validation passed: public-profile spacing and joined dates, settings typography, custom weight pace, long-press editing, and persisted sticky summary.",
 );

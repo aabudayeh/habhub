@@ -58,6 +58,7 @@ import {
   type SharedMetricPrivacyFence,
 } from "@/src/domain/sharedMetricPrivacy";
 import { withoutSharedWorkoutParentDetails } from "@/src/domain/sharedLeaderboardLogs";
+import { chatSharePreview } from "@/src/domain/social";
 import { supabase } from "@/src/lib/supabase";
 import { getPrivacyAwareUserSnapshotMetadata } from "@/src/cloud/snapshotPrivacy";
 import { translateUiText } from "@/src/i18n";
@@ -83,7 +84,7 @@ const MEDIA_BUCKET = "paceboard-media";
 const SHARED_ACTIVITY_CACHE_DAYS = 120;
 const SHARED_SUMMARY_HISTORY_START = "2000-01-01";
 const CLOUD_ACTIVITY_ENTRY_SELECT =
-  "client_generated_id,metric_id,user_id,value,local_date,recorded_at,visibility,source,label,note,nutrition,submetric_values,source_provider,source_record_id,source_origin,source_updated_at,image_path,account_revision";
+  "id,client_generated_id,metric_id,user_id,value,local_date,recorded_at,visibility,source,label,note,nutrition,submetric_values,source_provider,source_record_id,source_origin,source_updated_at,image_path,account_revision";
 const SHARED_MESSAGE_CACHE_LIMIT = 200;
 const SHARED_PHOTO_CACHE_LIMIT = 120;
 // Push is an arrival alert, not a history-import side effect. Keeping this
@@ -110,6 +111,15 @@ const historicalSummaryAuditByGroup = new Map<
 // without scanning a user's full sensor history on every sync. A cold process
 // bootstraps this small set once through an indexed server function.
 const publishedDetailedImportedEntryIdsByGroup = new Map<string, Set<string>>();
+// A superseded web/manual Steps fallback deliberately remains in the private
+// account snapshot while its exact Health aggregate owns the shared row. Once
+// the server has confirmed that fallback absent, remember the result for this
+// process so every unrelated autosave does not issue the same empty DELETE.
+// The set is account+group scoped and contains only owner-created ids.
+const acknowledgedSupersededStepFallbackIdsByGroup = new Map<
+  string,
+  Set<string>
+>();
 const COLORS = [
   "#0FBFB8",
   "#FF5750",
@@ -149,6 +159,7 @@ function literalPushCopy(source: string) {
 }
 
 type CloudActivityEntryRow = {
+  id: string;
   client_generated_id: string;
   metric_id: string;
   user_id: string;
@@ -187,6 +198,7 @@ type ExistingCloudActivityEntryRow = Pick<
   | "source_origin"
   | "source_updated_at"
   | "image_path"
+  | "account_revision"
 >;
 
 type CloudActivityStatusRow = {
@@ -1311,6 +1323,7 @@ export async function loadCloudGroupActivity(
     entryRows.map((entry) =>
       withoutSharedWorkoutParentDetails({
         id: entry.client_generated_id,
+        cloudId: entry.id,
         metricId: slugById.get(entry.metric_id) ?? entry.metric_id,
         userId: entry.user_id,
         value: entry.value as number | boolean | string,
@@ -1375,6 +1388,14 @@ export async function loadCloudGroupActivity(
     if (cached?.userId !== state.currentUserId && !cachedIsNewer)
       entriesById.set(key, entry);
     else if (!cached) entriesById.set(key, entry);
+    else if (
+      cached.userId === state.currentUserId &&
+      entry.cloudId &&
+      cached.cloudId !== entry.cloudId
+    )
+      // Keep locally-newer owned content, but learn the canonical relational
+      // UUID returned by the RLS activity read for durable social identities.
+      entriesById.set(key, { ...cached, cloudId: entry.cloudId });
   });
   state.entries
     .filter(
@@ -2265,7 +2286,11 @@ export async function pushCloudMessagesNow(
         conversation_id:
           message.conversationId ?? `group:${state.group.id}`,
         recipient_id: message.recipientId ?? null,
-        image_path: message.imageStoragePath ?? null,
+        // Omitting a missing path preserves a durable image uploaded by an
+        // earlier device/session; a stale local row must never erase it.
+        ...(message.imageStoragePath
+          ? { image_path: message.imageStoragePath }
+          : {}),
         metadata: messageMetadata(message),
         created_at: message.createdAt,
       },
@@ -2286,6 +2311,7 @@ export async function pushCloudMessagesNow(
   const currentRows: {
     client_generated_id: string;
     push_dispatched_at: string | null;
+    image_path: string | null;
   }[] = [];
   for (const ids of batches(
     owned.map((message) => message.id),
@@ -2293,7 +2319,7 @@ export async function pushCloudMessagesNow(
   )) {
     const current = await client
       .from("messages")
-      .select("client_generated_id, push_dispatched_at")
+      .select("client_generated_id, push_dispatched_at, image_path")
       .eq("group_id", state.group.id)
       .eq("sender_id", state.currentUserId)
       .in("client_generated_id", ids);
@@ -2303,8 +2329,17 @@ export async function pushCloudMessagesNow(
   const rows = new Map(
     currentRows.map((row) => [row.client_generated_id, row]),
   );
-  const missing = owned.filter((message) => !rows.has(message.id));
-  for (const batch of batches(missing, 80)) {
+  const missingOrMediaRepair = owned.filter((message) => {
+    const remote = rows.get(message.id);
+    return (
+      !remote ||
+      Boolean(
+        message.imageStoragePath &&
+          remote.image_path !== message.imageStoragePath,
+      )
+    );
+  });
+  for (const batch of batches(missingOrMediaRepair, 80)) {
     const upsert = await client.from("messages").upsert(
       batch.map((message) => ({
         group_id: state.group.id,
@@ -2314,7 +2349,9 @@ export async function pushCloudMessagesNow(
         content: message.text,
         conversation_id: message.conversationId ?? `group:${state.group.id}`,
         recipient_id: message.recipientId ?? null,
-        image_path: message.imageStoragePath ?? null,
+        ...(message.imageStoragePath
+          ? { image_path: message.imageStoragePath }
+          : {}),
         metadata: messageMetadata(message),
         created_at: message.createdAt,
       })),
@@ -2350,13 +2387,19 @@ function chatPushPayload(
   sender: Member,
   message: ChatMessage,
 ) {
-  const hasUserText = Boolean(message.text);
-  const fallback = message.todoAttachment
-    ? `Shared a to-do: ${message.todoAttachment.title}`
-    : "Sent an image";
+  const sharedMessage = chatSharePreview(message.text);
+  const userText = sharedMessage.text;
+  const hasUserText = Boolean(userText);
+  const hasAttachment = Boolean(
+    sharedMessage.hasAttachment || message.todoAttachment,
+  );
+  const fallback = hasAttachment ? "Shared an attachment" : "Sent an image";
+  const visibleCopy = hasUserText
+    ? `${userText}${hasAttachment ? " · Attachment" : ""}`
+    : fallback;
   const body = message.recipientId
-    ? message.text || fallback
-    : `${sender.name}: ${message.text || fallback}`;
+    ? visibleCopy
+    : `${sender.name}: ${visibleCopy}`;
   const payload = withLocalizedPushCopy({
     eventKey: `message:${state.group.id}:${message.id}`,
     clientMessageId: message.id,
@@ -2385,12 +2428,11 @@ function chatPushPayload(
     // phrase catalog, even when it happens to match a built-in label.
     return { ...payload, bodies: literalPushCopy(body) };
   }
-  if (message.todoAttachment) return payload;
-  const imageCopy = localizedUiText("Sent an image");
+  const fallbackCopy = localizedUiText(fallback);
   return {
     ...payload,
     bodies: Object.fromEntries(
-      Object.entries(imageCopy).map(([language, value]) => [
+      Object.entries(fallbackCopy).map(([language, value]) => [
         language,
         message.recipientId ? value : `${sender.name}: ${value}`,
       ]),
@@ -2763,13 +2805,21 @@ export async function pushCloudWorkspace(
       )
       .map((entry) => entry.id),
   );
+  const supersededFallbackAckKey =
+    `${state.currentUserId}:${state.group.id}`;
+  const acknowledgedSupersededFallbackIds =
+    acknowledgedSupersededStepFallbackIdsByGroup.get(
+      supersededFallbackAckKey,
+    ) ?? new Set<string>();
   const explicitDeletedEntryIds = [
     ...new Set(state.settings.pendingDeletedEntryIds ?? []),
   ];
   const remoteEntryIdsToDelete = [
     ...new Set([
       ...explicitDeletedEntryIds,
-      ...supersededSharedStepFallbackIds,
+      ...[...supersededSharedStepFallbackIds].filter(
+        (entryId) => !acknowledgedSupersededFallbackIds.has(entryId),
+      ),
     ]),
   ];
   const explicitlyDeletedLocalDates: string[] = [];
@@ -2781,6 +2831,15 @@ export async function pushCloudWorkspace(
     if (deleted.error) {
       throw deleted.error;
     } else {
+      batch.forEach((entryId) => {
+        if (supersededSharedStepFallbackIds.has(entryId))
+          acknowledgedSupersededFallbackIds.add(entryId);
+      });
+      if (acknowledgedSupersededFallbackIds.size)
+        acknowledgedSupersededStepFallbackIdsByGroup.set(
+          supersededFallbackAckKey,
+          acknowledgedSupersededFallbackIds,
+        );
       (
         (deleted.data ?? []) as {
           deleted_client_generated_id?: string;
@@ -2866,6 +2925,26 @@ export async function pushCloudWorkspace(
   const rawOwnedEntries = detailedOwnedEntries
     .filter((entry) => entry.visibility === "group")
     .map(withoutSharedWorkoutParentDetails);
+  // A visibility withdrawal advances a permanent metric fence. If the owner
+  // later re-shares that tracker, a legacy relational detail row can still be
+  // marked `group` while its old account revision remains behind the fence.
+  // Read the small indexed owner/group fence set once and make those exact rows
+  // part of this full projection repair. Peers never write another member's
+  // rows, and a post-fence account revision remains mandatory below.
+  const ownerPrivacyFenceRevisionByMetricId = new Map<string, number>();
+  if (rawOwnedEntries.length) {
+    const ownerFenceRows = await client
+      .from("metric_privacy_cache_fences")
+      .select("metric_id, revision")
+      .eq("user_id", state.currentUserId)
+      .eq("group_id", state.group.id);
+    if (ownerFenceRows.error) throw ownerFenceRows.error;
+    (ownerFenceRows.data ?? []).forEach((row) => {
+      const revision = Number(row.revision);
+      if (typeof row.metric_id === "string" && Number.isSafeInteger(revision))
+        ownerPrivacyFenceRevisionByMetricId.set(row.metric_id, revision);
+    });
+  }
   // A row that previously carried a meal/workout note, nutrition, or photo can
   // stop qualifying for raw sharing while the underlying imported measurement
   // remains valid. Fence that old relational projection as private and clear
@@ -2912,7 +2991,7 @@ export async function pushCloudWorkspace(
     const result = await client
       .from("metric_entries")
       .select(
-        "client_generated_id, metric_id, value, local_date, recorded_at, visibility, source, label, note, nutrition, submetric_values, source_provider, source_record_id, source_origin, source_updated_at, image_path",
+        "client_generated_id, metric_id, value, local_date, recorded_at, visibility, source, label, note, nutrition, submetric_values, source_provider, source_record_id, source_origin, source_updated_at, image_path, account_revision",
       )
       .eq("user_id", state.currentUserId)
       .in("client_generated_id", ids);
@@ -2939,8 +3018,21 @@ export async function pushCloudWorkspace(
   });
   const entriesToUpsert = [...rawCandidateById.values()].filter((entry) => {
     const remote = oldEntriesById.get(entry.id);
+    const remoteRevision = Number(remote?.account_revision);
+    const fenceRevision = ownerPrivacyFenceRevisionByMetricId.get(
+      idBySlug.get(entry.metricId) ?? "",
+    );
+    const needsPostFenceRepair = Boolean(
+      remote &&
+        entry.visibility === "group" &&
+        fenceRevision !== undefined &&
+        publishRevision > fenceRevision &&
+        (!Number.isSafeInteger(remoteRevision) ||
+          remoteRevision <= fenceRevision),
+    );
     return (
       !remote ||
+      needsPostFenceRepair ||
       cloudEntryProjectionDiffers(
         entry,
         remote,
@@ -2969,7 +3061,7 @@ export async function pushCloudWorkspace(
     client
       .from("metric_entries")
       .select(
-        "client_generated_id, value, local_date, recorded_at, visibility, source, label, note, nutrition, submetric_values, source_provider, source_record_id, source_origin, source_updated_at, image_path",
+        "client_generated_id, value, local_date, recorded_at, visibility, source, label, note, nutrition, submetric_values, source_provider, source_record_id, source_origin, source_updated_at, image_path, account_revision",
       )
       .eq("user_id", state.currentUserId)
       .in("client_generated_id", entryIds);
@@ -3587,11 +3679,12 @@ export async function pushCloudWorkspace(
   ).map((message) => messageForGroup(message, state.group.id));
   const currentMessageRows = await client
     .from("messages")
-    .select("client_generated_id, push_dispatched_at")
+    .select("client_generated_id, push_dispatched_at, image_path")
     .eq("group_id", state.group.id)
     .eq("sender_id", state.currentUserId);
   let legacyMessageKeys = new Set<string>();
   let oldMessageIds = new Set<string>();
+  let oldMessageImagePaths = new Map<string, string | null>();
   let pendingPushIds = new Set<string>();
   let legacyMessages = false;
   if (currentMessageRows.error) {
@@ -3615,6 +3708,12 @@ export async function pushCloudWorkspace(
         (message) => message.client_generated_id,
       ),
     );
+    oldMessageImagePaths = new Map(
+      (currentMessageRows.data ?? []).map((message) => [
+        message.client_generated_id,
+        message.image_path ?? null,
+      ]),
+    );
     pendingPushIds = new Set(
       (currentMessageRows.data ?? [])
         .filter((message) => !message.push_dispatched_at)
@@ -3626,11 +3725,22 @@ export async function pushCloudWorkspace(
       ? !legacyMessageKeys.has(`${message.createdAt}|${message.text}`)
       : !oldMessageIds.has(message.id),
   );
+  const messagesToUpsert = legacyMessages
+    ? newMessages
+    : ownedMessages.filter(
+        (message) =>
+          !oldMessageIds.has(message.id) ||
+          Boolean(
+            message.imageStoragePath &&
+              oldMessageImagePaths.get(message.id) !==
+                message.imageStoragePath,
+          ),
+      );
   // Chat is append-preserving. Missing local rows may simply be an older or
   // partially loaded snapshot, so absence must not be interpreted as deletion.
-  if (newMessages.length && !legacyMessages) {
+  if (messagesToUpsert.length && !legacyMessages) {
     const currentUpsert = await client.from("messages").upsert(
-      newMessages.map((message) => ({
+      messagesToUpsert.map((message) => ({
         group_id: state.group.id,
         sender_id: state.currentUserId,
         client_generated_id: message.id,
@@ -3638,7 +3748,9 @@ export async function pushCloudWorkspace(
         content: message.text,
         conversation_id: message.conversationId ?? `group:${state.group.id}`,
         recipient_id: message.recipientId ?? null,
-        image_path: message.imageStoragePath ?? null,
+        ...(message.imageStoragePath
+          ? { image_path: message.imageStoragePath }
+          : {}),
         metadata: messageMetadata(message),
         created_at: message.createdAt,
       })),

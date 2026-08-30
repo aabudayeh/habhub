@@ -1,22 +1,22 @@
 import { supabase } from "@/src/lib/supabase";
+import type {
+  GroupSocialTarget,
+  GroupSocialTargetType,
+  MetricSocialTargetIdentity,
+} from "@/src/domain/groupSocialTarget";
+import { canonicalizeLegacyMetricSocialTargets } from "@/src/domain/groupSocialTarget";
 
-export type GroupSocialTargetType =
-  | "recap_feed"
-  | "metric_entry"
-  | "photo_update"
-  | "badge"
-  | "group_challenge"
-  | "group_todo";
-
-export type GroupSocialTarget = {
-  type: GroupSocialTargetType;
-  id: string;
-};
+export {
+  metricEntrySocialTarget,
+  type GroupSocialTarget,
+  type GroupSocialTargetType,
+} from "@/src/domain/groupSocialTarget";
 
 export type GroupSocialReactionKind =
   | "heart"
   | "thumbs_up"
-  | "thumbs_down";
+  | "thumbs_down"
+  | "cheer";
 
 export type GroupSocialReaction = {
   groupId: string;
@@ -62,6 +62,12 @@ type CommentRow = {
 
 const SOCIAL_TARGETS_PER_REQUEST = 20;
 const SOCIAL_ROWS_PER_REQUEST = 1000;
+
+type MetricTargetIdentityRow = {
+  id: string;
+  client_generated_id: string;
+  user_id: string;
+};
 
 function cloudError(error: unknown) {
   if (error && typeof error === "object") {
@@ -112,6 +118,82 @@ function targetsByType(targets: readonly GroupSocialTarget[]) {
   return result;
 }
 
+function metricTargetOwnerClientKey(ownerUserId: string, clientGeneratedId: string) {
+  return `${ownerUserId}\u0000${clientGeneratedId}`;
+}
+
+/**
+ * Old schema-v3 activity caches predate MetricEntry.cloudId. Resolve those
+ * rows in bounded RLS-filtered batches before querying canonical social rows.
+ * The owner/client pair is required because client-generated ids are not
+ * group-global identities.
+ */
+export async function resolveGroupSocialTargets(
+  groupId: string,
+  targets: readonly GroupSocialTarget[],
+) {
+  if (!supabase || !targets.length) return [...targets];
+  const legacyMetricTargets = targets.filter(
+    (target) =>
+      target.type === "metric_entry" &&
+      !target.cloudPublished &&
+      Boolean(target.ownerUserId) &&
+      Boolean(target.clientGeneratedId ?? target.id),
+  );
+  if (!legacyMetricTargets.length) return [...targets];
+
+  const identities: MetricSocialTargetIdentity[] = [];
+  for (
+    let offset = 0;
+    offset < legacyMetricTargets.length;
+    offset += SOCIAL_TARGETS_PER_REQUEST
+  ) {
+    const page = legacyMetricTargets.slice(
+      offset,
+      offset + SOCIAL_TARGETS_PER_REQUEST,
+    );
+    const ownerIds = [
+      ...new Set(page.flatMap((target) => target.ownerUserId ?? [])),
+    ];
+    const clientGeneratedIds = [
+      ...new Set(
+        page.map((target) => target.clientGeneratedId ?? target.id),
+      ),
+    ];
+    const requestedPairs = new Set(
+      page.map((target) =>
+        metricTargetOwnerClientKey(
+          target.ownerUserId!,
+          target.clientGeneratedId ?? target.id,
+        ),
+      ),
+    );
+    const response = await supabase
+      .from("metric_entries")
+      .select(
+        "id, client_generated_id, user_id, metric_definitions!inner(group_id)",
+      )
+      .in("user_id", ownerIds)
+      .in("client_generated_id", clientGeneratedIds)
+      .eq("visibility", "group")
+      .eq("metric_definitions.group_id", groupId);
+    if (response.error) throw cloudError(response.error);
+    for (const row of (response.data ?? []) as MetricTargetIdentityRow[]) {
+      const key = metricTargetOwnerClientKey(
+        row.user_id,
+        row.client_generated_id,
+      );
+      if (!requestedPairs.has(key)) continue;
+      identities.push({
+        cloudId: row.id,
+        ownerUserId: row.user_id,
+        clientGeneratedId: row.client_generated_id,
+      });
+    }
+  }
+  return canonicalizeLegacyMetricSocialTargets(targets, identities);
+}
+
 async function loadRowsForTargets<Row>(
   table: "group_social_reactions" | "group_social_comments",
   columns: string,
@@ -149,26 +231,73 @@ export async function loadGroupSocialEngagement(
   groupId: string,
   targets: readonly GroupSocialTarget[],
 ) {
+  const resolvedTargets = await resolveGroupSocialTargets(groupId, targets);
   const [reactionRows, commentRows] = await Promise.all([
     loadRowsForTargets<ReactionRow>(
       "group_social_reactions",
       "group_id, target_type, target_id, user_id, reaction, created_at, updated_at",
       groupId,
-      targets,
+      resolvedTargets,
     ),
     loadRowsForTargets<CommentRow>(
       "group_social_comments",
       "id, group_id, target_type, target_id, user_id, content, created_at, updated_at",
       groupId,
-      targets,
+      resolvedTargets,
     ),
   ]);
   return {
+    resolvedTargets,
     reactions: reactionRows.map(reactionFromRow),
     comments: commentRows
       .map(commentFromRow)
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
   };
+}
+
+/**
+ * Resolve an old/local metric-entry id to its server-owned UUID. The owner id
+ * is only a collision disambiguator: the SELECT remains subject to entry RLS,
+ * and the mutation RPC independently revalidates active membership, group,
+ * visibility, and the privacy revision fence.
+ */
+export async function resolveMetricEntrySocialTarget(
+  groupId: string,
+  target: GroupSocialTarget,
+  options?: { force?: boolean },
+): Promise<GroupSocialTarget | undefined> {
+  if (target.type !== "metric_entry") return target;
+  if (target.cloudPublished && !options?.force) return target;
+  if (!supabase || !target.ownerUserId) return undefined;
+  const clientGeneratedId = target.clientGeneratedId ?? target.id;
+  const { data, error } = await supabase
+    .from("metric_entries")
+    .select("id, metric_definitions!inner(group_id)")
+    .eq("user_id", target.ownerUserId)
+    .eq("client_generated_id", clientGeneratedId)
+    .eq("visibility", "group")
+    .eq("metric_definitions.group_id", groupId)
+    .limit(1)
+    .maybeSingle();
+  if (error) throw cloudError(error);
+  const cloudId =
+    data && typeof (data as { id?: unknown }).id === "string"
+      ? (data as { id: string }).id
+      : undefined;
+  if (!cloudId) return undefined;
+  return {
+    ...target,
+    id: cloudId,
+    cloudPublished: true,
+    clientGeneratedId,
+  };
+}
+
+export function isUnavailableGroupSocialTargetError(error: unknown) {
+  return (
+    error instanceof Error &&
+    error.message.toLowerCase().includes("shared item is no longer available")
+  );
 }
 
 export async function saveGroupSocialReaction(input: {
@@ -178,35 +307,16 @@ export async function saveGroupSocialReaction(input: {
   reaction?: GroupSocialReactionKind;
 }) {
   if (!supabase) throw new Error("Sign in to react to a shared item.");
-  if (!input.reaction) {
-    const { error } = await supabase
-      .from("group_social_reactions")
-      .delete()
-      .eq("group_id", input.groupId)
-      .eq("target_type", input.target.type)
-      .eq("target_id", input.target.id)
-      .eq("user_id", input.userId);
-    if (error) throw cloudError(error);
-    return undefined;
-  }
-  const { data, error } = await supabase
-    .from("group_social_reactions")
-    .upsert(
-      {
-        group_id: input.groupId,
-        target_type: input.target.type,
-        target_id: input.target.id,
-        user_id: input.userId,
-        reaction: input.reaction,
-      },
-      { onConflict: "group_id,target_type,target_id,user_id" },
-    )
-    .select(
-      "group_id, target_type, target_id, user_id, reaction, created_at, updated_at",
-    )
-    .single();
+  const { data, error } = await supabase.rpc("set_group_social_reaction", {
+    p_group_id: input.groupId,
+    p_target_type: input.target.type,
+    p_target_id: input.target.id,
+    p_reaction: input.reaction ?? null,
+  });
   if (error) throw cloudError(error);
-  return reactionFromRow(data as ReactionRow);
+  const row = Array.isArray(data) ? data[0] : data;
+  if (!row || !input.reaction) return undefined;
+  return reactionFromRow(row as ReactionRow);
 }
 
 export async function addGroupSocialComment(input: {

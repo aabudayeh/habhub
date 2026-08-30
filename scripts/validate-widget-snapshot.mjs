@@ -28,6 +28,9 @@ const theme = {
 const today = dateKey();
 const state = createInitialState();
 const todayScreen = read("app/(tabs)/index.tsx");
+const nativeWidget = read(
+  "plugins/habhub-android/java/HabHubWidgetProvider.kt",
+);
 
 assert.match(
   todayScreen,
@@ -47,11 +50,13 @@ assert.equal(featured.id, "__featured__");
 assert.equal(featured.progress, hero.progress);
 assert.equal(
   featured.progress,
-  hero.goalProgress.length
-    ? hero.goalProgress.reduce((sum, goal) => sum + goal.progress, 0) /
-        hero.goalProgress.length
+  hero.goalProgress.filter((goal) => !goal.unavailable).length
+    ? hero.goalProgress
+        .filter((goal) => !goal.unavailable)
+        .reduce((sum, goal) => sum + goal.progress, 0) /
+        hero.goalProgress.filter((goal) => !goal.unavailable).length
     : 0,
-  "Featured progress must average each goal's partial completion like the Status avatar",
+  "Featured progress must average only applicable goals' partial completion like the Status avatar",
 );
 assert.notEqual(
   featured.progress,
@@ -157,6 +162,11 @@ assert.equal(
 assert.doesNotMatch(hiddenTodoFeatured.compactSubtitle, /To-Dos/);
 
 const status = statusRangeRollup(state, state.currentUserId, [today]);
+assert.equal(
+  featured.progress,
+  status.progress,
+  "Today, its Featured widget, and Status must share the same one-day aggregate percentage",
+);
 const avatar = statusWidgetSnapshot(
   state,
   today,
@@ -518,6 +528,22 @@ assert.match(
   bridge,
   /const leaderboardState = leaderboardConfigurations\.length[\s\S]{0,200}privacySafeLeaderboardWidgetState\([\s\S]{0,160}stateRef\.current,[\s\S]{0,100}today,[\s\S]{0,100}requestedLeaderboardMetricIds[\s\S]{0,500}leaderboardWidgetSnapshot\([\s\S]{0,100}leaderboardState/,
   "Leaderboard snapshots must use the peer-authorized projection rather than the broader local cache projection",
+);
+
+assert.match(
+  nativeWidget,
+  /val twoByOneFeatured = size\.compact && size\.widthDp < 165f/,
+  "The native renderer must identify the 2 x 1 Featured bounds independently",
+);
+assert.match(
+  nativeWidget,
+  /if \(twoByOneFeatured\) 4\.35f else 5\.1f,[\s\S]{0,120}if \(twoByOneFeatured\) 3\.5f else 4\.1f[\s\S]{0,180}if \(twoByOneFeatured\) 0f else 0\.04f/,
+  "The 2 x 1 Featured widget must use its own fitted header treatment so TODAY'S FOCUS is not ellipsized",
+);
+assert.match(
+  nativeWidget,
+  /val twoByOneFeatured = size\.compact && size\.widthDp < 165f[\s\S]{0,240}size\.wide -> 8[\s\S]{0,80}twoByOneFeatured -> 7[\s\S]{0,160}else -> 5[\s\S]{0,160}val gap = if \(twoByOneFeatured\) 2f else 3f/,
+  "Only the 2 x 1 Featured widget should expand its compact goal row to seven squares",
 );
 
 console.log("Privacy-safe Featured, Status, and Leaderboard widget snapshots validated.");

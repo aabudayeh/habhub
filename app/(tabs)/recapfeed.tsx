@@ -1,4 +1,3 @@
-// The same recap experience is reachable as a hidden-by-default tab and from
-// contextual recap buttons. Keeping one implementation prevents the two entry
-// points from drifting.
-export { default } from "../recap";
+// The story recap remains the group's primary recap action. This optional tab
+// exposes the interactive feed without replacing that paged experience.
+export { GroupRecapFeedScreen as default } from "../recap";

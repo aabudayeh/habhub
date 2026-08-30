@@ -7,7 +7,7 @@ import {
 } from "@/src/cloud/groupChallenges";
 import { GroupChallenge } from "@/src/types";
 
-export function usePublicChallenges() {
+export function usePublicChallenges(enabled = true) {
   const [challenges, setChallenges] = useState<GroupChallenge[]>([]);
   const [joinedChallenges, setJoinedChallenges] = useState<GroupChallenge[]>([]);
   const [loading, setLoading] = useState(false);
@@ -36,8 +36,9 @@ export function usePublicChallenges() {
   }, []);
 
   useEffect(() => {
+    if (!enabled) return;
     void refresh();
-  }, [refresh]);
+  }, [enabled, refresh]);
 
   const join = useCallback(
     async (challengeId: string) => {

@@ -422,6 +422,7 @@ const protectedPeerMealCheckpoint = buildGoogleHealthGroupCheckpoint(
     entries: [
       {
         id: "peer-google-meal",
+        cloudId: "6bbafc87-832d-4f85-95ea-d56cdd424e11",
         metricId: "food",
         userId: "peer",
         value: 620,
@@ -456,12 +457,135 @@ const protectedPeerMealCheckpoint = buildGoogleHealthGroupCheckpoint(
 );
 assert.equal(protectedPeerMealCheckpoint?.entries.length, 1);
 assert.equal(protectedPeerMealCheckpoint?.entries[0].id, "peer-google-meal");
+assert.equal(
+  protectedPeerMealCheckpoint?.entries[0].cloudId,
+  "6bbafc87-832d-4f85-95ea-d56cdd424e11",
+  "the canonical social identity must survive encrypted web persistence",
+);
 assert.equal(protectedPeerMealCheckpoint?.entries[0].nutrition?.fiberG, 9);
 assert.equal(protectedPeerMealCheckpoint?.entries[0].imageUri, undefined);
 assert.equal(
   protectedPeerMealCheckpoint?.entries[0].imageStoragePath,
   "group/group/peer/meal.jpg",
   "encrypted detail checkpoints retain the object path but never a temporary signed URL",
+);
+const durableHistoricalMealCheckpoint = buildGoogleHealthGroupCheckpoint(
+  {
+    currentUserId: "viewer",
+    groupId: "group",
+    entries: [
+      {
+        ...protectedPeerMealCheckpoint.entries[0],
+        id: "peer-google-meal-from-last-year",
+        localDate: "2025-01-15",
+        recordedAt: "2025-01-15T18:30:00.000Z",
+      },
+    ],
+    dailyMetricStatuses: [],
+  },
+  new Date("2026-08-24T12:00:00.000Z"),
+);
+assert.equal(
+  durableHistoricalMealCheckpoint?.entries[0].localDate,
+  "2025-01-15",
+  "authorized historical details must not be discarded by the old rolling 120-day cache window",
+);
+const expiredLegacyMealCheckpoint = {
+  ...protectedPeerMealCheckpoint,
+  version: 2,
+  expiresAt: "2026-08-25T12:00:00.000Z",
+};
+const upgradedLegacyMealCheckpoint = parseGoogleHealthGroupCheckpoint(
+  expiredLegacyMealCheckpoint,
+  "viewer",
+  "group",
+  new Date("2027-01-01T12:00:00.000Z"),
+);
+assert.equal(
+  upgradedLegacyMealCheckpoint?.entries[0].id,
+  "peer-google-meal",
+  "an already-authorized v2 detail must survive its former seven-day expiry",
+);
+assert.equal(
+  upgradedLegacyMealCheckpoint?.version,
+  3,
+  "legacy encrypted checkpoints upgrade to the durable format during read",
+);
+const unicodeBudgetEntryCount = 5_000;
+const unicodeBudgetCheckpoint = buildGoogleHealthGroupCheckpoint(
+  {
+    currentUserId: "viewer",
+    groupId: "group",
+    entries: Array.from({ length: unicodeBudgetEntryCount }, (_, index) => ({
+      ...protectedPeerMealCheckpoint.entries[0],
+      id: `unicode-budget-${index.toString().padStart(4, "0")}`,
+      recordedAt: new Date(
+        Date.parse("2026-08-23T00:00:00.000Z") + index * 1_000,
+      ).toISOString(),
+      note: "漢".repeat(1_000),
+    })),
+    dailyMetricStatuses: [],
+  },
+  new Date("2026-08-24T12:00:00.000Z"),
+);
+assert.ok(unicodeBudgetCheckpoint);
+assert.ok(
+  unicodeBudgetCheckpoint.entries.length < unicodeBudgetEntryCount,
+  "multi-byte detail rows must be compacted by encoded size, not UTF-16 code units",
+);
+assert.ok(
+  new TextEncoder().encode(JSON.stringify(unicodeBudgetCheckpoint.entries))
+    .byteLength <=
+    6 * 1024 * 1024,
+  "the encrypted web entry projection must remain inside its six MiB UTF-8 budget",
+);
+assert.ok(
+  parseGoogleHealthGroupCheckpoint(
+    unicodeBudgetCheckpoint,
+    "viewer",
+    "group",
+    new Date("2026-08-24T12:00:00.000Z"),
+  ),
+  "a checkpoint produced at the UTF-8 write budget must remain readable",
+);
+assert.equal(
+  unicodeBudgetCheckpoint.entries.at(-1)?.id,
+  `unicode-budget-${(unicodeBudgetEntryCount - 1).toString().padStart(4, "0")}`,
+  "byte-budget compaction must retain the newest authorized detail rows",
+);
+const oversizedLegacyUnicodeCheckpoint = {
+  ...expiredLegacyMealCheckpoint,
+  entries: Array.from({ length: 500 }, (_, index) => ({
+    ...protectedPeerMealCheckpoint.entries[0],
+    id: `legacy-unicode-${index.toString().padStart(3, "0")}`,
+    recordedAt: new Date(
+      Date.parse("2026-08-23T00:00:00.000Z") + index * 1_000,
+    ).toISOString(),
+    nutrition: { legacyText: "漢".repeat(11_000) },
+  })),
+};
+const migratedOversizedLegacy = parseGoogleHealthGroupCheckpoint(
+  oversizedLegacyUnicodeCheckpoint,
+  "viewer",
+  "group",
+  new Date("2027-01-01T12:00:00.000Z"),
+);
+assert.ok(migratedOversizedLegacy);
+assert.ok(
+  migratedOversizedLegacy.entries.length <
+    oversizedLegacyUnicodeCheckpoint.entries.length,
+  "a valid large v2 cache must compact during migration instead of becoming a cache miss",
+);
+assert.ok(
+  new TextEncoder().encode(JSON.stringify(migratedOversizedLegacy.entries))
+    .byteLength <=
+    6 * 1024 * 1024,
+  "a migrated v2 entry projection must obey the v3 UTF-8 budget",
+);
+assert.equal(
+  migratedOversizedLegacy.entries.at(-1)?.id,
+  "legacy-unicode-499",
+  "large v2 migration must retain the newest authorized detail rows",
 );
 const editedGoogleEntry = {
   ...googleEntry,
@@ -839,6 +963,7 @@ const signIn = fs.readFileSync("app/sign-in.tsx", "utf8");
 const layout = fs.readFileSync("app/_layout.tsx", "utf8");
 const privacy = fs.readFileSync("app/privacy.tsx", "utf8");
 const appProvider = fs.readFileSync("src/state/AppProvider.tsx", "utf8");
+const authProvider = fs.readFileSync("src/auth/AuthProvider.tsx", "utf8");
 const cloudProvider = fs.readFileSync("src/cloud/CloudSyncProvider.tsx", "utf8");
 const groupCloud = fs.readFileSync("src/cloud/groupCloud.ts", "utf8");
 const groupCache = fs.readFileSync("src/storage/groupActivityCache.shared.ts", "utf8");
@@ -853,6 +978,10 @@ const groupCacheNative = fs.readFileSync(
 );
 const protectedGroupCache = fs.readFileSync(
   "src/storage/googleHealthGroupCheckpoint.web.ts",
+  "utf8",
+);
+const protectedNativeGroupCache = fs.readFileSync(
+  "src/storage/googleHealthGroupCheckpoint.native.ts",
   "utf8",
 );
 const localPersistence = fs.readFileSync(
@@ -1077,6 +1206,78 @@ assert.match(
 );
 assert.ok(cloudProvider.includes("readGoogleHealthGroupCheckpoint"));
 assert.ok(cloudProvider.includes("writeGoogleHealthGroupCheckpoint"));
+assert.match(
+  cloudProvider,
+  /if \(mustPersistBeforeSettle\)[\s\S]{0,500}await persistAuthorizedActivity\(\)/,
+  "an explicit friend-detail fetch must persist its authorized rows before a PWA can suspend",
+);
+assert.match(
+  cloudProvider,
+  /startingActivitySequence !== activityLoadSequenceRef\.current[\s\S]{0,120}activityRefreshPromiseRef\.current/,
+  "a cache read must not paint after a newer authoritative activity request starts",
+);
+assert.ok(
+  cloudProvider.includes("groupActivityCacheHydrationRef"),
+  "duplicate account/group cache hydrations must share one in-flight read",
+);
+const cacheHydration = cloudProvider.match(
+  /const hydrateCachedGroupActivity[\s\S]+?const evictUnavailableGroup/,
+)?.[0];
+assert.ok(cacheHydration, "durable group cache hydration must exist");
+assert.ok(
+  (cacheHydration.match(
+    /activeCacheAccountRef\.current !== expectedUserId/g,
+  )?.length ?? 0) >= 3,
+  "cache hydration must fence its start, post-read continuation, and final merge against sign-out/account replacement",
+);
+assert.ok(
+  cloudProvider.includes("groupActivityCacheWriteGenerationRef"),
+  "an older scheduled cache write must not overwrite a newer forced result",
+);
+assert.match(
+  cloudProvider,
+  /const results = await Promise\.allSettled\([\s\S]{0,800}if \(failed\) throw failed\.reason/,
+  "forced persistence must wait for both stores before propagating a writer failure",
+);
+const signedOutCachePurge = authProvider.match(
+  /async function purgeSignedOutAccountCaches[\s\S]+?^}/m,
+)?.[0];
+assert.ok(
+  signedOutCachePurge,
+  "account cache purge helper must exist",
+);
+assert.match(
+  signedOutCachePurge,
+  /deleteGoogleHealthStepCheckpoint\(accountId\)[\s\S]{0,160}deleteGoogleHealthGroupCheckpointsForAccount\(accountId\)[\s\S]{0,160}clearGroupActivityCaches\(\)/,
+  "account cache purge must revoke Steps plus protected and ordinary group caches",
+);
+const confirmedSignOut = authProvider.match(
+  /const confirmSignedOut[\s\S]+?^    };/m,
+)?.[0];
+assert.match(
+  confirmedSignOut ?? "",
+  /purgeSignedOutAccountCaches\(previousUserId\)/,
+  "implicit and remote sign-out must purge the previous account's durable caches",
+);
+const rememberedSession = authProvider.match(
+  /const rememberSession[\s\S]+?^    };/m,
+)?.[0];
+assert.match(
+  rememberedSession ?? "",
+  /previousUserId !== nextSession\.user\.id[\s\S]{0,100}purgeSignedOutAccountCaches\(previousUserId\)/,
+  "a direct Supabase account replacement must purge the prior account's durable caches",
+);
+assert.match(
+  authProvider,
+  /const queuePriorIdentityCleanup[\s\S]{0,220}purgeSignedOutAccountCaches\(cachedUserId\)/,
+  "an online no-session result or account replacement must purge the cached account",
+);
+assert.ok(
+  protectedGroupCache.includes("deleteGoogleHealthGroupCheckpointsForAccount"),
+);
+assert.ok(
+  protectedNativeGroupCache.includes("deleteGoogleHealthGroupCheckpointsForAccount"),
+);
 assert.ok(groupCacheTypes.includes("GROUP_ACTIVITY_CACHE_SCHEMA_VERSION = 3"));
 assert.ok(groupCacheAsync.includes("purgeLegacyGroupActivityCaches"));
 assert.ok(

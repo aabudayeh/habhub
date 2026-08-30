@@ -125,8 +125,18 @@ assert.match(leaderboard, /requestedPage=\{requestedLeaderboardPage\}/);
 assert.match(today, /style=\{styles\.sectionPageIndicator\}/);
 assert.match(
   today,
-  /onPress=\{\(\) => setRequestedTodayPage\(index\)\}/,
+  /onPress=\{\(\) => \{[\s\S]{0,260}setTodayPageIndex\(index\);[\s\S]{0,120}setRequestedTodayPage\(index\);/,
   "Today's compact page dots must remain interactive on native and Web",
+);
+assert.match(
+  today,
+  /onPress=\{\(\) => \{\s*if \(selected\) return;/,
+  "pressing the selected Today dot must not leave a stale pager request",
+);
+assert.match(
+  today,
+  /pointerEvents="box-none"[\s\S]{0,100}styles\.sectionPageIndicator/,
+  "the centered dot overlay must pass blank Web pointer space through to the surrounding controls",
 );
 assert.match(today, /requestedPage=\{requestedTodayPage\}/);
 assert.match(today, /setTodayPageIndex\(page\)/);

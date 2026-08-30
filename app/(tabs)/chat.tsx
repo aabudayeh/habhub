@@ -1,6 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
 import * as ImagePicker from "expo-image-picker";
+import { Image } from "expo-image";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import React, {
   useCallback,
@@ -28,6 +29,7 @@ import {
   AppTextInput as TextInput,
 } from "@/src/components/AppText";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { TAB_SCENE_SAFE_AREA_EDGES } from "@/src/domain/webSafeArea";
 import { translateUiText, useLocale } from "@/src/i18n";
 
 import { ExpandableImage } from "@/src/components/ExpandableImage";
@@ -36,8 +38,11 @@ import { Avatar } from "@/src/components/ui";
 import { memberDisplayName } from "@/src/domain/members";
 import { formatClockTime } from "@/src/domain/date";
 import {
+  buildChatShareMessage,
+  ChatShareAttachment,
   directConversationId,
   MessageCategory,
+  parseChatShareMessage,
   randomMessage,
 } from "@/src/domain/social";
 import { useApp } from "@/src/state/AppProvider";
@@ -48,24 +53,52 @@ import { useGroupTodos } from "@/src/cloud/useGroupTodos";
 import { usePageSwipeGesture } from "@/src/components/usePageSwipeGesture";
 import { useSoftwareKeyboardVisibility } from "@/src/components/useSoftwareKeyboardVisibility";
 import { useTodoItemVisibility } from "@/src/components/useTodoItemVisibility";
-
-function recapShareLink(text: string) {
-  const match = text.match(/(?:^|\n)habhub:\/\/recap\?([^\s]+)/i);
-  if (!match) return undefined;
-  const query = new URLSearchParams(match[1]);
-  const highlight = query.get("highlight") ?? undefined;
-  return {
-    highlight,
-    text: text.replace(match[0], "").trim(),
-  };
-}
+import { stagedChatShareImage } from "@/src/storage/chatShareImageStaging";
 
 function ChatScreen() {
   const tutorialSandbox = useTutorialSandboxActive();
-  const params = useLocalSearchParams<{ recipient?: string | string[] }>();
+  const params = useLocalSearchParams<{
+    recipient?: string | string[];
+    recapHighlight?: string | string[];
+    recapTitle?: string | string[];
+    recapAnchor?: string | string[];
+    recapShareAt?: string | string[];
+    challengeId?: string | string[];
+    challengeTitle?: string | string[];
+    challengeOccurrenceDate?: string | string[];
+    challengeGroupId?: string | string[];
+    challengeAudience?: string | string[];
+    challengeShareAt?: string | string[];
+    metricLogEntryId?: string | string[];
+    metricLogMetricId?: string | string[];
+    metricLogLocalDate?: string | string[];
+    metricLogMemberId?: string | string[];
+    metricLogTitle?: string | string[];
+    metricLogShareAt?: string | string[];
+  }>();
+  const routeParam = (value?: string | string[]) =>
+    Array.isArray(value) ? value[0] : value;
   const requestedRecipient = Array.isArray(params.recipient)
     ? params.recipient[0]
     : params.recipient;
+  const requestedRecapHighlight = routeParam(params.recapHighlight);
+  const requestedRecapTitle = routeParam(params.recapTitle);
+  const requestedRecapAnchor = routeParam(params.recapAnchor);
+  const requestedRecapShareAt = routeParam(params.recapShareAt);
+  const requestedChallengeId = routeParam(params.challengeId);
+  const requestedChallengeTitle = routeParam(params.challengeTitle);
+  const requestedChallengeOccurrenceDate = routeParam(
+    params.challengeOccurrenceDate,
+  );
+  const requestedChallengeGroupId = routeParam(params.challengeGroupId);
+  const requestedChallengeAudience = routeParam(params.challengeAudience);
+  const requestedChallengeShareAt = routeParam(params.challengeShareAt);
+  const requestedMetricLogEntryId = routeParam(params.metricLogEntryId);
+  const requestedMetricLogMetricId = routeParam(params.metricLogMetricId);
+  const requestedMetricLogLocalDate = routeParam(params.metricLogLocalDate);
+  const requestedMetricLogMemberId = routeParam(params.metricLogMemberId);
+  const requestedMetricLogTitle = routeParam(params.metricLogTitle);
+  const requestedMetricLogShareAt = routeParam(params.metricLogShareAt);
   const { state, sendMessage, updateSettings } = useApp();
   const accent = useGroupAccent();
   const colors = useAppColors();
@@ -80,6 +113,8 @@ function ChatScreen() {
   const [draft, setDraft] = useState("");
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [attachedTodoId, setAttachedTodoId] = useState<string>();
+  const [shareAttachment, setShareAttachment] =
+    useState<ChatShareAttachment>();
   const [todoPickerOpen, setTodoPickerOpen] = useState(false);
   const [recipientId, setRecipientId] = useState<string | null>(null);
   const appliedRequestedRecipient = useRef<string | null>(null);
@@ -94,6 +129,118 @@ function ChatScreen() {
       setRecipientId(requestedRecipient);
     }
   }, [requestedRecipient, state.currentUserId, state.group.members]);
+  const appliedRecapShareAt = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (
+      !requestedRecapHighlight ||
+      !requestedRecapShareAt ||
+      appliedRecapShareAt.current === requestedRecapShareAt
+    )
+      return;
+    appliedRecapShareAt.current = requestedRecapShareAt;
+    const attachment = {
+      kind: "recap",
+      scope: "group",
+      highlight: requestedRecapHighlight,
+      anchor: requestedRecapAnchor,
+      title: requestedRecapTitle,
+    } satisfies ChatShareAttachment;
+    setShareAttachment(attachment);
+    setImageUri(
+      stagedChatShareImage(
+        state.currentUserId,
+        state.group.id,
+        attachment,
+      ) ?? null,
+    );
+    // Feed shares are group moments. Return to the group thread even if the
+    // mounted Chat tab was last showing a direct conversation.
+    setRecipientId(null);
+    setTodoPickerOpen(false);
+  }, [
+    requestedRecapAnchor,
+    requestedRecapHighlight,
+    requestedRecapShareAt,
+    requestedRecapTitle,
+    state.currentUserId,
+    state.group.id,
+  ]);
+  const appliedChallengeShareAt = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (
+      !requestedChallengeId ||
+      !requestedChallengeShareAt ||
+      appliedChallengeShareAt.current === requestedChallengeShareAt
+    )
+      return;
+    appliedChallengeShareAt.current = requestedChallengeShareAt;
+    const attachment = {
+      kind: "challenge",
+      challengeId: requestedChallengeId,
+      title: requestedChallengeTitle,
+      occurrenceDate: requestedChallengeOccurrenceDate,
+      groupId: requestedChallengeGroupId,
+      audience: requestedChallengeAudience === "public" ? "public" : "group",
+    } satisfies ChatShareAttachment;
+    setShareAttachment(attachment);
+    setImageUri(
+      stagedChatShareImage(
+        state.currentUserId,
+        state.group.id,
+        attachment,
+      ) ?? null,
+    );
+    setRecipientId(null);
+    setTodoPickerOpen(false);
+  }, [
+    requestedChallengeAudience,
+    requestedChallengeGroupId,
+    requestedChallengeId,
+    requestedChallengeOccurrenceDate,
+    requestedChallengeShareAt,
+    requestedChallengeTitle,
+    state.currentUserId,
+    state.group.id,
+  ]);
+  const appliedMetricLogShareAt = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (
+      !requestedMetricLogEntryId ||
+      !requestedMetricLogMetricId ||
+      !requestedMetricLogLocalDate ||
+      !requestedMetricLogShareAt ||
+      appliedMetricLogShareAt.current === requestedMetricLogShareAt
+    )
+      return;
+    appliedMetricLogShareAt.current = requestedMetricLogShareAt;
+    const attachment = {
+      kind: "metric_log",
+      entryId: requestedMetricLogEntryId,
+      metricId: requestedMetricLogMetricId,
+      localDate: requestedMetricLogLocalDate,
+      memberId: requestedMetricLogMemberId,
+      title: requestedMetricLogTitle,
+    } satisfies ChatShareAttachment;
+    setShareAttachment(attachment);
+    setImageUri(
+      stagedChatShareImage(
+        state.currentUserId,
+        state.group.id,
+        attachment,
+      ) ?? null,
+    );
+    setRecipientId(null);
+    setTodoPickerOpen(false);
+  }, [
+    requestedMetricLogEntryId,
+    requestedMetricLogLocalDate,
+    requestedMetricLogMemberId,
+    requestedMetricLogMetricId,
+    requestedMetricLogShareAt,
+    requestedMetricLogTitle,
+    state.currentUserId,
+    state.group.id,
+  ]);
   const [refreshingMessages, setRefreshingMessages] = useState(false);
   const tabBarHeight = useBottomTabBarHeight();
   const keyboardVisible = useSoftwareKeyboardVisibility();
@@ -510,13 +657,15 @@ function ChatScreen() {
     updateSettings,
   ]);
   function submit() {
-    if (!draft.trim() && !imageUri && !attachedTodo) return;
+    if (!draft.trim() && !imageUri && !attachedTodo && !shareAttachment) return;
     followOutgoingMessageLayout.current = true;
     userScrolledAwayFromBottom.current = false;
     userDragInProgress.current = false;
     userDragStartDistanceFromBottom.current = null;
     sendMessage(
-      draft,
+      shareAttachment
+        ? buildChatShareMessage(shareAttachment, draft)
+        : draft,
       conversationId,
       recipientId ?? undefined,
       imageUri ?? undefined,
@@ -532,6 +681,7 @@ function ChatScreen() {
     setDraft("");
     setImageUri(null);
     setAttachedTodoId(undefined);
+    setShareAttachment(undefined);
     setTodoPickerOpen(false);
     scrollToNewest(false);
     scrollToNewestAfterLayout(96, true);
@@ -568,7 +718,7 @@ function ChatScreen() {
       style={[styles.safe, { backgroundColor: colors.canvas }]}
       // The tab bar already owns the bottom safe area. Applying it here too
       // leaves the composer floating above the navigation bar.
-      edges={["top"]}
+      edges={TAB_SCENE_SAFE_AREA_EDGES}
     >
       <GestureDetector gesture={conversationSwipe}>
       <KeyboardAvoidingView
@@ -818,7 +968,7 @@ function ChatScreen() {
                   (candidate) => candidate.id === message.senderId,
                 );
                 const mine = message.senderId === state.currentUserId;
-                const recapLink = recapShareLink(message.text);
+                const sharedAttachment = parseChatShareMessage(message.text);
                 return (
                   <React.Fragment key={message.id}>
                     {showDate ? (
@@ -882,7 +1032,7 @@ function ChatScreen() {
                             },
                           ]}
                         >
-                          {message.imageUri ? (
+                          {message.imageUri && !sharedAttachment ? (
                             <ExpandableImage
                               uri={message.imageUri}
                               thumbnailStyle={styles.messageImage}
@@ -928,21 +1078,79 @@ function ChatScreen() {
                               <Ionicons name="chevron-forward" size={14} color={mine ? palette.white : colors.faint} />
                             </Pressable>
                           ) : null}
-                          {recapLink ? (
+                          {sharedAttachment ? (
+                            <>
+                            {sharedAttachment.text ? (
+                              <Text
+                                translate={false}
+                                selectable
+                                preserveColor={mine}
+                                style={[
+                                  styles.messageText,
+                                  { color: mine ? palette.white : colors.ink },
+                                ]}
+                              >
+                                {sharedAttachment.text}
+                              </Text>
+                            ) : null}
                             <Pressable
                               accessibilityRole="link"
-                              accessibilityLabel="Open shared group recap"
-                              onPress={() =>
-                                router.navigate({
-                                  pathname: "/recap",
-                                  params: {
-                                    scope: "group",
-                                    ...(recapLink.highlight
-                                      ? { highlight: recapLink.highlight }
-                                      : {}),
-                                  },
-                                } as never)
+                              accessibilityLabel={
+                                sharedAttachment.attachment.kind === "recap"
+                                  ? "Open shared group recap"
+                                  : sharedAttachment.attachment.kind === "challenge"
+                                    ? "Open shared challenge"
+                                    : "Open shared log"
                               }
+                              onPress={() => {
+                                const attachment = sharedAttachment.attachment;
+                                if (attachment.kind === "recap") {
+                                  router.navigate({
+                                    pathname: "/(tabs)/recapfeed",
+                                    params: {
+                                      ...(attachment.highlight
+                                        ? { highlight: attachment.highlight }
+                                        : {}),
+                                      ...(attachment.anchor
+                                        ? {
+                                            period: "custom",
+                                            anchor: attachment.anchor,
+                                          }
+                                        : {}),
+                                    },
+                                  } as never);
+                                  return;
+                                }
+                                if (attachment.kind === "challenge") {
+                                  router.navigate({
+                                    pathname: "/challenges",
+                                    params: {
+                                      challengeId: attachment.challengeId,
+                                      ...(attachment.occurrenceDate
+                                        ? {
+                                            challengeOccurrenceDate:
+                                              attachment.occurrenceDate,
+                                          }
+                                        : {}),
+                                      challengeFocusAt: Date.now().toString(),
+                                    },
+                                  } as never);
+                                  return;
+                                }
+                                router.navigate({
+                                  pathname: "/leaderboard-detail",
+                                  params: {
+                                    period: "custom",
+                                    anchor: attachment.localDate,
+                                    metrics: attachment.metricId,
+                                    ...(attachment.memberId
+                                      ? { memberId: attachment.memberId }
+                                      : {}),
+                                    entryId: attachment.entryId,
+                                    logFocusAt: Date.now().toString(),
+                                  },
+                                } as never);
+                              }}
                               style={[
                                 styles.todoAttachment,
                                 {
@@ -955,11 +1163,26 @@ function ChatScreen() {
                                 },
                               ]}
                             >
-                              <Ionicons
-                                name="sparkles-outline"
-                                size={16}
-                                color={mine ? palette.white : accent}
-                              />
+                              {message.imageUri ? (
+                                <Image
+                                  source={{ uri: message.imageUri }}
+                                  style={styles.sharedAttachmentThumbnail}
+                                  contentFit="cover"
+                                  transition={100}
+                                />
+                              ) : (
+                                <Ionicons
+                                  name={
+                                    sharedAttachment.attachment.kind === "recap"
+                                      ? "sparkles-outline"
+                                      : sharedAttachment.attachment.kind === "challenge"
+                                        ? "flag-outline"
+                                        : "document-text-outline"
+                                  }
+                                  size={16}
+                                  color={mine ? palette.white : accent}
+                                />
+                              )}
                               <View style={styles.todoAttachmentCopy}>
                                 <Text
                                   translate={false}
@@ -969,7 +1192,12 @@ function ChatScreen() {
                                     { color: mine ? palette.white : colors.ink },
                                   ]}
                                 >
-                                  {recapLink.text || "Shared group recap"}
+                                  {sharedAttachment.attachment.title ||
+                                    (sharedAttachment.attachment.kind === "recap"
+                                      ? "Shared group recap"
+                                      : sharedAttachment.attachment.kind === "challenge"
+                                        ? "Shared challenge"
+                                        : "Shared log")}
                                 </Text>
                                 <Text
                                   preserveColor={mine}
@@ -982,7 +1210,11 @@ function ChatScreen() {
                                     },
                                   ]}
                                 >
-                                  Open the highlighted recap moment
+                                  {sharedAttachment.attachment.kind === "recap"
+                                    ? "Open the highlighted recap moment"
+                                    : sharedAttachment.attachment.kind === "challenge"
+                                      ? "Open challenge"
+                                      : "Open this leaderboard log"}
                                 </Text>
                               </View>
                               <Ionicons
@@ -991,6 +1223,7 @@ function ChatScreen() {
                                 color={mine ? palette.white : colors.faint}
                               />
                             </Pressable>
+                            </>
                           ) : message.text ? (
                             <Text
                               translate={false}
@@ -1081,6 +1314,62 @@ function ChatScreen() {
                   <Text style={[styles.todoAttachmentMeta, { color: colors.muted }]}>Attached group to-do</Text>
                 </View>
                 <Pressable accessibilityLabel="Remove attached to-do" onPress={() => setAttachedTodoId(undefined)} hitSlop={8}>
+                  <Ionicons name="close" size={17} color={colors.muted} />
+                </Pressable>
+              </View>
+            ) : null}
+            {shareAttachment ? (
+              <View
+                style={[
+                  styles.todoPreview,
+                  { backgroundColor: colors.card, borderColor: colors.border },
+                ]}
+              >
+                <Ionicons
+                  name={
+                    shareAttachment.kind === "recap"
+                      ? "sparkles-outline"
+                      : shareAttachment.kind === "challenge"
+                        ? "flag-outline"
+                        : "document-text-outline"
+                  }
+                  size={16}
+                  color={accent}
+                />
+                <View style={styles.todoAttachmentCopy}>
+                  <Text
+                    translate={false}
+                    numberOfLines={1}
+                    style={[
+                      styles.todoAttachmentTitle,
+                      { color: colors.ink },
+                    ]}
+                  >
+                    {shareAttachment.title ||
+                      (shareAttachment.kind === "recap"
+                        ? "Shared group recap"
+                        : shareAttachment.kind === "challenge"
+                          ? "Shared challenge"
+                          : "Shared log")}
+                  </Text>
+                  <Text
+                    style={[
+                      styles.todoAttachmentMeta,
+                      { color: colors.muted },
+                    ]}
+                  >
+                    {shareAttachment.kind === "recap"
+                      ? "Attached recap moment"
+                      : shareAttachment.kind === "challenge"
+                        ? "Attached challenge"
+                        : "Attached leaderboard log"}
+                  </Text>
+                </View>
+                <Pressable
+                  accessibilityLabel="Remove shared attachment"
+                  onPress={() => setShareAttachment(undefined)}
+                  hitSlop={8}
+                >
                   <Ionicons name="close" size={17} color={colors.muted} />
                 </Pressable>
               </View>
@@ -1184,12 +1473,21 @@ function ChatScreen() {
                 submitBehavior={Platform.OS === "web" ? "newline" : "submit"}
               />
               <Pressable
-                disabled={!draft.trim() && !imageUri && !attachedTodo}
+                disabled={
+                  !draft.trim() &&
+                  !imageUri &&
+                  !attachedTodo &&
+                  !shareAttachment
+                }
                 onPress={submit}
                 style={({ pressed }) => [
                   styles.send,
                   { backgroundColor: accent },
-                  !draft.trim() && !imageUri && !attachedTodo && styles.sendDisabled,
+                  !draft.trim() &&
+                    !imageUri &&
+                    !attachedTodo &&
+                    !shareAttachment &&
+                    styles.sendDisabled,
                   pressed && styles.pressed,
                 ]}
               >
@@ -1465,6 +1763,11 @@ const styles = StyleSheet.create({
     aspectRatio: 1.3,
     borderRadius: 10,
     marginBottom: 3,
+  },
+  sharedAttachmentThumbnail: {
+    width: 38,
+    height: 38,
+    borderRadius: 8,
   },
   todoAttachment: {
     minWidth: 180,

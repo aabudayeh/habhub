@@ -1,37 +1,19 @@
-import { friendlyDate } from '@/src/domain/date';
-import { leaderboardRows } from '@/src/domain/leaderboard';
 import {
   effectiveGoalTarget,
   hasMetricData,
   sharedMetricResult,
 } from '@/src/domain/metrics';
 import { AppState, MetricDefinition } from '@/src/types';
-import { entriesForDay, statusForDay } from '@/src/domain/dataIndex';
-
-export type ComparisonStats={bestDay:string;bestScore:number;daysWon:number;longestWinStreak:number;eligibleDays:number};
-
-export function comparisonStats(state:AppState,subjectId:string,viewerId:string,dates:string[],metrics:MetricDefinition[]):ComparisonStats{
-  const ordered=[...dates].sort();let bestDate='';let bestScore=-1;let daysWon=0;let longest=0;let current=0;let eligibleDays=0;
-  for(const date of ordered){
-    const hasData=metrics.some((metric)=>metric.dataType==='calculated'||entriesForDay(state.entries,metric.id,subjectId,date).length>0);
-    if(!hasData){current=0;continue;}
-    eligibleDays+=1;
-    const rows=leaderboardRows(state,metrics,[date],viewerId,metrics.length===0);const subject=rows.find((row)=>row.member.id===subjectId);const viewer=rows.find((row)=>row.member.id===viewerId);const score=subject?.score??0;
-    if(score>bestScore){bestScore=score;bestDate=date;}
-    const won=subjectId===viewerId?rows[0]?.member.id===subjectId:Boolean(subject&&viewer&&subject.score>viewer.score);
-    if(won){daysWon+=1;current+=1;longest=Math.max(longest,current);}else current=0;
-  }
-  return{bestDay:bestDate?friendlyDate(bestDate):'—',bestScore:Math.max(0,bestScore),daysWon,longestWinStreak:longest,eligibleDays};
-}
+import { statusForDay } from '@/src/domain/dataIndex';
 
 export type HeadToHeadStats = {
   subjectBest: { value: number; date: string };
-  viewerBest: { value: number; date: string };
+  opponentBest: { value: number; date: string };
   subjectWins: number;
-  viewerWins: number;
+  opponentWins: number;
   ties: number;
   subjectLongestStreak: number;
-  viewerLongestStreak: number;
+  opponentLongestStreak: number;
   eligibleDays: number;
 };
 
@@ -43,21 +25,22 @@ export function metricHeadToHeadStats(
   state: AppState,
   metric: MetricDefinition,
   subjectId: string,
-  viewerId: string,
+  opponentId: string,
   dates: string[],
+  authorizationViewerId: string,
 ): HeadToHeadStats | undefined {
-  if (!supportsHeadToHead(metric) || subjectId === viewerId) return undefined;
+  if (!supportsHeadToHead(metric) || subjectId === opponentId) return undefined;
   let subjectBest = { value: 0, date: '' };
-  let viewerBest = { value: 0, date: '' };
+  let opponentBest = { value: 0, date: '' };
   let subjectBestScore = Number.NEGATIVE_INFINITY;
-  let viewerBestScore = Number.NEGATIVE_INFINITY;
+  let opponentBestScore = Number.NEGATIVE_INFINITY;
   let subjectWins = 0;
-  let viewerWins = 0;
+  let opponentWins = 0;
   let ties = 0;
   let subjectRun = 0;
-  let viewerRun = 0;
+  let opponentRun = 0;
   let subjectLongestStreak = 0;
-  let viewerLongestStreak = 0;
+  let opponentLongestStreak = 0;
   let eligibleDays = 0;
 
   for (const date of [...dates].sort()) {
@@ -69,46 +52,84 @@ export function metricHeadToHeadStats(
         userId,
         date,
       )?.exactValue !== undefined || hasMetricData(state, metric, userId, date);
-    if (!hasComparableData(subjectId) || !hasComparableData(viewerId))
+    if (!hasComparableData(subjectId) || !hasComparableData(opponentId))
       continue;
-    const subject = sharedMetricResult(state, metric, subjectId, viewerId, date);
-    const viewer = sharedMetricResult(state, metric, viewerId, viewerId, date);
-    if (subject.mode !== 'exact' || viewer.mode !== 'exact') continue;
+    // The two competitors do not define the privacy boundary. A comparison may
+    // be Friend A versus Friend B, while the signed-in viewer is a third member.
+    // Always resolve both values through that actual viewer's authorization.
+    const subject = sharedMetricResult(
+      state,
+      metric,
+      subjectId,
+      authorizationViewerId,
+      date,
+    );
+    const opponent = sharedMetricResult(
+      state,
+      metric,
+      opponentId,
+      authorizationViewerId,
+      date,
+    );
+    if (subject.mode !== 'exact' || opponent.mode !== 'exact') continue;
     eligibleDays += 1;
+    const authorizedGoalTarget = (userId: string) => {
+      if (userId === authorizationViewerId)
+        return effectiveGoalTarget(state, metric, userId, date);
+      const sharedStatus = statusForDay(
+        state.dailyMetricStatuses,
+        state.group.id,
+        metric.id,
+        userId,
+        date,
+      );
+      const sharedTarget =
+        sharedStatus?.visibility === 'group'
+          ? Number(sharedStatus.goalTarget)
+          : Number.NaN;
+      return Number.isFinite(sharedTarget) ? sharedTarget : metric.goal.target;
+    };
     const competitionScore = (value: number, userId: string) =>
       metric.rankingDirection === "lower"
         ? -value
         : metric.rankingDirection === "closest"
-          ? -Math.abs(
-              value - effectiveGoalTarget(state, metric, userId, date),
-            )
+          ? -Math.abs(value - authorizedGoalTarget(userId))
           : value;
     const subjectScore = competitionScore(subject.value, subjectId);
-    const viewerScore = competitionScore(viewer.value, viewerId);
+    const opponentScore = competitionScore(opponent.value, opponentId);
     if (subjectScore > subjectBestScore) {
       subjectBestScore = subjectScore;
       subjectBest = { value: subject.value, date };
     }
-    if (viewerScore > viewerBestScore) {
-      viewerBestScore = viewerScore;
-      viewerBest = { value: viewer.value, date };
+    if (opponentScore > opponentBestScore) {
+      opponentBestScore = opponentScore;
+      opponentBest = { value: opponent.value, date };
     }
-    if (subjectScore > viewerScore) {
+    if (subjectScore > opponentScore) {
       subjectWins += 1;
       subjectRun += 1;
-      viewerRun = 0;
+      opponentRun = 0;
       subjectLongestStreak = Math.max(subjectLongestStreak, subjectRun);
-    } else if (viewerScore > subjectScore) {
-      viewerWins += 1;
-      viewerRun += 1;
+    } else if (opponentScore > subjectScore) {
+      opponentWins += 1;
+      opponentRun += 1;
       subjectRun = 0;
-      viewerLongestStreak = Math.max(viewerLongestStreak, viewerRun);
+      opponentLongestStreak = Math.max(opponentLongestStreak, opponentRun);
     } else {
       ties += 1;
       subjectRun = 0;
-      viewerRun = 0;
+      opponentRun = 0;
     }
   }
   if (!eligibleDays) return undefined;
-  return { subjectBest, viewerBest, subjectWins, viewerWins, ties, subjectLongestStreak, viewerLongestStreak, eligibleDays };
+  return {
+    subjectBest,
+    opponentBest,
+    subjectWins,
+    opponentWins,
+    ties,
+    subjectLongestStreak,
+    opponentLongestStreak,
+    eligibleDays,
+  };
 }

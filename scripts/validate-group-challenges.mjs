@@ -9,6 +9,7 @@ import {
   challengePeriodDates,
   challengePresetEndDate,
   challengeReminderIntervalDays,
+  challengeStandingPosition,
   groupChallengeAvailability,
   groupChallengeJoinDeadline,
   groupChallengeResponseDeadline,
@@ -87,6 +88,12 @@ assert.deepEqual(challengeValueOutcome(100, 80, "lower"), {
 assert.equal(compareChallengeValues(70, 90, 80, "lower") < 0, true);
 assert.equal(compareChallengeValues(79, 90, 80, "closest") < 0, true);
 assert.equal(compareChallengeValues(12_000, 9_000, 10_000, "higher") < 0, true);
+assert.equal(challengeStandingPosition(100, [100, 100, 90], 0, "higher"), 1);
+assert.equal(
+  challengeStandingPosition(90, [100, 100, 90], 0, "higher"),
+  3,
+  "challenge ranks must share first across ties and skip second",
+);
 assert.deepEqual(challengeValueOutcome(100.5, 100, "closest"), {
   complete: true,
   progress: 1,
@@ -375,6 +382,24 @@ const publicChallengeMigration = fs.readFileSync(
   ),
   "utf8",
 );
+const challengeRankMigration = fs.readFileSync(
+  path.join(
+    root,
+    "supabase",
+    "migrations",
+    "202608270005_challenge_rank_rewards.sql",
+  ),
+  "utf8",
+);
+const challengeVisualMigration = fs.readFileSync(
+  path.join(
+    root,
+    "supabase",
+    "migrations",
+    "202608280002_shared_challenge_visuals.sql",
+  ),
+  "utf8",
+);
 const challengeWorker = fs.readFileSync(
   path.join(
     root,
@@ -383,6 +408,20 @@ const challengeWorker = fs.readFileSync(
     "challenge-notifications",
     "index.ts",
   ),
+  "utf8",
+);
+const publicChallengeProjectionBackend = fs.readFileSync(
+  path.join(
+    root,
+    "supabase",
+    "functions",
+    "_shared",
+    "public-challenge-projection.ts",
+  ),
+  "utf8",
+);
+const publicChallengeProjectionClient = fs.readFileSync(
+  path.join(root, "src", "cloud", "publicChallengeProjection.ts"),
   "utf8",
 );
 const supabaseConfig = fs.readFileSync(
@@ -397,6 +436,10 @@ const cloud = fs.readFileSync(
   path.join(root, "src", "cloud", "groupChallenges.ts"),
   "utf8",
 );
+const challengeSaveClient = cloud.slice(
+  cloud.indexOf("export async function saveGroupChallenge"),
+  cloud.indexOf("export async function respondToGroupChallenge"),
+);
 const progress = fs.readFileSync(
   path.join(root, "src", "domain", "groupChallenges.ts"),
   "utf8",
@@ -406,6 +449,11 @@ const badges = fs.readFileSync(
   "utf8",
 );
 const badgeScreen = fs.readFileSync(path.join(root, "app", "badges.tsx"), "utf8");
+const alertsScreen = fs.readFileSync(path.join(root, "app", "alerts.tsx"), "utf8");
+const badgeChallengeInputs = fs.readFileSync(
+  path.join(root, "src", "cloud", "useBadgeChallengeInputs.ts"),
+  "utf8",
+);
 const memberComparison = fs.readFileSync(
   path.join(root, "app", "member", "[id].tsx"),
   "utf8",
@@ -430,9 +478,41 @@ const groupSettings = fs.readFileSync(
   path.join(root, "app", "group-settings.tsx"),
   "utf8",
 );
+const challengeVisual = fs.readFileSync(
+  path.join(root, "src", "components", "ChallengeVisual.tsx"),
+  "utf8",
+);
+const challengesScreen = fs.readFileSync(
+  path.join(root, "app", "challenges.tsx"),
+  "utf8",
+);
 const groupNotificationEvents = fs.readFileSync(
   path.join(root, "src", "cloud", "groupNotificationEvents.ts"),
   "utf8",
+);
+const publicProjectionBatchFunction = challengeRankMigration.slice(
+  challengeRankMigration.indexOf(
+    "create or replace function public.project_public_challenge_totals_batch",
+  ),
+  challengeRankMigration.indexOf(
+    "revoke all on function public.project_public_challenge_totals_batch",
+  ),
+);
+const publicProjectionCacheFunction = challengeRankMigration.slice(
+  challengeRankMigration.indexOf(
+    "create or replace function public.refresh_public_challenge_snapshot_cache",
+  ),
+  challengeRankMigration.indexOf(
+    "revoke all on function public.refresh_public_challenge_snapshot_cache",
+  ),
+);
+const legacyPublicProjectionFunction = challengeRankMigration.slice(
+  challengeRankMigration.indexOf(
+    "create or replace function public.publish_joined_public_challenge_totals",
+  ),
+  challengeRankMigration.indexOf(
+    "revoke all on function public.publish_joined_public_challenge_totals",
+  ),
 );
 
 assert.match(migration, /alter table public\.group_challenges enable row level security/i);
@@ -525,6 +605,16 @@ assert.match(cloud, /viewerParticipation: row\.viewer_participation/);
 assert.match(cloud, /eligibleToJoin: row\.eligible_to_join/);
 assert.match(cloud, /p_recurrence: input\.recurrence \?\? null/);
 assert.match(cloud, /p_end_date: input\.endDate \?\? input\.localDate/);
+assert.match(cloud, /rpc\("list_my_challenge_standings"/);
+assert.match(cloud, /rpc\(\s*"list_challenge_standings"/);
+assert.match(cloud, /rpc\("set_my_challenge_preference"/);
+assert.match(cloud, /rpc\("withdraw_from_group_challenge"/);
+assert.doesNotMatch(
+  cloud,
+  /body:\s*"A friend accepted your challenge\."/,
+  "client acceptance fallback must carry the accepting account name",
+);
+assert.match(hook, /state\.groups[\s\S]{0,240}\.name \?\?[\s\S]{0,80}"A member"/);
 assert.match(cloud, /category: "challenge"/);
 assert.match(cloud, /eventKey: `challenge-started:\$\{challenge\.id\}`/);
 assert.doesNotMatch(
@@ -576,6 +666,7 @@ assert.match(progress, /limit = 200/);
 assert.match(progress, /\.slice\(0, Math\.max\(0, Math\.floor\(limit\)\)\)/);
 assert.match(progress, /expandGroupChallengeOccurrences\(challenges, earliest, throughDate, 5_000\)/);
 assert.match(progress, /acceptedChallengeParticipantIds\(challenge\)/);
+assert.match(progress, /challengeStandingPosition\(/);
 assert.match(badges, /id: `challenge-wins:\$\{member\.id\}`/);
 assert.equal(
   (badges.match(/id: `challenge-wins:\$\{member\.id\}`/g) ?? []).length,
@@ -584,9 +675,90 @@ assert.equal(
 );
 assert.match(badges, /`\$\{count\} challenge win`/);
 assert.match(badges, /`\$\{count\} challenge wins`/);
+assert.match(badges, /"challenge-seconds:": 60/);
+assert.match(badges, /"challenge-thirds:": 35/);
+assert.match(badges, /"challenge-finishes:": 15/);
+assert.match(badges, /id: `\$\{id\}:\$\{member\.id\}`/);
+assert.match(
+  challengeEditor,
+  /<SelectionMenu[\s\S]{0,180}title="Choose tracker"[\s\S]{0,220}multiple=\{false\}/,
+  "challenge tracker selection should use the accessible list menu",
+);
+assert.match(challengesScreen, /const handlePageChange = useCallback/);
+assert.match(challengesScreen, /onPageSettled=\{handlePageChange\}/);
+assert.match(challengesScreen, /Your rank · #\$\{standingPosition\} of/);
+assert.match(challengesScreen, /setExpandedId/);
+assert.match(
+  challengesScreen,
+  /loadChallengeStandings\(\s*groupChallengeSourceId\(challenge\),\s*challenge\.localDate/,
+  "expanded recurring challenge cards must request their exact occurrence",
+);
+assert.match(challengesScreen, /discoverActive: true/);
+assert.match(challengesScreen, /challengeSettlementKey\(/);
+assert.match(
+  challengesScreen,
+  /RECENT_PAST_OCCURRENCE_LIMIT = 200[\s\S]{0,9000}expandGroupChallengeOccurrences\([\s\S]{0,220}RECENT_PAST_OCCURRENCE_LIMIT/,
+  "the Challenges screen must bound ordinary Past rendering",
+);
+assert.match(
+  challengesScreen,
+  /requestedOccurrence[\s\S]{0,500}!rows\.some[\s\S]{0,220}rows\.push\(requestedOccurrence\)/,
+  "an exact older notification occurrence must survive the recent-history cap",
+);
+assert.match(challengesScreen, /challengeShareAt: Date\.now\(\)\.toString\(\)/);
+assert.match(challengesScreen, /onLongPress=\{\(\) => setEditingMode\(true\)\}/);
+assert.match(groupScreen, /useChallengePreferences\(\)/);
+assert.match(groupScreen, /preference\?\.hidden \|\| preference\?\.withdrawnAt/);
+assert.match(groupScreen, /onRemove=\{\(\) => hideChallenge\(challenge\)\}/);
+assert.match(
+  badgeChallengeInputs,
+  /useGroupChallenges\(groupId\)[\s\S]*useSettledChallengeResults\(groupId\)[\s\S]*usePublicChallenges\(loadPublicPlacements\)/,
+  "shared badge inputs must combine live group challenges, durable settlements, and gated public challenges",
+);
+assert.match(
+  badgeChallengeInputs,
+  /localChallengeIds[\s\S]*!localChallengeIds\.has\(groupChallengeSourceId\(challenge\)\)[\s\S]*groupChallengeEndDate\(challenge\) < anchor/,
+  "public badge placements must exclude group duplicates and unfinished occurrences",
+);
+assert.match(
+  badgeChallengeInputs,
+  /expandGroupChallengeOccurrences\(sources, earliest, anchor, 500\)/,
+  "public badge occurrence expansion must remain bounded",
+);
+assert.match(
+  badgeChallengeInputs,
+  /loadChallengeViewerStandings\(publicPlacementRequests\)[\s\S]*\[publicPlacementChallengeKey\]/,
+  "public badge standings must be loaded in one bounded request behind a stable occurrence key",
+);
+assert.match(
+  badgeChallengeInputs,
+  /\.\.\.\(settledChallengeResults\.placements \?\? \[\]\)[\s\S]*\.\.\.publicChallengePlacements/,
+  "shared badge inputs must merge immutable group settlements with privacy-safe public placements",
+);
+assert.match(
+  badgeChallengeInputs,
+  /challenges: challengeCloud\.challenges[\s\S]*placements,[\s\S]*settledOccurrenceKeys: settledChallengeResults\.occurrenceKeys/,
+  "the shared hook must expose the complete challenge badge contract",
+);
 assert.match(
   badgeScreen,
-  /buildBadges\(state, anchor, challengeCloud\.challenges\)/,
+  /const badgeChallengeInputs = useBadgeChallengeInputs\([\s\S]*?state\.group\.id,[\s\S]*?state\.currentUserId,[\s\S]*?anchor,[\s\S]*?\);/,
+  "the badge cabinet must obtain its challenge inputs from the shared hook",
+);
+assert.match(
+  badgeScreen,
+  /buildBadges\([\s\S]*?badgeChallengeInputs\.challenges,[\s\S]*?badgeChallengeInputs\.placements,[\s\S]*?badgeChallengeInputs\.settledOccurrenceKeys,[\s\S]*?\)/,
+  "badge XP must consume every shared challenge input",
+);
+assert.match(
+  alertsScreen,
+  /const badgeChallengeInputs = useBadgeChallengeInputs\([\s\S]*?state\.group\.id,[\s\S]*?state\.currentUserId,[\s\S]*?badgeAnchor,[\s\S]*?filter === "badges",[\s\S]*?\);/,
+  "badge alerts must share the same inputs and gate public placement reads to the badge tab",
+);
+assert.match(
+  alertsScreen,
+  /buildBadges\([\s\S]*?badgeChallengeInputs\.challenges,[\s\S]*?badgeChallengeInputs\.placements,[\s\S]*?badgeChallengeInputs\.settledOccurrenceKeys,[\s\S]*?\)/,
+  "badge alerts must consume every shared challenge input",
 );
 assert.match(
   memberComparison,
@@ -643,6 +815,22 @@ assert.doesNotMatch(
 assert.match(challengeEditor, /mode: repeatMode/);
 assert.match(challengeEditor, /endDate: repeatUntil/);
 assert.match(challengeEditor, /label: "Most wins"/);
+assert.match(
+  challengeEditor,
+  /styles\.ruleChoices, styles\.targetRuleChoices/,
+  "target and most-wins controls must not touch the tracker picker",
+);
+assert.match(challengeEditor, /const \[visualOpen, setVisualOpen\] = useState\(false\)/);
+assert.match(
+  challengeEditor,
+  /accessibilityState=\{\{ expanded: visualOpen \}\}/,
+  "optional challenge art must begin collapsed and disclose an accessible icon picker",
+);
+assert.match(challengeEditor, /CHALLENGE_VISUAL_ICONS\.map\(\(icon\) =>/);
+assert.match(challengeEditor, /ImagePicker\.launchImageLibraryAsync/);
+assert.match(challengeEditor, /previousVisualImageStoragePath: challenge\?\.visualImageStoragePath/);
+assert.match(challengeVisual, /imageUri \? \([\s\S]{0,180}<Image/);
+assert.match(challengeVisual, /challenge\.audience === "public" \? "earth-outline" : "trophy-outline"/);
 assert.match(challengeEditor, /items=\{CHALLENGE_DURATION_OPTIONS\}/);
 assert.match(challengeEditor, /endDate: resolvedEndDate/);
 assert.match(challengeEditor, /function recurringScheduleKey/);
@@ -696,6 +884,21 @@ assert.match(
   "paged challenge focus must remain pending until the requested page/card is laid out",
 );
 assert.match(groupScreen, /styles\.challengeHighlightRing/);
+assert.match(groupScreen, /<ChallengeVisual challenge=\{challenge\}/);
+assert.match(
+  challengesScreen,
+  /function openChallengeInLeaderboard\(challenge: GroupChallenge\)[\s\S]{0,320}preference\?\.hidden[\s\S]{0,500}pathname: "\/\(tabs\)\/group"[\s\S]{0,300}challengeOccurrenceDate: challenge\.localDate/,
+  "visible challenge icons and names must deep-link to the exact Leaderboard occurrence",
+);
+assert.ok(
+  (challengesScreen.match(/accessibilityRole="link"/g) ?? []).length >= 2,
+  "both the challenge image and name must expose the Leaderboard deep link",
+);
+assert.match(
+  challengesScreen,
+  /const canOpenInLeaderboard =[\s\S]{0,180}!preference\?\.hidden[\s\S]{0,180}state\.groups\.some/,
+  "hidden or inaccessible challenges must keep their established non-navigation behavior",
+);
 assert.match(
   groupScreen,
   /leaderboardDateNavigatorCollapsedByGroup[\s\S]{0,180}\[state\.group\.id\]: dateNavigatorOpen/,
@@ -729,6 +932,193 @@ assert.match(periodMigration, /create or replace function public\.stage_group_ch
 assert.match(publicChallengeMigration, /create or replace function public\.list_public_challenges/i);
 assert.match(publicChallengeMigration, /create or replace function public\.save_public_challenge/i);
 assert.match(
+  challengeVisualMigration,
+  /add column if not exists visual_icon text,[\s\S]{0,100}add column if not exists visual_image_path text/i,
+);
+assert.match(
+  challengeVisualMigration,
+  /create unique index if not exists group_challenges_visual_image_path_uidx/i,
+  "one private media object must not be attached to multiple challenges",
+);
+assert.match(
+  challengeVisualMigration,
+  /create or replace function public\.list_challenge_visuals[\s\S]{0,500}cardinality\(p_challenge_ids\) > 500[\s\S]{0,900}challenge\.audience = 'public'[\s\S]{0,180}public\.is_group_member\(challenge\.group_id\)/i,
+  "visual discovery must stay bounded and reuse challenge authorization",
+);
+assert.match(
+  challengeVisualMigration,
+  /v_saved := public\.save_group_challenge\([\s\S]{0,1000}p_visual_image_path is distinct from v_saved\.visual_image_path[\s\S]{0,300}v_user_id::text \|\| '\/account\/challenge\/'[\s\S]{0,550}storage\.objects/i,
+  "the compatible group-save overload must validate each new owner-scoped object",
+);
+assert.match(
+  challengeVisualMigration,
+  /v_saved := public\.save_public_challenge\([\s\S]{0,1000}p_visual_image_path is distinct from v_saved\.visual_image_path[\s\S]{0,700}storage\.objects/i,
+  "the compatible public-save overload must enforce the same object validation",
+);
+assert.match(
+  challengeVisualMigration,
+  /create or replace function public\.can_read_challenge_media_object[\s\S]{0,600}google_health_account_deletion_guards[\s\S]{0,500}challenge\.visual_image_path = object_path[\s\S]{0,300}public\.is_group_member/i,
+  "signed challenge image reads must fail closed for deleted accounts and former outsiders",
+);
+assert.match(
+  challengeVisualMigration,
+  /create policy media_storage_authorized_read[\s\S]{0,220}public\.can_read_media_object\(name\)[\s\S]{0,100}public\.can_read_challenge_media_object\(name\)/i,
+  "challenge reads must extend rather than replace existing media authorization",
+);
+assert.match(
+  cloud,
+  /createSignedUrls\(paths, 60 \* 60\)[\s\S]*p_visual_icon: input\.visualIcon[\s\S]*p_visual_image_path: visualImagePath/,
+  "the client must resolve short-lived display URLs while persisting only vetted metadata",
+);
+assert.match(
+  cloud,
+  /const path = `\$\{userId\}\/account\/challenge\/\$\{nonce\}/,
+  "a new image must be uploaded privately before the atomic relational save",
+);
+assert.match(
+  cloud,
+  /if \(input\.visualImageUploadUri\)[\s\S]{0,180}uploadedPath = await uploadChallengeVisual\(input\.visualImageUploadUri\);[\s\S]{0,180}const row = await saveChallengeRow/,
+  "the private upload must complete before the challenge row publishes its path",
+);
+assert.doesNotMatch(
+  challengeSaveClient,
+  /createdRow|delete_group_challenge/,
+  "image upload failure must not leave a provisional visible challenge",
+);
+assert.match(
+  challengeRankMigration,
+  /create or replace function public\.list_my_challenge_standings/i,
+  "viewer rank RPC must require accepted participation and expose no full standings",
+);
+assert.match(
+  challengeRankMigration,
+  /create table if not exists public\.group_challenge_result_settlements[\s\S]{0,500}primary key \(challenge_id, occurrence_date\)/i,
+  "settlement truth must be occurrence-scoped and independent of inbox retention",
+);
+assert.match(
+  challengeRankMigration,
+  /create table if not exists public\.group_challenge_result_placements[\s\S]*primary key \(challenge_id, occurrence_date, user_id\)/i,
+  "settled challenge placements must be immutable occurrence snapshots",
+);
+assert.match(
+  challengeRankMigration,
+  /snapshot_group_challenge_result[\s\S]{0,2600}pg_advisory_xact_lock[\s\S]{0,700}insert into public\.group_challenge_result_settlements[\s\S]{0,500}if not found then return/i,
+  "only one serialized snapshot computation may claim an occurrence",
+);
+assert.match(
+  challengeRankMigration,
+  /create trigger group_notification_events_capture_result_snapshot[\s\S]{0,180}capture_group_challenge_result_snapshot/i,
+  "the canonical result event must freeze standings in the same transaction",
+);
+assert.match(
+  challengeRankMigration,
+  /create or replace function public\.list_group_challenge_result_placements\([\s\S]{0,300}p_before_occurrence_date[\s\S]{0,180}p_page_size[\s\S]{0,1800}with occurrence_page[\s\S]{0,1000}limit p_page_size/i,
+  "durable group history must be cursor-paged by complete occurrences",
+);
+assert.match(
+  challengeRankMigration,
+  /audience = 'group'[\s\S]{0,100}cardinality\(participant_ids\) between 1 and 50/i,
+  "group challenge participation must retain the hard 50-person response bound",
+);
+assert.match(
+  challengeRankMigration,
+  /bounded_legacy_participants[\s\S]{0,1000}limit 50[\s\S]{0,1000}participant_ids = bounded\.participant_ids/i,
+  "legacy public custom-metric rows must be bounded when reclassified as group challenges",
+);
+assert.match(
+  challengeRankMigration,
+  /p_page_size integer default 20[\s\S]{0,900}p_page_size not between 1 and 20/i,
+  "each durable placement page must remain at or below 1,000 rows",
+);
+assert.match(
+  cloud,
+  /const pageSize = 20[\s\S]{0,250}for \(;;\)[\s\S]{0,500}p_before_occurrence_date[\s\S]{0,200}p_page_size: pageSize[\s\S]{0,900}occurrenceCount < pageSize[\s\S]{0,700}beforeChallengeId = last\.challenge_id/,
+  "the client must consume every durable result page without a silent history cap",
+);
+assert.doesNotMatch(
+  cloud,
+  /\]\.slice\(0, 500\)/,
+  "viewer and result occurrence requests must be chunked without silent truncation",
+);
+assert.match(
+  challengeRankMigration,
+  /create or replace function public\.compute_public_challenge_total[\s\S]*public\.daily_metric_status[\s\S]*public_challenge_snapshot_daily_cache/i,
+  "public totals must prefer server status and use only the private daily cache as fallback",
+);
+assert.match(
+  challengeRankMigration,
+  /create table if not exists public\.group_challenge_user_preferences/i,
+);
+assert.match(
+  challengeRankMigration,
+  /enable row level security[\s\S]{0,520}user_id = \(select auth\.uid\(\)\)/i,
+  "challenge preferences must be private account-owned rows",
+);
+assert.match(
+  challengeRankMigration,
+  /create or replace function public\.withdraw_from_group_challenge/i,
+);
+assert.match(
+  challengeRankMigration,
+  /withdrawn_from_date date[\s\S]{0,6000}group_challenge_occurrence_participant_ids[\s\S]{0,1500}withdrawn_from_date <= p_occurrence_date/i,
+  "a recurring withdrawal must be scoped to this and future occurrences",
+);
+assert.match(
+  challengeRankMigration,
+  /v_challenge\.recurrence is null[\s\S]{0,180}mode', 'once'\) = 'once'[\s\S]{0,220}group_challenge_join_deadline\(v_challenge\) >= v_local_today[\s\S]{0,850}accepted_participant_ids = array_remove/i,
+  "only a live one-off may rewrite the shared accepted roster",
+);
+assert.match(
+  challengeRankMigration,
+  /withdrawn_at is not null[\s\S]{0,220}accepted_participant_ids/i,
+  "withdrawal must be server-enforced against later rejoin",
+);
+assert.match(
+  challengeRankMigration,
+  /create or replace function public\.list_challenge_standings[\s\S]*accepted_participant_ids[\s\S]*row_number\(\) over[\s\S]*display_row <= 100[\s\S]*ranked\.user_id = v_user_id[\s\S]*limit 101/i,
+  "public standings must return a deterministic top 100 plus the viewer without PostgREST truncation",
+);
+assert.match(
+  challengeRankMigration,
+  /audience = 'group'[\s\S]{0,100}cardinality\(participant_ids\) between 1 and 50[\s\S]*where v_challenge\.audience = 'group'[\s\S]{0,160}limit 101/i,
+  "the shared top-100 contract must still return every member of a bounded group challenge",
+);
+assert.match(
+  challengeRankMigration,
+  /rank\(\) over \(order by scored\.sort_value\)/i,
+  "server challenge standings must share ranks across ties",
+);
+assert.match(
+  challengeRankMigration,
+  /v_user_id = any\(challenge\.accepted_participant_ids\)/i,
+);
+assert.match(
+  challengeRankMigration,
+  /grant execute on function public\.list_my_challenge_standings\(uuid\[\], date\[\]\)[\s\S]{0,80}to authenticated/i,
+);
+assert.match(
+  challengeRankMigration,
+  /parsed\.occurrence_date > v_local_today/i,
+  "publication and live standings must share the caller profile's local day",
+);
+assert.match(challengeRankMigration, /eligible\.occurrence_end_date >= v_local_today/i);
+assert.match(challengeRankMigration, /v_period_end < v_local_today/i);
+assert.ok(
+  (challengeRankMigration.match(/challenge_account_local_date\(v_user_id\)/g) ?? [])
+    .length >= 4,
+  "publisher, public editor, standings, and withdrawal must use profile-local dates",
+);
+assert.match(
+  challengeRankMigration,
+  /v_existing\.group_id <> p_group_id[\s\S]{0,180}cannot move between groups/i,
+  "public challenge edits must validate the metric against their stored group",
+);
+assert.match(
+  challengeRankMigration,
+  /bounded_legacy_participants[\s\S]{0,2500}update public\.group_challenges challenge[\s\S]{0,180}set audience = 'group'/i,
+  "legacy public custom-metric rows must be retained behind group membership",
+);
+assert.match(
   publicChallengeMigration,
   /using gin \(accepted_participant_ids\)[\s\S]{0,100}audience = 'public'/i,
   "background public challenge projection needs an accepted-participant GIN index",
@@ -746,18 +1136,243 @@ assert.match(
 assert.match(publicChallengeMigration, /Waiting for challenge results/i);
 assert.match(publicChallengeMigration, /v_waiting_names/i);
 assert.match(
-  publicChallengeMigration,
-  /then challenge_projection\.synced_at/i,
-  "public settlement must require the challenge-specific aggregate sync checkpoint",
+  challengeRankMigration,
+  /create table if not exists public\.public_challenge_occurrence_syncs[\s\S]{0,500}primary key \(challenge_id, occurrence_date, user_id\)/i,
+  "public settlement checkpoints must identify one exact occurrence",
 );
 assert.match(
-  publicChallengeMigration,
-  /left join public\.public_challenge_participant_syncs challenge_projection/i,
+  challengeRankMigration,
+  /left join public\.user_snapshots current_snapshot[\s\S]{0,250}current_snapshot\.user_id = accepted\.user_id/i,
+  "public settlement must compare each projection checkpoint with its current account snapshot",
 );
 assert.match(
-  publicChallengeMigration,
-  /jsonb_array_length\(p_rows\) > 500[\s\S]{0,1800}jsonb_to_recordset\(p_rows\)[\s\S]{0,5200}on conflict \(challenge_id, occurrence_date, user_id\) do update/i,
-  "public aggregate publishing must be bounded and set-based",
+  challengeRankMigration,
+  /challenge_projection\.synced_at[\s\S]{0,260}occurrence_end_date \+ 1[\s\S]{0,420}challenge_projection\.source_updated_at is not null[\s\S]{0,220}current_snapshot\.updated_at is not null[\s\S]{0,220}challenge_projection\.source_updated_at =[\s\S]{0,80}current_snapshot\.updated_at/i,
+  "settlement must require a post-deadline attempt from the participant's current snapshot revision",
+);
+assert.match(
+  challengeRankMigration,
+  /v_old_waiting_projection[\s\S]{0,1200}v_new_waiting_projection[\s\S]{0,1600}not \([\s\S]{0,1100}challenge_projection\.source_updated_at =[\s\S]{0,80}current_snapshot\.updated_at/i,
+  "waiting names must use the same current-revision readiness predicate as settlement",
+);
+assert.match(
+  challengeRankMigration,
+  /public\.public_challenge_occurrence_syncs[\s\S]{0,1800}challenge_projection\.occurrence_date = v_challenge\.occurrence_date/i,
+  "the installed worker must wait for the exact occurrence checkpoint",
+);
+assert.match(
+  challengeRankMigration,
+  /jsonb_array_length\(p_rows\) > 500[\s\S]{0,5000}written as \([\s\S]{0,1800}returning challenge_id, occurrence_date[\s\S]{0,500}insert into public\.public_challenge_occurrence_syncs/i,
+  "only a successfully computed aggregate may advance its occurrence checkpoint",
+);
+assert.match(
+  publicProjectionBatchFunction,
+  /p_limit integer default 500[\s\S]*refresh_public_challenge_snapshot_cache\([\s\S]*public_challenge_projection_pending/i,
+  "durable public projection batches must page unsettled stale occurrences from server-owned state",
+);
+assert.match(
+  publicProjectionBatchFunction,
+  /if not exists \([\s\S]{0,500}challenge\.accepted_participant_ids @> array\[p_user_id\][\s\S]{0,100}return 0;[\s\S]{0,200}refresh_public_challenge_snapshot_cache\(/i,
+  "accounts without an accepted public challenge must return before snapshot parsing",
+);
+assert.doesNotMatch(
+  `${publicProjectionBatchFunction}\n${publicProjectionCacheFunction}`,
+  /p_user_id = any\(challenge\.accepted_participant_ids\)/i,
+  "projection discovery must use the accepted-roster GIN containment operator",
+);
+assert.match(publicProjectionBatchFunction, /group_challenge_result_settlements/i);
+assert.match(publicProjectionBatchFunction, /marker\.source_updated_at < v_source_updated_at/i);
+assert.match(
+  publicProjectionBatchFunction,
+  /insert into public\.public_challenge_occurrence_syncs/i,
+);
+assert.doesNotMatch(
+  publicProjectionBatchFunction,
+  /jsonb_array_elements|compute_public_challenge_total\(/i,
+  "the batch path must neither reparse the snapshot nor invoke a scorer per occurrence",
+);
+assert.match(
+  challengeRankMigration,
+  /create table if not exists public\.public_challenge_snapshot_daily_cache[\s\S]{0,700}primary key \(user_id, metric_slug, local_date\)[\s\S]{0,400}enable row level security[\s\S]{0,180}revoke all/i,
+  "the aggregate snapshot cache must be indexed and inaccessible to clients",
+);
+assert.match(
+  publicProjectionCacheFunction,
+  /for update[\s\S]*v_cached_updated_at is not distinct from v_source_updated_at[\s\S]*delete from public\.public_challenge_snapshot_daily_cache[\s\S]*jsonb_array_elements\(v_payload -> 'metrics'\)[\s\S]*jsonb_array_elements\(v_payload -> 'entries'\)[\s\S]*entry\.visibility = 'group'[\s\S]*entry\.visibility <> 'group'[\s\S]*source_updated_at = v_source_updated_at/i,
+  "one serialized cache refresh must parse each snapshot revision once with strict visibility metadata",
+);
+assert.match(
+  publicProjectionCacheFunction,
+  /v_cached_metric_fingerprint is not distinct from v_metric_fingerprint[\s\S]*accepted_metrics as materialized[\s\S]*challenge\.audience = 'public'[\s\S]*challenge\.accepted_participant_ids @> array\[p_user_id\][\s\S]*accepted\.metric_slug = \(metric\.value ->> 'id'\)[\s\S]*metric_fingerprint = v_metric_fingerprint/i,
+  "snapshot cache rebuilds must follow accepted public metric changes and retain only required metric slugs",
+);
+assert.match(
+  legacyPublicProjectionFunction,
+  /refresh_public_challenge_snapshot_cache\([\s\S]*compute_public_challenge_total\([\s\S]*source_updated_at/i,
+  "the zero-downtime legacy publisher must refresh the shared cache once before per-row scoring",
+);
+assert.match(
+  legacyPublicProjectionFunction,
+  /cardinality\(v_ids\) = 0 then return 0; end if;[\s\S]*refresh_public_challenge_snapshot_cache\(/i,
+  "an empty legacy request must return before snapshot cache work",
+);
+assert.equal(
+  (challengeRankMigration.match(/jsonb_array_elements\(v_payload -> 'entries'\)/g) ?? [])
+    .length,
+  1,
+  "snapshot entry JSON may be expanded only in the revision-keyed cache refresh",
+);
+assert.match(
+  publicProjectionBatchFunction,
+  /catalogue_fingerprint[\s\S]*projection_date[\s\S]*v_cursor_projection_date is distinct from v_local_today[\s\S]*before_occurrence_date[\s\S]*occurrence\.occurrence_date < v_before_occurrence_date/i,
+  "the durable cursor must reset on catalogue/day changes and resume within a recurring series",
+);
+assert.match(
+  publicProjectionBatchFunction,
+  /select min\(pending\.occurrence_date\)[\s\S]*set before_occurrence_date = v_before_occurrence_date[\s\S]*v_has_more := true[\s\S]*return case when v_has_more then p_limit else v_written end/i,
+  "a full occurrence page and every later challenge must return the continuation sentinel",
+);
+assert.match(
+  publicProjectionBatchFunction,
+  /preference\.challenge_id = occurrence\.challenge_id[\s\S]{0,220}preference\.user_id = p_user_id[\s\S]{0,220}withdrawn_from_date <= occurrence\.occurrence_date/i,
+  "single-user projection eligibility must not unnest a 5,000-person roster per occurrence",
+);
+assert.doesNotMatch(
+  publicProjectionBatchFunction,
+  /group_challenge_occurrence_participant_ids\(/i,
+  "batch eligibility must use the indexed account preference directly",
+);
+assert.match(
+  publicProjectionBatchFunction,
+  /marker\.synced_at < \([\s\S]{0,180}occurrence\.period_end \+ 1[\s\S]*v_synced_at,[\s\S]*v_source_updated_at[\s\S]*source_updated_at = excluded\.source_updated_at/i,
+  "an unchanged snapshot must still publish a post-deadline attempt while retaining its source watermark",
+);
+assert.match(
+  challengeRankMigration,
+  /revoke all on function public\.project_public_challenge_totals_batch\(uuid, integer\)[\s\S]{0,100}authenticated[\s\S]{0,180}grant execute[\s\S]{0,120}service_role/i,
+  "cross-account projection must remain service-role only",
+);
+assert.match(
+  challengeRankMigration,
+  /project_my_public_challenge_totals_batch[\s\S]{0,900}auth\.uid\(\)[\s\S]{0,900}grant execute[\s\S]{0,120}authenticated/i,
+  "the client projection wrapper may only project the signed-in account",
+);
+assert.match(
+  challengeRankMigration,
+  /Public challenges may contain thousands[\s\S]{0,9000}challenge_worker_standings[\s\S]{0,4500}v_exact_calls <> 7/i,
+  "the notification worker must replace every per-recipient scorer call with one materialized standing set",
+);
+assert.match(
+  challengeRankMigration,
+  /limit v_recipient_budget[\s\S]{0,180}v_recipient_budget := v_recipient_budget - 1[\s\S]{0,500}exit when v_recipient_budget <= 0/i,
+  "one invocation must rotate through a bounded global recipient budget",
+);
+assert.match(
+  challengeRankMigration,
+  /v_waiting_continue_replacement[\s\S]{0,500}set last_reminder_at = clock_timestamp\(\)[\s\S]{0,100}updated_at = clock_timestamp\(\)[\s\S]{0,250}continue;/i,
+  "waiting recipients must advance their rotation timestamp even when the push event already exists",
+);
+assert.match(
+  challengeRankMigration,
+  /group_challenge_notification_state_pending_idx[\s\S]{0,180}where result_notified_at is null/i,
+  "the worker's durable pending-occurrence lookup must be indexed",
+);
+assert.match(
+  challengeRankMigration,
+  /v_retry_replacement[\s\S]{0,1000}min\(pending_state\.occurrence_date\)[\s\S]{0,260}pending_state\.result_notified_at is null/i,
+  "unsettled occurrences older than 30 days must remain in the worker retry window",
+);
+assert.match(
+  challengeRankMigration,
+  /pg_catalog\.replace\([\s\S]{0,100}v_retry_anchor,[\s\S]{0,100}v_retry_replacement/i,
+  "the installed worker must receive the durable retry-window replacement",
+);
+assert.match(
+  periodMigration,
+  /set last_leader_id = v_leader\.user_id[\s\S]{0,500}updated_at = clock_timestamp\(\)/i,
+  "live recipients must advance rotation state even when no reminder is due",
+);
+assert.match(
+  publicChallengeProjectionBackend,
+  /from\("public_challenge_occurrence_syncs"\)[\s\S]{0,500}occurrence_date: row\.occurrence_date[\s\S]{0,300}challenge_id,occurrence_date,user_id/,
+  "background Google Health projection must publish occurrence-scoped checkpoints",
+);
+for (const [source, rpcName, label] of [
+  [
+    publicChallengeProjectionClient,
+    "project_my_public_challenge_totals_batch",
+    "client",
+  ],
+  [
+    publicChallengeProjectionBackend,
+    "project_public_challenge_totals_batch",
+    "Edge",
+  ],
+]) {
+  assert.match(
+    source,
+    /for \(let batch = 0; batch < MAX_PROJECTION_BATCHES; batch \+= 1\)[\s\S]*\.rpc\([A-Z_]*BATCH_RPC,[\s\S]*batchWritten < PROJECTION_BATCH_SIZE/,
+    `${label} projection must consume bounded server continuation pages`,
+  );
+  assert.match(
+    source,
+    /const MAX_PROJECTION_BATCHES = 20;[\s\S]*for \(let batch = 0; batch < MAX_PROJECTION_BATCHES; batch \+= 1\)[\s\S]*if \(batchWritten < PROJECTION_BATCH_SIZE\) return written;[\s\S]*return written;/,
+    `${label} projection must cap PostgREST amplification and leave its durable cursor for a later sync`,
+  );
+  assert.doesNotMatch(
+    source,
+    /Public challenge projection did not converge/,
+    `${label} projection must treat its per-sync budget as durable progress rather than a retryable failure`,
+  );
+  assert.match(
+    source,
+    new RegExp(`const [A-Z_]*BATCH_RPC = "${rpcName}"`),
+    `${label} projection must call the intended server-owned batch RPC`,
+  );
+  assert.match(
+    source,
+    /batchProjectionRpcUnavailable[\s\S]{0,500}42883[\s\S]{0,120}PGRST202[\s\S]{0,800}batch === 0 && batchProjectionRpcUnavailable/i,
+    `${label} may use its zero-downtime fallback only when the new RPC is unavailable`,
+  );
+  assert.match(
+    source,
+    /order\("id", \{ ascending: true \}\)[\s\S]{0,120}limit\(LEGACY_CATALOGUE_PAGE_SIZE\)[\s\S]{0,160}\.gt\("id", cursor\)/,
+    `${label} fallback must cursor-page every accepted public challenge`,
+  );
+  assert.doesNotMatch(
+    source,
+    /\.slice\(0,\s*250\)|\.limit\(100\)/,
+    `${label} fallback must not silently truncate accepted challenges`,
+  );
+}
+assert.doesNotMatch(
+  publicChallengeProjectionClient,
+  /\bperiodMetricResult\b/,
+  "the client fallback must not score public challenges from unrestricted local totals",
+);
+assert.match(
+  publicChallengeProjectionClient,
+  /select\("id, group_id, metric_slug, local_date, end_date, recurrence"\)[\s\S]*legacyProjectionResult\(state, challenge, metric, dates\)/,
+  "the client fallback must carry group identity into its visibility-aware scorer",
+);
+assert.match(
+  publicChallengeProjectionClient,
+  /status\.visibility !== "group"[\s\S]*hasRestrictedDay[\s\S]*entry\.visibility === "group"/,
+  "the client fallback must fail closed on restricted-only days and aggregate explicit group rows only",
+);
+assert.match(
+  publicChallengeProjectionBackend,
+  /entry\.visibility !== "group"[\s\S]{0,500}restrictedDates\.add\(localDate\)[\s\S]{0,500}hasRestrictedDay[\s\S]{0,500}daily\.has\(localDate\)/,
+  "Edge fallback must fail closed for restricted-only dates while allowing an explicit group replacement",
+);
+assert.match(
+  publicChallengeProjectionBackend,
+  /42P01[\s\S]{0,200}PGRST204[\s\S]{0,200}PGRST205/,
+  "the Edge rollout may fall back to the legacy marker only when the new table is not installed yet",
+);
+assert.match(
+  publicChallengeProjectionBackend,
+  /occurrenceSyncSchemaUnavailable\(markers\.error\)[\s\S]{0,900}public_challenge_participant_syncs/,
 );
 assert.match(
   publicChallengeMigration,
@@ -768,6 +1383,11 @@ assert.match(
   publicChallengeMigration,
   /name_group_challenge_acceptance[\s\S]{0,1200}accepted your challenge/i,
   "acceptance events must name the accepting account",
+);
+assert.match(
+  challengeRankMigration,
+  /You finished #1[\s\S]{0,500}finished second[\s\S]{0,500}You placed #/i,
+  "durable challenge results must summarize winner, second place, or the viewer's rank",
 );
 assert.match(
   notificationAmbiguityRepair,
@@ -1045,6 +1665,16 @@ assert.match(periodMigration, /group-challenge-notifications-hourly/);
 assert.match(challengeWorker, /stage_group_challenge_notifications/);
 assert.match(challengeWorker, /\.is\("dispatched_at", null\)/);
 assert.match(challengeWorker, /\/functions\/v1/);
+assert.match(
+  cloud,
+  /category: "challenge"[\s\S]{0,320}route: "\/challenges"/,
+  "client challenge pushes must open the dedicated Challenges screen",
+);
+assert.match(
+  challengeRankMigration,
+  /emit_group_challenge_notification_events\(\)[\s\S]{0,220}emit_group_challenge_all_accepted_notification\(\)[\s\S]{0,220}stage_group_challenge_notifications\(integer\)[\s\S]{0,700}'\/challenges'/,
+  "the forward migration must upgrade every installed challenge notification route",
+);
 assert.match(
   supabaseConfig,
   /\[functions\.challenge-notifications\][\s\S]{0,160}verify_jwt = false/,

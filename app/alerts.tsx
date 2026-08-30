@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 
 import { AppText as Text } from "@/src/components/AppText";
+import { BadgeMedallion } from "@/src/components/BadgeMedallion";
 import { useLocale, useTranslation } from "@/src/i18n";
 import {
   Avatar,
@@ -16,8 +17,9 @@ import {
 } from "@/src/components/ui";
 import { AlertCategory, buildAlerts } from "@/src/domain/alerts";
 import { buildBadges } from "@/src/domain/badges";
-import { friendlyDate } from "@/src/domain/date";
+import { dateKey, friendlyDate } from "@/src/domain/date";
 import { isCloudGroupId } from "@/src/cloud/groupCloud";
+import { useBadgeChallengeInputs } from "@/src/cloud/useBadgeChallengeInputs";
 import { useAccountNotificationEvents } from "@/src/cloud/useAccountNotificationEvents";
 import { useApp } from "@/src/state/AppProvider";
 import { useAppColors, useGroupAccent } from "@/src/theme";
@@ -26,7 +28,7 @@ type Filter = "all" | AlertCategory | "badges";
 
 export default function Alerts() {
   const { scope } = useLocalSearchParams<{ scope?: string }>();
-  const { state } = useApp();
+  const { state, updateSettings } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const locale = useLocale();
@@ -36,6 +38,13 @@ export default function Alerts() {
   const alertScope = scope === "group" ? "group" : "personal";
   const hasGroup = isCloudGroupId(state.group.id);
   const feedKey = `${alertScope}:${state.currentUserId}:${state.group.id}`;
+  const badgeAnchor = dateKey();
+  const badgeChallengeInputs = useBadgeChallengeInputs(
+    state.group.id,
+    state.currentUserId,
+    badgeAnchor,
+    filter === "badges",
+  );
   const accountFeed = useAccountNotificationEvents();
   const {
     events: accountFeedEvents,
@@ -132,9 +141,54 @@ export default function Alerts() {
     }, 600);
     return () => clearTimeout(timer);
   }, [markGroupFeedRead, visibleUnreadEventIds]);
+  const visibleActivityReadCursors = useMemo(() => {
+    const latestByKey: Record<string, string> = {};
+    allAlerts.forEach((alert) => {
+      if (
+        alert.unread !== true ||
+        !alert.readCursorKey ||
+        (filter !== "all" && alert.category !== filter)
+      )
+        return;
+      if (
+        !latestByKey[alert.readCursorKey] ||
+        alert.createdAt > latestByKey[alert.readCursorKey]
+      )
+        latestByKey[alert.readCursorKey] = alert.createdAt;
+    });
+    return latestByKey;
+  }, [allAlerts, filter]);
+  const visibleActivityReadCursorKey = JSON.stringify(
+    visibleActivityReadCursors,
+  );
+  useEffect(() => {
+    if (!Object.keys(visibleActivityReadCursors).length) return;
+    const timer = setTimeout(() => {
+      updateSettings({
+        notifications: {
+          ...state.settings.notifications,
+          activityReadAtByCategory: {
+            ...state.settings.notifications.activityReadAtByCategory,
+            ...visibleActivityReadCursors,
+          },
+        },
+      });
+    }, 600);
+    return () => clearTimeout(timer);
+    // The serialized key is the stable boundary; the object is intentionally
+    // recreated from the currently visible unread activity cards.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [updateSettings, visibleActivityReadCursorKey]);
   const badges = useMemo(
     () =>
-      buildBadges(state)
+      buildBadges(
+        state,
+        badgeAnchor,
+        badgeChallengeInputs.challenges,
+        badgeAnchor,
+        badgeChallengeInputs.placements,
+        badgeChallengeInputs.settledOccurrenceKeys,
+      )
         .filter((badge) =>
           (alertScope === "personal"
             ? !badge.memberId || badge.memberId === state.currentUserId
@@ -156,7 +210,14 @@ export default function Alerts() {
           return right.anchorDate.localeCompare(left.anchorDate);
         })
         .slice(0, 12),
-    [alertScope, state],
+    [
+      alertScope,
+      badgeAnchor,
+      badgeChallengeInputs.challenges,
+      badgeChallengeInputs.placements,
+      badgeChallengeInputs.settledOccurrenceKeys,
+      state,
+    ],
   );
   const showBadges = filter === "badges";
 
@@ -275,49 +336,48 @@ export default function Alerts() {
             }
           />
           <View style={styles.badges}>
-            {badges.map((badge) => (
-              <Pressable
-                key={badge.id}
-                onPress={() =>
-                  badge.memberId
-                    ? router.push(`/member-profile/${badge.memberId}` as never)
-                    : undefined
-                }
-                style={[
-                  styles.badge,
-                  {
-                    backgroundColor: colors.card,
-                    borderColor: `${badge.color}55`,
-                  },
-                ]}
-              >
-                <View
+            {badges.map((badge) => {
+              const trackerIcon = badge.metricId
+                ? (state.metrics.find((metric) => metric.id === badge.metricId)
+                    ?.icon as typeof badge.icon | undefined)
+                : undefined;
+              return (
+                <Pressable
+                  key={badge.id}
+                  onPress={() =>
+                    badge.memberId
+                      ? router.push(`/member-profile/${badge.memberId}` as never)
+                      : undefined
+                  }
                   style={[
-                    styles.badgeIcon,
-                    { backgroundColor: `${badge.color}20` },
+                    styles.badge,
+                    {
+                      backgroundColor: colors.card,
+                      borderColor: `${badge.color}55`,
+                    },
                   ]}
                 >
-                  <Ionicons
-                    name={badge.icon}
-                    size={18}
-                    color={badge.color}
+                  <BadgeMedallion
+                    badge={badge}
+                    trackerIcon={trackerIcon}
+                    size={38}
                   />
-                </View>
-                <View style={styles.copy}>
-                  <Text style={[styles.badgeTitle, { color: colors.ink }]}>
-                    {badge.title}
-                  </Text>
-                  <Text style={[styles.badgeOwner, { color: badge.color }]}>
-                    {badge.owner} · {badge.periodLabel}
-                  </Text>
-                  <Text
-                    style={[styles.badgeCaption, { color: colors.muted }]}
-                  >
-                    {badge.caption}
-                  </Text>
-                </View>
-              </Pressable>
-            ))}
+                  <View style={styles.copy}>
+                    <Text style={[styles.badgeTitle, { color: colors.ink }]}>
+                      {badge.title}
+                    </Text>
+                    <Text style={[styles.badgeOwner, { color: badge.color }]}>
+                      {badge.owner} · {badge.periodLabel}
+                    </Text>
+                    <Text
+                      style={[styles.badgeCaption, { color: colors.muted }]}
+                    >
+                      {badge.caption}
+                    </Text>
+                  </View>
+                </Pressable>
+              );
+            })}
           </View>
         </>
       ) : null}
@@ -386,9 +446,10 @@ export default function Alerts() {
                     }
                     if (alert.targetType === "photo_update" && alert.entryId) {
                       router.navigate({
-                        pathname: "/recap",
+                        pathname: "/(tabs)/recapfeed",
                         params: {
-                          scope: "group",
+                          period: "custom",
+                          anchor: alert.localDate,
                           highlight: `photo:${alert.entryId}`,
                         },
                       } as never);
@@ -510,13 +571,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: 15,
     padding: 9,
-  },
-  badgeIcon: {
-    width: 35,
-    height: 35,
-    borderRadius: 11,
-    alignItems: "center",
-    justifyContent: "center",
   },
   badgeTitle: { fontSize: 10, fontWeight: "900" },
   badgeOwner: { fontSize: 8, fontWeight: "800", marginTop: 2 },

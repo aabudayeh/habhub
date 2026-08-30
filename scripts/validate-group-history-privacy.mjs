@@ -18,6 +18,18 @@ import { accountOwnedCollections } from "../src/domain/accountCollections.ts";
 import { scopeCachedGroupActivity } from "../src/domain/groupActivityCacheScope.ts";
 import { memberDisplayName } from "../src/domain/members.ts";
 import {
+  buildMetricLogShareMessage,
+  parseChatShareMessage,
+} from "../src/domain/social.ts";
+import {
+  beginSocialReactionBurst,
+  canonicalizeLegacyMetricSocialTargets,
+  confirmSocialReactionBurst,
+  finishSocialReactionBurst,
+  groupSocialTargetKey,
+  metricEntrySocialTarget,
+} from "../src/domain/groupSocialTarget.ts";
+import {
   forcedGroupActivityRequestCrossedGroupBoundary,
   groupActivityFallbackMembershipIsActive,
   groupActivitySnapshotProvesMembershipLoss,
@@ -25,9 +37,40 @@ import {
   shouldRequeueSupersededGroupActivity,
   shouldCommitGroupActivityResponse,
 } from "../src/domain/groupActivityRefresh.ts";
+import { periodDates } from "../src/domain/leaderboard.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (file) => readFileSync(path.join(root, file), "utf8");
+
+const reactionBurst = new Map();
+const mutationKey = "group\0metric-entry\0member";
+const optimisticHeart = { reaction: "heart" };
+const confirmedCheer = { reaction: "cheer" };
+beginSocialReactionBurst(reactionBurst, mutationKey, undefined);
+beginSocialReactionBurst(reactionBurst, mutationKey, optimisticHeart);
+assert.equal(
+  reactionBurst.has(mutationKey),
+  true,
+  "a confirmed removal must remain distinguishable from no reaction burst",
+);
+assert.equal(
+  reactionBurst.get(mutationKey),
+  undefined,
+  "a rapid second tap must not replace the server-confirmed burst baseline",
+);
+confirmSocialReactionBurst(reactionBurst, mutationKey, confirmedCheer);
+beginSocialReactionBurst(reactionBurst, mutationKey, optimisticHeart);
+assert.equal(
+  reactionBurst.get(mutationKey),
+  confirmedCheer,
+  "a later failed tap must roll back to the latest confirmed write",
+);
+finishSocialReactionBurst(reactionBurst, mutationKey);
+assert.equal(
+  reactionBurst.has(mutationKey),
+  false,
+  "the confirmed reaction baseline must be released after the serialized burst",
+);
 
 assert.equal(
   groupActivityRangeAlreadyLoaded({
@@ -124,11 +167,27 @@ assert.equal(
   false,
   "a forced response must never cross a group boundary",
 );
+const boundedOverallHistory = periodDates("overall", "2026-08-28", 1);
+assert.equal(
+  boundedOverallHistory.length,
+  730,
+  "an explicit cold Overall detail request must reuse the existing 730-day history bound",
+);
+assert.equal(
+  boundedOverallHistory.at(-1),
+  "2026-08-28",
+  "the bounded Overall detail request must end on its selected anchor",
+);
 
 const cloud = read("src/cloud/groupCloud.ts");
 const provider = read("src/cloud/CloudSyncProvider.tsx");
 const group = read("app/(tabs)/group.tsx");
 const leaderboardDetail = read("app/leaderboard-detail.tsx");
+const chat = read("app/(tabs)/chat.tsx");
+const recapScreen = read("app/recap.tsx");
+const recapFeed = read("src/domain/recaps.ts");
+const groupSocial = read("src/cloud/groupSocial.ts");
+const socialHook = read("src/cloud/useGroupSocialEngagement.ts");
 const log = read("app/(tabs)/log.tsx");
 const appProvider = read("src/state/AppProvider.tsx");
 const accountCollections = read("src/domain/accountCollections.ts");
@@ -162,6 +221,13 @@ const passiveWalkingPushMigration = read(
 const googleWorkoutDetailMigration = read(
   "supabase/migrations/202608260002_google_health_workout_detail_projection.sql",
 );
+const durableSocialMigration = read(
+  "supabase/migrations/202608280001_durable_group_log_social_identity.sql",
+);
+const cachedGroupActivityBlock = provider.slice(
+  provider.indexOf("function cachedGroupActivity("),
+  provider.indexOf("function mergeWorkspaceWithoutRegression("),
+);
 const passiveWalkingLeadFunction = passiveWalkingPushMigration.slice(
   passiveWalkingPushMigration.indexOf(
     "create or replace function public.enqueue_group_lead_push_event",
@@ -177,7 +243,7 @@ assert.ok(
 );
 
 assert.match(cloud, /remoteStatusCount < expectedStatusCount/);
-assert.match(provider, /const SHARED_ENTRY_DETAIL_PROJECTION_VERSION = 2/);
+assert.match(provider, /const SHARED_ENTRY_DETAIL_PROJECTION_VERSION = 3/);
 assert.match(
   provider,
   /sharedEntryDetailProjectionVersion:\s*SHARED_ENTRY_DETAIL_PROJECTION_VERSION/,
@@ -240,8 +306,8 @@ assert.match(
 );
 assert.match(
   leaderboardDetail,
-  /const targetedActivitySince = dates\[0\]/,
-  "Overall item hydration must start at the earliest real compact-status date",
+  /const targetedActivitySince =\s*period === "overall"/,
+  "Overall item hydration must use its explicit bounded history start",
 );
 assert.doesNotMatch(
   leaderboardDetail,
@@ -636,12 +702,8 @@ const selectedSharedLogs = sharedLeaderboardLogEntries({
 });
 assert.deepEqual(
   selectedSharedLogs.map((entry) => entry.id),
-  [
-    "meal-lunch",
-    "owner-private-meal",
-    `shared-total:peer:steps:${sharedLogDay}`,
-  ],
-  "a modern exact status must preserve authorized item details, fence status/private rows, and synthesize only compact-only totals",
+  ["meal-lunch", "owner-private-meal"],
+  "a detail view must preserve authorized item rows, fence status/private peer rows, and never fabricate compact daily totals",
 );
 assert.deepEqual(
   selectedSharedLogs[0].nutrition,
@@ -654,9 +716,118 @@ assert.equal(
   "the RLS-authorized signed meal attachment must survive the detail projection",
 );
 assert.equal(
-  selectedSharedLogs.at(-1)?.label,
-  "Shared daily total",
-  "a compact-only sensor total should retain the explicit summary fallback",
+  selectedSharedLogs.some((entry) => entry.id.startsWith("shared-total:")),
+  false,
+  "compact status rows must remain on the ranking card instead of masquerading as individual logs",
+);
+const canonicalMetricTarget = metricEntrySocialTarget({
+  ...sharedMeal,
+  cloudId: "6bbafc87-832d-4f85-95ea-d56cdd424e11",
+});
+assert.deepEqual(
+  canonicalMetricTarget,
+  {
+    type: "metric_entry",
+    id: "6bbafc87-832d-4f85-95ea-d56cdd424e11",
+    ownerUserId: "peer",
+    cloudPublished: true,
+    clientGeneratedId: "meal-lunch",
+    localDate: sharedLogDay,
+  },
+  "a fetched shared log must use its collision-free server UUID for engagement",
+);
+assert.notEqual(
+  groupSocialTargetKey({
+    type: "metric_entry",
+    id: "legacy-collision",
+    ownerUserId: "owner-a",
+    cloudPublished: false,
+  }),
+  groupSocialTargetKey({
+    type: "metric_entry",
+    id: "legacy-collision",
+    ownerUserId: "owner-b",
+    cloudPublished: false,
+  }),
+  "unresolved client ids must remain collision-safe across owners in local social state",
+);
+assert.equal(
+  groupSocialTargetKey(canonicalMetricTarget),
+  "metric_entry\u00006bbafc87-832d-4f85-95ea-d56cdd424e11",
+  "published targets must use the canonical server identity without an owner suffix",
+);
+const { cloudId: _omittedLegacyCloudId, ...legacyV3Meal } = sharedMeal;
+const legacyV3MetricTarget = metricEntrySocialTarget(legacyV3Meal);
+assert.equal(
+  legacyV3MetricTarget?.cloudPublished,
+  false,
+  "a schema-v3 cached row with no cloudId must remain eligible for canonical resolution",
+);
+assert.deepEqual(
+  canonicalizeLegacyMetricSocialTargets(
+    [
+      legacyV3MetricTarget,
+      {
+        ...legacyV3MetricTarget,
+        ownerUserId: "another-owner",
+      },
+    ],
+    [
+      {
+        cloudId: "6bbafc87-832d-4f85-95ea-d56cdd424e11",
+        ownerUserId: sharedMeal.userId,
+        clientGeneratedId: sharedMeal.id,
+      },
+      {
+        cloudId: "108df92f-d956-4ce9-a25a-67b86fbf35d8",
+        ownerUserId: "another-owner",
+        clientGeneratedId: sharedMeal.id,
+      },
+    ],
+  ).map((target) => target?.id),
+  [
+    "6bbafc87-832d-4f85-95ea-d56cdd424e11",
+    "108df92f-d956-4ce9-a25a-67b86fbf35d8",
+  ],
+  "legacy cache targets must resolve by exact owner/client pairs even when two members reused one local id",
+);
+assert.equal(
+  metricEntrySocialTarget({ ...sharedMeal, visibility: "private" }),
+  undefined,
+  "private log content must never become a social target",
+);
+const metricLogShare = buildMetricLogShareMessage(
+  {
+    kind: "metric_log",
+    entryId: sharedMeal.id,
+    metricId: sharedMeal.metricId,
+    localDate: sharedMeal.localDate,
+    memberId: sharedMeal.userId,
+    title: sharedMeal.label,
+  },
+  "Look at lunch",
+);
+assert.deepEqual(
+  parseChatShareMessage(metricLogShare),
+  {
+    attachment: {
+      kind: "metric_log",
+      entryId: "meal-lunch",
+      metricId: "food",
+      localDate: sharedLogDay,
+      memberId: "peer",
+      title: "Chicken rice bowl",
+    },
+    text: "Look at lunch",
+  },
+  "metric-log attachments must round-trip without leaking the transport URL into chat copy",
+);
+assert.equal(
+  parseChatShareMessage(
+    "habhub://metric-log?entryId=meal-lunch&metricId=food&localDate=2026-02-30",
+  ),
+  undefined,
+  "malformed metric-log deep links must fail closed",
 );
 const sharedWorkout = {
   ...sharedMeal,
@@ -780,11 +951,8 @@ assert.deepEqual(
     peerDetailsAuthorized: false,
     statuses: sharedLogStatuses,
   }).map((entry) => entry.id),
-  [
-    `shared-total:peer:food:${sharedLogDay}`,
-    `shared-total:peer:steps:${sharedLogDay}`,
-  ],
-  "peer item details must fail closed until the requested range is RLS-refreshed",
+  [],
+  "peer item details must fail closed without replacing them with synthetic daily totals",
 );
 const stalePeerRaw = 5_000;
 const verifiedPeerExact = 8_000;
@@ -1059,10 +1227,167 @@ assert.match(
   "an authoritative status/private projection must override stale cached raw entries",
 );
 assert.match(leaderboardDetail, /sharedLeaderboardLogEntries\(\{/);
+assert.doesNotMatch(
+  read("src/domain/sharedLeaderboardLogs.ts"),
+  /shared-total:|Shared daily total/,
+  "leaderboard details must never synthesize a per-item row from a compact daily status",
+);
 assert.match(
   leaderboardDetail,
   /\.refreshActivity\(targetedActivitySince, \{ force: true \}\)/,
   "direct leaderboard-detail navigation must hydrate its requested activity range",
+);
+assert.match(
+  leaderboardDetail,
+  /useEffect\(\(\) => \{[\s\S]{0,400}if \(requestedPeriod\) setPeriod\(requestedPeriod\);[\s\S]{0,120}if \(requestedAnchor\) setAnchor\(requestedAnchor\);[\s\S]{0,120}\[requestedAnchor, requestedPeriod\]/,
+  "a mounted detail route must follow a later deep link's period and historical anchor",
+);
+assert.match(
+  leaderboardDetail,
+  /const targetedActivitySince =[\s\S]{0,180}period === "overall"[\s\S]{0,220}periodDates\([\s\S]{0,80}"overall",[\s\S]{0,80}anchor,[\s\S]{0,120}\)\[0\][\s\S]{0,40}: dates\[0\]/,
+  "a cold Overall detail route must request the bounded 730-day period instead of only today",
+);
+assert.match(
+  leaderboardDetail,
+  /lastMetricsParamRef[\s\S]{0,1200}requestedAvailableKey\.split\("\\u0000"\)[\s\S]{0,900}current\.length === 1 && current\[0\] === SCORE_ID[\s\S]{0,160}loggedIdsKey\.split\("\\u0000"\)/,
+  "same-route metric parameters and hydrated item metrics must replace only the provisional Score choice",
+);
+assert.match(
+  leaderboardDetail,
+  /metricSelectionEditedRef\.current = true;[\s\S]{0,100}setSelectedIds\(nextSelectedIds\)/,
+  "manual metric selection must prevent a later cache hydration from overwriting the user",
+);
+assert.match(
+  leaderboardDetail,
+  /const targetMemberId =[\s\S]{0,260}state\.group\.members\.some[\s\S]{0,350}setOpenLogs\(\(current\)[\s\S]{0,220}\[targetMemberId\]: true/,
+  "member-targeted alerts and shared logs must expand the intended member after route reuse",
+);
+assert.match(
+  leaderboardDetail,
+  /item\.id === params\.entryId \|\| item\.cloudId === params\.entryId/,
+  "shared-log deep links must resolve both persisted client ids and canonical server ids",
+);
+assert.match(
+  leaderboardDetail,
+  /metricLogEntryId: entry\.id[\s\S]{0,240}metricLogLocalDate: entry\.localDate[\s\S]{0,240}metricLogShareAt:/,
+  "an individual leaderboard log must enter chat through the typed attachment composer",
+);
+assert.match(
+  chat,
+  /kind: "metric_log"[\s\S]{0,220}entryId: requestedMetricLogEntryId[\s\S]{0,220}localDate: requestedMetricLogLocalDate/,
+  "chat must build a real metric-log attachment from route parameters",
+);
+assert.match(
+  chat,
+  /document-text-outline[\s\S]{0,2500}"Shared log"[\s\S]{0,2500}"Open this leaderboard log"/,
+  "chat must render the metric-log attachment kind",
+);
+assert.match(
+  chat,
+  /pathname: "\/leaderboard-detail"[\s\S]{0,300}anchor: attachment\.localDate[\s\S]{0,300}entryId: attachment\.entryId/,
+  "opening a shared log must return to its authorized historical Leaderboard detail row",
+);
+assert.match(
+  socialHook,
+  /let resolvedTarget = await mutationTarget\(target\);[\s\S]{0,1800}setReactions/,
+  "an unclouded social target must resolve before an optimistic reaction is painted",
+);
+assert.match(
+  socialHook,
+  /target\.ownerUserId === state\.currentUserId[\s\S]{0,180}!target\.cloudPublished \|\| forceRepair[\s\S]{0,180}cloud\.syncNow\(\)[\s\S]{0,180}cloud\.refreshActivity\(target\.localDate, \{ force: true \}\)/,
+  "an owned unpublished or fenced log must publish and refresh before server identity resolution",
+);
+assert.match(
+  groupSocial,
+  /from\("metric_entries"\)[\s\S]{0,220}\.eq\("user_id", target\.ownerUserId\)[\s\S]{0,160}\.eq\("client_generated_id", clientGeneratedId\)[\s\S]{0,180}\.eq\("metric_definitions\.group_id", groupId\)/,
+  "legacy client ids must be disambiguated by owner under RLS and scoped to the active group",
+);
+assert.match(
+  groupSocial,
+  /resolveGroupSocialTargets[\s\S]{0,1800}\.in\("user_id", ownerIds\)[\s\S]{0,120}\.in\("client_generated_id", clientGeneratedIds\)[\s\S]{0,220}metric_definitions\.group_id/,
+  "legacy cached targets must be batch-resolved by owner/client id before canonical engagement reads",
+);
+assert.match(
+  socialHook,
+  /requestGenerationRef\.current !== generation[\s\S]{0,500}setReactions\(next\.reactions\)[\s\S]{0,700}requestGenerationRef\.current !== generation/,
+  "an older group or target request must not overwrite the current engagement state",
+);
+const burstStart = socialHook.indexOf("beginSocialReactionBurst(", 100);
+const burstConfirm = socialHook.indexOf("confirmSocialReactionBurst(", burstStart);
+const burstRestore = socialHook.indexOf(
+  "confirmedReactionByMutationRef.current.get(mutationKey)",
+  burstConfirm,
+);
+const burstFinish = socialHook.indexOf("finishSocialReactionBurst(", burstRestore);
+assert.ok(
+  burstStart >= 0 &&
+    burstConfirm > burstStart &&
+    burstRestore > burstConfirm &&
+    burstFinish > burstRestore,
+  "rapid reaction writes must retain, advance, restore, and release a confirmed per-target baseline",
+);
+assert.match(
+  socialHook,
+  /targetAliases[\s\S]{0,1800}persistedTargetKey\(resolved\)/,
+  "a legacy presentation key must point at the canonical persisted reaction key",
+);
+assert.match(
+  recapFeed,
+  /type: "metric_entry"[\s\S]{0,120}id: entry\.cloudId \?\? entry\.id/,
+  "feed reactions must use the same canonical metric-entry identity as Leaderboard details",
+);
+assert.match(
+  recapScreen,
+  /commentDateTimeLabel\([\s\S]{0,500}new Intl\.DateTimeFormat\([\s\S]{0,350}hour: "2-digit"[\s\S]{0,100}minute: "2-digit"/,
+  "group-feed comments must show a localized date and time",
+);
+assert.match(
+  recapScreen,
+  /commentDateTimeLabel\(\s*comment\.createdAt,[\s\S]{0,220}timeFormat/,
+  "each rendered group-feed comment must use its persisted creation time",
+);
+assert.match(
+  recapScreen,
+  /styles\.commentDelete[\s\S]{0,500}trash-outline" size=\{13\}/,
+  "each owned comment must use the compact delete control",
+);
+assert.doesNotMatch(
+  recapScreen,
+  /<IconButton icon="trash-outline" label="Delete comment"/,
+  "feed comments must not use the full-size shared header IconButton for deletion",
+);
+for (const targetType of [
+  "recap_feed",
+  "metric_entry",
+  "photo_update",
+  "badge",
+  "group_challenge",
+  "group_todo",
+])
+  assert.match(
+    durableSocialMigration,
+    new RegExp(`'${targetType}'`),
+    `the reaction RPC must continue accepting the ${targetType} feed target type`,
+  );
+assert.match(
+  durableSocialMigration,
+  /entry\.id = v_target_uuid[\s\S]{0,2200}entry\.client_generated_id = p_target_id[\s\S]{0,1200}v_match_count = 1/,
+  "the server must prefer a canonical UUID but independently and unambiguously resolve UUID-shaped legacy client ids",
+);
+assert.match(
+  durableSocialMigration,
+  /owner_membership\.status = 'active'[\s\S]{0,800}entry\.visibility = 'group'[\s\S]{0,900}metric_privacy_cache_fences/,
+  "server target resolution must preserve membership, entry visibility, and privacy-fence rules",
+);
+assert.match(
+  durableSocialMigration,
+  /canonicalize_group_social_metric_target[\s\S]{0,1200}group_social_comments_canonicalize_metric_target/,
+  "mixed-version comments and reactions must be canonicalized before RLS stores their target identity",
+);
+assert.match(
+  durableSocialMigration,
+  /insert into public\.group_social_reactions[\s\S]{0,500}v_canonical_target_id/,
+  "the reaction RPC must persist only the canonical server identity",
 );
 assert.equal(
   (leaderboardDetail.match(/pathname: "\/member\/\[id\]"/g) ?? []).length,
@@ -1260,7 +1585,7 @@ assert.match(
 );
 assert.match(
   provider,
-  /leaveCloudGroup\(groupId\)[\s\S]{0,350}purgeDepartedGroupData[\s\S]{0,250}removeGroupActivityCache\(groupId\)/,
+  /leaveCloudGroup\(groupId\)[\s\S]{0,350}purgeDepartedGroupData[\s\S]{0,750}removeGroupActivityCache\(groupId\)/,
   "a successful explicit leave must purge in-memory and scoped group caches",
 );
 assert.match(
@@ -1365,8 +1690,8 @@ assert.match(
 );
 assert.match(
   provider,
-  /observedVersion[\s\S]{0,500}scopedCached\.version >= observedVersion/,
-  "a cache older than an observed server activity revision must be rejected",
+  /const observedVersion[\s\S]{0,120}const reusableCached = scopedCached;[\s\S]{0,120}const reusableGoogleActivity = scopedGoogleActivity;/,
+  "unrelated live activity revisions must not erase already-authorized individual-log caches",
 );
 assert.match(
   provider,
@@ -1375,8 +1700,28 @@ assert.match(
 );
 assert.match(
   provider,
-  /entry\.localDate >= cacheSinceDate &&[\s\S]{0,100}entry\.visibility === "group"/,
-  "the shared activity cache must never store item-level private/status-only rows",
+  /groupActivityCacheHydrationRef[\s\S]{0,2400}startingActivitySequence !== activityLoadSequenceRef\.current[\s\S]{0,120}activityRefreshPromiseRef\.current/,
+  "one scoped cache read must singleflight and yield to a newer tombstone/privacy response",
+);
+assert.match(
+  provider,
+  /groupActivityCacheWriteGenerationRef[\s\S]{0,8000}cacheWriteGeneration[\s\S]{0,1200}cacheWriteIsCurrent/,
+  "delayed cache writes must carry a monotonic account/group generation fence",
+);
+assert.match(
+  provider,
+  /mustPersistBeforeSettle =[\s\S]{0,180}deletedEntryKeys\.size > 0[\s\S]{0,120}activity\.privacyFences/,
+  "tombstone and privacy-fence responses must become durable before their refresh settles",
+);
+assert.doesNotMatch(
+  cachedGroupActivityBlock,
+  /cacheSinceDate|entry\.localDate >=/,
+  "explicitly loaded historical individual logs must not be discarded from the durable group cache",
+);
+assert.match(
+  cachedGroupActivityBlock,
+  /entry\.visibility === "group"/,
+  "the durable historical cache must still reject item-level private/status-only rows",
 );
 assert.match(
   provider,
@@ -1387,6 +1732,26 @@ assert.match(
   provider,
   /status\.groupId === groupId &&[\s\S]{0,100}status\.visibility !== "private"/,
   "private compact statuses must never be written to the reusable group cache",
+);
+assert.match(
+  cloud,
+  /cloudId: entry\.id/,
+  "every RLS-returned individual log must retain its canonical metric_entries UUID",
+);
+assert.match(
+  cloud,
+  /cached\.userId === state\.currentUserId[\s\S]{0,220}entry\.cloudId[\s\S]{0,400}\{ \.\.\.cached, cloudId: entry\.cloudId \}/,
+  "a newer owned local log must still learn its server identity after publication",
+);
+assert.match(
+  cloud,
+  /from\("metric_privacy_cache_fences"\)[\s\S]{0,180}\.eq\("user_id", state\.currentUserId\)[\s\S]{0,100}\.eq\("group_id", state\.group\.id\)/,
+  "a full projection must read the indexed owner fence set once instead of checking every detail row separately",
+);
+assert.match(
+  cloud,
+  /account_revision[\s\S]{0,4500}const needsPostFenceRepair = Boolean\([\s\S]{0,500}publishRevision > fenceRevision[\s\S]{0,180}remoteRevision <= fenceRevision[\s\S]{0,220}needsPostFenceRepair/,
+  "still-shared item rows at or below a privacy fence must be republished only with a newer account revision",
 );
 assert.match(
   explicitProjectionMigration,

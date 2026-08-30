@@ -629,6 +629,31 @@ assert.match(detail, /End-of-day balances from food-logged days/);
 assert.match(detail, /"\{balance\} kcal ahead"/);
 assert.match(detail, /"\{balance\} kcal behind"/);
 assert.doesNotMatch(detail, /green ahead/);
+const weeklyDetail = detail.slice(
+  detail.indexOf("function WeeklyDetail"),
+  detail.indexOf("function WeeklyBalanceChart"),
+);
+const weeklyReportIndex = weeklyDetail.indexOf("Balance report");
+const weeklyEntriesIndex = weeklyDetail.indexOf("styles.logHeader");
+assert.ok(
+  weeklyReportIndex >= 0 && weeklyEntriesIndex > weeklyReportIndex,
+  "Weekly balance Entries must be the final detail section after its report",
+);
+assert.match(
+  weeklyDetail,
+  /<Pressable[\s\S]{0,300}style=\{styles\.logHeader\}[\s\S]{0,180}>Entries<[\s\S]{0,420}\{entriesOpen \? <View style=\{styles\.entries\}>/,
+  "Weekly balance must reuse the standard collapsible metric Entries heading and list",
+);
+assert.match(
+  weeklyDetail,
+  /report\.dailyBalances[\s\S]{0,260}<Card key=\{entry\.id\} style=\{styles\.entry\}>[\s\S]{0,800}\{actual\} kcal actual · \{target\} kcal target/,
+  "each Weekly balance day must use the standard entry card while preserving actual and target semantics",
+);
+assert.doesNotMatch(
+  weeklyDetail,
+  /weeklyEntriesCard|weeklyEntryRow|weeklyEntryIcon|weeklyEntryValue/,
+  "Weekly balance must not keep a bespoke Entries visual treatment",
+);
 
 console.log(
   "Weekly balance day, week, month, year, all-time chart and report validation passed.",

@@ -442,6 +442,15 @@ export default function NotificationsScreen() {
             patch({ groupMetricActivity: !value.groupMetricActivity })
           }
         />
+        <ToggleRow
+          icon="megaphone-outline"
+          title="Reactions to your updates"
+          copy="Likes, hearts, cheers, and other reactions to items you share"
+          enabled={value.socialReactions !== false}
+          onPress={() =>
+            patch({ socialReactions: value.socialReactions === false })
+          }
+        />
         {groupMetrics.map((metric) => (
           <Pressable
             key={metric.id}

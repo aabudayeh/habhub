@@ -1,4 +1,5 @@
 export {
+  clearGroupActivityCaches,
   purgeLegacyGroupActivityCaches,
   pruneGroupActivityCaches,
   readGroupActivityCache,

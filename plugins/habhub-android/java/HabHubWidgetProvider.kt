@@ -600,7 +600,14 @@ object HabHubWidgetRenderer {
     )
     val canvas = Canvas(bitmap)
     canvas.scale(scale, scale)
-    val progress = item.optDouble("progress", 0.0).toFloat().coerceIn(0f, 1f)
+    val rawProgress = item.optDouble("progress", 0.0).toFloat().coerceIn(0f, 1f)
+    // The widget shows an integer percentage. Keep its lime arc, outline and
+    // bar empty whenever that visible percentage is 0 instead of drawing the
+    // rounded cap of a sub-half-percent value.
+    val progress = if (
+      item.optString("id") != "__avatar__" &&
+      (rawProgress * 100f).roundToInt() == 0
+    ) 0f else rawProgress
     val allComplete = item.optBoolean("allComplete", false)
     val accent = parseColor(
       item.optString("progressColor"),
@@ -1049,7 +1056,10 @@ object HabHubWidgetRenderer {
   ) {
     val pad = if (size.compact) 5f else 11f
     val stackedCompact = size.compact && size.heightDp < 48f
-    val narrowCompact = size.compact && size.widthDp < 165f
+    // The launcher's 2 x 1 bounds leave less header width once the date and
+    // progress badge are reserved. Keep this adjustment local to that size so
+    // larger Featured widgets retain their existing typography.
+    val twoByOneFeatured = size.compact && size.widthDp < 165f
     val badgeDiameter = if (stackedCompact) 21f else if (size.compact) 24f else 35f
     val badgeCenterX = size.widthDp - pad - badgeDiameter / 2f
     val badgeCenterY = if (size.compact) min(if (stackedCompact) 17f else 19f, size.heightDp * 0.42f) else 30f
@@ -1067,7 +1077,15 @@ object HabHubWidgetRenderer {
       contentWidth * 0.38f,
       max(if (size.compact) 16f else 24f, datePaint.measureText(dateLabel) + 1f),
     )
-    val headerGap = if (dateLabel.isBlank()) 0f else if (size.compact) 2.2f else 4f
+    val headerGap = if (dateLabel.isBlank()) {
+      0f
+    } else if (twoByOneFeatured) {
+      1.2f
+    } else if (size.compact) {
+      2.2f
+    } else {
+      4f
+    }
     val eyebrowLeft = pad + dateWidth + headerGap
     val eyebrowWidth = max(16f, contentWidth - dateWidth - headerGap)
     if (dateLabel.isNotBlank()) {
@@ -1077,11 +1095,11 @@ object HabHubWidgetRenderer {
       fittedTextPaint(
         eyebrow,
         eyebrowWidth,
-        if (narrowCompact) 4.9f else 5.1f,
-        if (narrowCompact) 3.9f else 4.1f,
+        if (twoByOneFeatured) 4.35f else 5.1f,
+        if (twoByOneFeatured) 3.5f else 4.1f,
         Color.argb(205, 255, 255, 255),
         true,
-        0.04f,
+        if (twoByOneFeatured) 0f else 0.04f,
       )
     } else {
       textPaint(7.5f, Color.argb(205, 255, 255, 255), true, 0.12f)
@@ -1215,15 +1233,31 @@ object HabHubWidgetRenderer {
     bottom: Float,
     accent: Int,
   ) {
-    val count = min(goals.length(), if (size.wide) 8 else 5)
+    val twoByOneFeatured = size.compact && size.widthDp < 165f
+    var count = min(
+      goals.length(),
+      when {
+        size.wide -> 8
+        twoByOneFeatured -> 7
+        else -> 5
+      },
+    )
     if (count <= 0 || bottom <= top) return
-    val gap = 3f
+    val gap = if (twoByOneFeatured) 2f else 3f
     val badgeReserve = if (size.wide) 46f else 35f
     val availableWidth = size.widthDp - 12f - badgeReserve
-    val tileSize = min(
+    fun resolvedTileSize() = min(
       if (size.wide) 12f else 10.5f,
       min(bottom - top, (availableWidth - gap * (count - 1)) / count),
     )
+    var tileSize = resolvedTileSize()
+    // A normal 2 x 1 has room for seven compact goal squares. Some launchers
+    // report slightly narrower bounds, so gracefully fall back to the former
+    // five/six-square layout instead of hiding the row altogether.
+    while (twoByOneFeatured && count > 5 && tileSize < 6f) {
+      count -= 1
+      tileSize = resolvedTileSize()
+    }
     if (tileSize < 6f) return
     val totalWidth = tileSize * count + gap * (count - 1)
     val startX = 6f
@@ -1558,7 +1592,8 @@ object HabHubWidgetRenderer {
   ) {
     val radius = min(8f, rect.height() * 0.34f)
     val path = Path().apply { addRoundRect(rect, radius, radius, Path.Direction.CW) }
-    val goalProgress = goal.optDouble("progress", 0.0).toFloat().coerceIn(0f, 1f)
+    val rawGoalProgress = goal.optDouble("progress", 0.0).toFloat().coerceIn(0f, 1f)
+    val goalProgress = if ((rawGoalProgress * 100f).roundToInt() == 0) 0f else rawGoalProgress
     val unavailable = goal.optBoolean("unavailable", false)
     val met = goal.optBoolean("met", goalProgress >= 1f)
     val goalAccent = parseColor(goal.optString("color"), accent)

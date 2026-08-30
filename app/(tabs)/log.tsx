@@ -2,9 +2,11 @@ import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import * as ImagePicker from "expo-image-picker";
 import { router, useLocalSearchParams } from "expo-router";
-import { useNavigation } from "@react-navigation/native";
+import { useIsFocused, useNavigation } from "@react-navigation/native";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
+  BackHandler,
+  Modal,
   Platform,
   Pressable,
   StyleSheet,
@@ -19,23 +21,39 @@ import { LocalizedAlert as Alert, useLocale } from "@/src/i18n";
 import { Button, Card, Chip, PageHeader, Screen } from "@/src/components/ui";
 import { MetricSelector } from "@/src/components/MetricSelector";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
+import { SelectionMenu } from "@/src/components/SelectionMenu";
 import { TimeInput } from "@/src/components/TimeInput";
-import { useWebBeforeUnload } from "@/src/components/useWebBeforeUnload";
+import {
+  useWebBackNavigationGuard,
+  useWebBeforeUnload,
+} from "@/src/components/useWebBeforeUnload";
+import { registerLogDraftExitHandler } from "@/src/components/logDraftNavigationGuard";
 import {
   TutorialTarget,
   useTutorial,
 } from "@/src/components/TutorialSpotlight";
 import { dateKey } from "@/src/domain/date";
+import { DEFAULT_METRICS } from "@/src/data/seed";
 import {
   FOOD_NUTRIENTS,
   parsePositiveFoodNutrientAmount,
 } from "@/src/domain/food";
-import { isInternalTracker } from "@/src/domain/trackerCatalog";
+import {
+  isBodyCompositionMetric,
+  metricAppearsInLogPicker,
+  metricLoggingDestination,
+  metricLoggingTargetId,
+} from "@/src/domain/metricLogging";
+import {
+  EXERCISE_CATEGORY_LABELS,
+  SESSION_ACTIVITY_EXERCISES,
+} from "@/src/domain/exerciseCatalog";
 import {
   formatMetricValue,
   latestTextValue,
   safeMetricValue,
 } from "@/src/domain/metrics";
+import { listStepCoverageActivities } from "@/src/domain/stepCoveragePreferences";
 import { useApp } from "@/src/state/AppProvider";
 import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 import {
@@ -157,9 +175,13 @@ function LogScreen() {
     vitaminD?: string;
     vitaminB12?: string;
     nutritionDetails?: string;
+    focusMetric?: string;
   }>();
-  const { state, logMetric, addPhoto, updateMetric } = useApp();
+  const { state, logMetric, logWorkout, addPhoto, updateMetric } = useApp();
   const navigation = useNavigation();
+  const isFocused = useIsFocused();
+  const isFocusedRef = useRef(isFocused);
+  isFocusedRef.current = isFocused;
   const colors = useAppColors();
   const accent = useGroupAccent();
   const locale = useLocale();
@@ -167,29 +189,42 @@ function LogScreen() {
     return [...state.metrics]
       .filter(
         (metric) =>
-          metric.dataType !== "calculated" &&
-          metric.id !== "screen_time" &&
-          !metric.fastingSettings &&
-          metric.id !== "blood_pressure_diastolic" &&
-          !(metric.id === "pulse" && state.metrics.some((item) => item.id === "blood_pressure_systolic")) &&
+          metricAppearsInLogPicker(metric, state.metrics) &&
           (metric.manualEntry !== false || metric.id === "steps"),
       )
       .sort((a, b) => a.order - b.order);
   }, [state.metrics]);
-  const trackerChoices = useMemo(
-    () =>
-      [...state.metrics]
-        .filter(
-          (metric) =>
-            !isInternalTracker(metric) &&
-            !metric.fastingSettings,
-        )
-        .sort((a, b) => a.order - b.order),
-    [state.metrics],
-  );
-  const [selectedId, setSelectedId] = useState(metrics[0]?.id ?? "");
-  const selected =
-    metrics.find((metric) => metric.id === selectedId) ?? metrics[0];
+  const trackerChoices = metrics;
+  const [selectedId, setSelectedId] = useState("");
+  const selected = metrics.find((metric) => metric.id === selectedId);
+  const bodyCompositionMetrics = useMemo(() => {
+    const savedById = new Map(
+      state.metrics
+        .filter(isBodyCompositionMetric)
+        .map((metric) => [metric.id, metric]),
+    );
+    // Older customized accounts can predate the Body fat / Lean body mass
+    // definitions. Keep those two canonical inputs available inside Weight;
+    // saving one restores its hidden metric definition atomically in the
+    // provider without adding a Today tile.
+    const required = ["body_fat", "lean_body_mass"].flatMap((id) => {
+      const metric =
+        savedById.get(id) ??
+        DEFAULT_METRICS.find((candidate) => candidate.id === id);
+      return metric ? [metric] : [];
+    });
+    const requiredIds = new Set(required.map((metric) => metric.id));
+    return [
+      ...required,
+      ...[...savedById.values()].filter(
+        (metric) => !requiredIds.has(metric.id),
+      ),
+    ].sort((a, b) => {
+          if (a.id === params.focusMetric) return -1;
+          if (b.id === params.focusMetric) return 1;
+          return a.order - b.order;
+        });
+  }, [params.focusMetric, state.metrics]);
   const submetricVisibleCount = selected?.submetricDisplay?.collapsible
     ? Math.min(
         selected.submetrics?.length ?? 0,
@@ -249,6 +284,7 @@ function LogScreen() {
   const [workoutDuration, setWorkoutDuration] = useState("");
   const [workoutCalories, setWorkoutCalories] = useState("");
   const [workoutDistance, setWorkoutDistance] = useState("");
+  const [workoutActivityKey, setWorkoutActivityKey] = useState("");
   const [bpDiastolic, setBpDiastolic] = useState("");
   const [bpPulse, setBpPulse] = useState("");
   const [submetricValues, setSubmetricValues] = useState<
@@ -264,6 +300,65 @@ function LogScreen() {
           ? "dinner"
           : "snack",
   );
+  const workoutDetailFields = [
+    {
+      metricId: "workout_duration",
+      label: "Duration",
+      value: workoutDuration,
+      set: setWorkoutDuration,
+      unit: "min",
+    },
+    {
+      metricId: "workout_distance",
+      label: "Distance",
+      value: workoutDistance,
+      set: setWorkoutDistance,
+      unit: "km",
+    },
+    {
+      metricId: "exercise",
+      label: "Active energy",
+      value: workoutCalories,
+      set: setWorkoutCalories,
+      unit: "kcal",
+    },
+  ]
+    .filter(({ metricId }) =>
+      state.metrics.some(
+        (metric) => metric.id === metricId && metric.manualEntry !== false,
+      ),
+    )
+    .sort((left, right) => {
+      if (left.metricId === params.focusMetric) return -1;
+      if (right.metricId === params.focusMetric) return 1;
+      return 0;
+    });
+  const workoutStepActivities = useMemo(
+    () => listStepCoverageActivities(),
+    [],
+  );
+  const workoutActivityChoices = useMemo(() => {
+    const estimates = new Map(
+      workoutStepActivities.map((activity) => [activity.key, activity]),
+    );
+    return SESSION_ACTIVITY_EXERCISES.flatMap((catalogActivity) => {
+      const activity = estimates.get(catalogActivity.key);
+      if (!activity) return [];
+      return [{
+        id: activity.key,
+        label: activity.label,
+        icon:
+          activity.mode === "direct"
+            ? "walk-outline" as const
+            : "fitness-outline" as const,
+        group: EXERCISE_CATEGORY_LABELS[catalogActivity.category],
+        sublabel:
+          activity.mode === "direct"
+            ? "Uses measured distance and pace"
+            : `${activity.stepsPerMinute ?? 0} step-equivalent/min`,
+      }];
+    });
+  }, [workoutStepActivities]);
   const extraNutritionFields = [
     {
       id: "sugar",
@@ -398,10 +493,17 @@ function LogScreen() {
   const allowLeaveRef = useRef(false);
   const internalNavigationRef = useRef(false);
   const promptOpenRef = useRef(false);
+  const [pendingExit, setPendingExit] = useState<{
+    leave?: () => void;
+  } | null>(null);
   const clearEntryRef = useRef<() => void>(() => undefined);
   const saveEntryRef = useRef<(afterSave?: () => void) => boolean>(
     () => false,
   );
+  const requestDraftExitRef = useRef<(leave: () => void) => boolean>(
+    () => false,
+  );
+  const appliedMetricRequestRef = useRef<string | undefined>(undefined);
   hasDraftRef.current = hasDraft;
   useWebBeforeUnload(
     () => hasDraftRef.current && !allowLeaveRef.current,
@@ -416,9 +518,26 @@ function LogScreen() {
   }
 
   useEffect(() => {
-    if (params.metric && metrics.some((metric) => metric.id === params.metric))
-      setSelectedId(params.metric);
-  }, [metrics, params.metric]);
+    const requestKey = params.metric
+      ? `${params.metric}|${params.date ?? ""}|${params.focusMetric ?? ""}`
+      : "picker";
+    if (appliedMetricRequestRef.current === requestKey) return;
+    if (!params.metric) {
+      appliedMetricRequestRef.current = requestKey;
+      setSelectedId("");
+      return;
+    }
+    const requested = state.metrics.find((metric) => metric.id === params.metric);
+    if (!requested) return;
+    appliedMetricRequestRef.current = requestKey;
+    const destination = metricLoggingDestination(requested);
+    const targetId = metricLoggingTargetId(requested);
+    if (targetId && metrics.some((metric) => metric.id === targetId)) {
+      setSelectedId(targetId);
+      return;
+    }
+    if (destination === "workout") router.replace("/gym" as never);
+  }, [metrics, params.date, params.focusMetric, params.metric, state.metrics]);
   useEffect(() => {
     if (/^\d{4}-\d{2}-\d{2}$/.test(params.date ?? ""))
       setLogDate(params.date!);
@@ -585,6 +704,7 @@ function LogScreen() {
     setWorkoutDuration("");
     setWorkoutCalories("");
     setWorkoutDistance("");
+    setWorkoutActivityKey("");
     setBpDiastolic("");
     setBpPulse("");
     setSubmetricValues({});
@@ -678,6 +798,37 @@ function LogScreen() {
         );
         return false;
       }
+      const bodyAmounts = [
+        {
+          id: "weight",
+          name: "Weight",
+          aggregation: "latest" as const,
+          raw: value.trim(),
+        },
+        ...bodyCompositionMetrics.map((metric) => ({
+          id: metric.id,
+          name: metric.name,
+          aggregation: metric.aggregation,
+          raw: (submetricValues[metric.id] ?? "").trim(),
+        })),
+      ].map((measurement) => ({
+        ...measurement,
+        amount: measurement.raw
+          ? Number(measurement.raw.replace(",", "."))
+          : undefined,
+      }));
+      if (
+        bodyAmounts.some(
+          ({ raw, amount }) =>
+            raw && (!Number.isFinite(amount) || Number(amount) <= 0),
+        )
+      ) {
+        Alert.alert(
+          "Check the measurements",
+          "Each optional body measurement must be a positive number.",
+        );
+        return false;
+      }
       addPhoto(
         entryImage,
         label.trim() || note.trim(),
@@ -685,39 +836,150 @@ function LogScreen() {
         logDate,
         recordedAt,
       );
-      const weight = Number(value.replace(",", "."));
-      if (Number.isFinite(weight) && weight > 0)
+      const enteredMeasurements = bodyAmounts.filter(
+        ({ amount }) => Number.isFinite(amount) && Number(amount) > 0,
+      );
+      enteredMeasurements.forEach((measurement) =>
         logMetric(
-          "weight",
-          weight,
+          measurement.id,
+          Number(measurement.amount),
           visibility === "group" ? "group" : "private",
-          "replace",
-          { localDate: logDate, recordedAt, label: "Progress photo weight" },
-        );
+          measurement.aggregation === "latest" ? "replace" : "add",
+          {
+            localDate: logDate,
+            recordedAt,
+            label: "Photo progress check-in",
+          },
+        ),
+      );
       clearEntry();
       Alert.alert(
         "Photo saved",
-        weight > 0
-          ? "The photo and matching weight were saved."
+        enteredMeasurements.length
+          ? `The photo and ${enteredMeasurements.length} body measurement${enteredMeasurements.length === 1 ? "" : "s"} were saved.`
           : "The progress photo was saved.",
+      );
+      afterSave?.();
+      return true;
+    }
+    if (selected.id === "weight") {
+      const enteredWeight = value.trim();
+      const weightAmount = enteredWeight
+        ? Number(enteredWeight.replace(",", "."))
+        : undefined;
+      const compositionAmounts = bodyCompositionMetrics.map((metric) => {
+        const raw = (submetricValues[metric.id] ?? "").trim();
+        return {
+          metric,
+          raw,
+          amount: raw ? Number(raw.replace(",", ".")) : undefined,
+        };
+      });
+      const invalidComposition = compositionAmounts.find(
+        ({ raw, amount }) =>
+          raw && (!Number.isFinite(amount) || Number(amount) <= 0),
+      );
+      if (
+        (enteredWeight &&
+          (!Number.isFinite(weightAmount) || Number(weightAmount) <= 0)) ||
+        invalidComposition
+      ) {
+        Alert.alert(
+          "Check the measurements",
+          "Each entered body measurement must be a positive number.",
+        );
+        return false;
+      }
+      const enteredComposition = compositionAmounts.filter(
+        ({ amount }) => Number.isFinite(amount) && Number(amount) > 0,
+      );
+      if (!Number.isFinite(weightAmount) && !enteredComposition.length) {
+        Alert.alert(
+          "Add a measurement",
+          "Enter weight or at least one body-composition value.",
+        );
+        return false;
+      }
+      if (Number.isFinite(weightAmount))
+        logMetric("weight", Number(weightAmount), visibility, "replace", details);
+      enteredComposition.forEach(({ metric, amount }) =>
+        logMetric(
+          metric.id,
+          Number(amount),
+          visibility,
+          metric.aggregation === "latest" ? "replace" : "add",
+          {
+            ...details,
+            label: label.trim() || "Body composition check-in",
+          },
+        ),
+      );
+      if (entryImage)
+        addPhoto(
+          entryImage,
+          label.trim() ||
+            (Number.isFinite(weightAmount)
+              ? `Weight check-in · ${Number(weightAmount)} ${selected.unit}`
+              : "Body composition check-in"),
+          visibility === "status" ? "private" : visibility,
+          logDate,
+          recordedAt,
+        );
+      const measurementCount =
+        (Number.isFinite(weightAmount) ? 1 : 0) + enteredComposition.length;
+      clearEntry();
+      Alert.alert(
+        "Saved",
+        `${measurementCount} body measurement${measurementCount === 1 ? "" : "s"} saved.`,
+      );
+      afterSave?.();
+      return true;
+    }
+    if (selected.id === "workout") {
+      const optionalDetails = [
+        { label: "duration", raw: workoutDuration },
+        { label: "distance", raw: workoutDistance },
+        { label: "active energy", raw: workoutCalories },
+      ];
+      const invalidDetail = optionalDetails.find(({ raw }) => {
+        if (!raw.trim()) return false;
+        const amount = Number(raw.replace(",", "."));
+        return !Number.isFinite(amount) || amount <= 0;
+      });
+      if (invalidDetail) {
+        Alert.alert(
+          "Check workout details",
+          `Workout ${invalidDetail.label} must be a positive number, or left blank.`,
+        );
+        return false;
+      }
+      const optionalNumber = (raw: string) => {
+        const amount = Number(raw.replace(",", "."));
+        return Number.isFinite(amount) && amount > 0 ? amount : undefined;
+      };
+      logWorkout({
+        activeCalories: optionalNumber(workoutCalories),
+        activityKey: workoutActivityKey || undefined,
+        distanceKm: optionalNumber(workoutDistance),
+        durationMinutes: optionalNumber(workoutDuration),
+        imageUri: entryImage ?? undefined,
+        includeInStepCoverage: Boolean(workoutActivityKey),
+        label: label.trim() || undefined,
+        localDate: logDate,
+        note: note.trim() || undefined,
+        recordedAt,
+        visibility,
+      });
+      clearEntry();
+      Alert.alert(
+        "Workout saved",
+        `Workout added to ${logDate === dateKey() ? "today" : logDate}.`,
       );
       afterSave?.();
       return true;
     }
     if (selected.dataType === "boolean") {
       logMetric(selected.id, true, visibility, "replace", details);
-      if (selected.id === "workout")
-        (
-          [
-            ["workout_duration", workoutDuration],
-            ["exercise", workoutCalories],
-            ["workout_distance", workoutDistance],
-          ] as const
-        ).forEach(([metricId, raw]) => {
-          const amount = Number(raw.replace(",", "."));
-          if (Number.isFinite(amount) && amount > 0)
-            logMetric(metricId, amount, visibility, "add", details);
-        });
       clearEntry();
       Alert.alert("Logged", `${selected.name} marked complete.`);
       afterSave?.();
@@ -835,6 +1097,88 @@ function LogScreen() {
   clearEntryRef.current = clearEntry;
   saveEntryRef.current = saveEntry;
 
+  function closeUnsavedPrompt() {
+    promptOpenRef.current = false;
+    setPendingExit(null);
+  }
+
+  function continueEditingDraft() {
+    closeUnsavedPrompt();
+  }
+
+  function requestDraftExit(leave: () => void) {
+    if (
+      allowLeaveRef.current ||
+      promptOpenRef.current ||
+      !hasDraftRef.current
+    )
+      return false;
+    promptOpenRef.current = true;
+    setPendingExit({
+      leave: () => {
+        allowLeaveRef.current = true;
+        promptOpenRef.current = false;
+        leave();
+        setTimeout(() => {
+          allowLeaveRef.current = false;
+        }, 1500);
+      },
+    });
+    return true;
+  }
+  requestDraftExitRef.current = requestDraftExit;
+
+  function discardDraftAndLeave() {
+    const leave = pendingExit?.leave;
+    clearEntryRef.current();
+    closeUnsavedPrompt();
+    leave?.();
+  }
+
+  function saveDraftAndLeave() {
+    const leave = pendingExit?.leave;
+    const saved = saveEntryRef.current(() => {
+      closeUnsavedPrompt();
+      leave?.();
+    });
+    if (!saved) closeUnsavedPrompt();
+  }
+
+  useEffect(
+    () =>
+      registerLogDraftExitHandler((leave) => {
+        if (!isFocusedRef.current) return false;
+        return requestDraftExitRef.current(leave);
+      }),
+    [],
+  );
+
+  useEffect(() => {
+    if (Platform.OS !== "android" || !isFocused) return;
+    const subscription = BackHandler.addEventListener(
+      "hardwareBackPress",
+      () => {
+        if (!hasDraftRef.current || allowLeaveRef.current) return false;
+        requestDraftExitRef.current(() => {
+          if (navigation.canGoBack()) navigation.goBack();
+          else BackHandler.exitApp();
+        });
+        return true;
+      },
+    );
+    return () => subscription.remove();
+  }, [isFocused, navigation]);
+
+  useWebBackNavigationGuard(
+    () =>
+      isFocusedRef.current &&
+      hasDraftRef.current &&
+      !allowLeaveRef.current,
+    (continueBack) => {
+      requestDraftExitRef.current(continueBack);
+    },
+  );
+
   useEffect(
     () =>
       navigation.addListener("beforeRemove", (event) => {
@@ -845,88 +1189,8 @@ function LogScreen() {
         )
           return;
         event.preventDefault();
-        promptOpenRef.current = true;
-        const leave = () => {
-          allowLeaveRef.current = true;
-          promptOpenRef.current = false;
-          navigation.dispatch(event.data.action);
-          setTimeout(() => {
-            allowLeaveRef.current = false;
-          }, 0);
-        };
-        Alert.alert(
-          "Keep this log?",
-          "You have data that has not been saved yet.",
-          [
-            {
-              text: "Continue editing",
-              style: "cancel",
-              onPress: () => {
-                promptOpenRef.current = false;
-              },
-            },
-            {
-              text: "Discard",
-              style: "destructive",
-              onPress: () => {
-                clearEntryRef.current();
-                leave();
-              },
-            },
-            {
-              text: "Save & leave",
-              onPress: () => {
-                if (!saveEntryRef.current(leave))
-                  promptOpenRef.current = false;
-              },
-            },
-          ],
-        );
-      }),
-    [navigation],
-  );
-  useEffect(
-    () =>
-      navigation.addListener("blur", () => {
-        if (
-          allowLeaveRef.current ||
-          internalNavigationRef.current ||
-          promptOpenRef.current ||
-          !hasDraftRef.current
-        )
-          return;
-        promptOpenRef.current = true;
-        const continueEditing = () => {
-          promptOpenRef.current = false;
-          router.navigate("/log" as never);
-        };
-        Alert.alert(
-          "Keep this log?",
-          "You have data that has not been saved yet.",
-          [
-            {
-              text: "Continue editing",
-              style: "cancel",
-              onPress: continueEditing,
-            },
-            {
-              text: "Discard",
-              style: "destructive",
-              onPress: () => {
-                clearEntryRef.current();
-                promptOpenRef.current = false;
-              },
-            },
-            {
-              text: "Save",
-              onPress: () => {
-                const saved = saveEntryRef.current(() => {
-                  promptOpenRef.current = false;
-                });
-                if (!saved) promptOpenRef.current = false;
-              },
-            },
-          ],
+        requestDraftExitRef.current(() =>
+          navigation.dispatch(event.data.action),
         );
       }),
     [navigation],
@@ -936,12 +1200,13 @@ function LogScreen() {
     privacyOptions[0];
 
   return (
+    <>
     <Screen
       keyboardShouldPersistTaps="handled"
       contentContainerStyle={{ paddingBottom: 14 }}
     >
       <PageHeader
-        title="Log"
+        title={selected ? "Log" : "What are you adding?"}
         tutorialId="log-header"
         action={
           <Pressable
@@ -959,29 +1224,28 @@ function LogScreen() {
       />
       <View style={styles.selector}>
         <MetricSelector
-          title="What are you adding?"
+          title={selected ? "Change tracker" : "What are you adding?"}
+          emptyLabel="Choose a tracker"
           items={trackerChoices.map((metric) => ({
             id: metric.id,
             label: metric.name,
             icon: metric.icon as keyof typeof Ionicons.glyphMap,
             color: metric.color,
-            sublabel: metrics.some((candidate) => candidate.id === metric.id)
-              ? "Ready to log"
-              : "Synced or calculated · view history",
+            sublabel:
+              metric.id === "food"
+                ? "Meal, calories and nutrition"
+                : metric.id === "weight"
+                  ? "Weight and body composition"
+                  : metric.id === "workout"
+                    ? "Workout with optional duration and distance"
+                  : "Ready to log",
           }))}
           selectedIds={selected ? [selected.id] : []}
+          openWhenEmpty
           onChange={(ids) => {
             const next = ids[0];
             if (!next) return;
-            if (metrics.some((metric) => metric.id === next))
-              setSelectedId(next);
-            else
-              openLogChild(() =>
-                router.navigate({
-                  pathname: "/metric-detail",
-                  params: { metric: next, date: logDate },
-                } as never),
-              );
+            setSelectedId(next);
           }}
           multiple={false}
         />
@@ -1238,21 +1502,88 @@ function LogScreen() {
               </Text>
             </>
           ) : null}
-          {selected.dataType === "photo" ? (
+          {selected.id === "weight" ? (
             <>
-              <Text style={styles.fieldLabel}>
-                Weight on this date (optional)
-              </Text>
-              <View style={styles.numberWrap}>
-                <TextInput
-                  value={value}
-                  onChangeText={setValue}
-                  keyboardType="decimal-pad"
-                  placeholder="e.g. 82.4"
-                  placeholderTextColor={palette.faint}
-                  style={styles.numberInput}
-                />
-                <Text style={styles.unit}>kg</Text>
+              <Text style={[styles.fieldLabel, { color: colors.muted }]}>Body measurements</Text>
+              <View style={styles.nutritionGrid}>
+                {[
+                  {
+                    id: "weight",
+                    label: "Weight",
+                    unit: selected.unit,
+                    raw: value,
+                    set: setValue,
+                  },
+                  ...bodyCompositionMetrics.map((metric) => ({
+                    id: metric.id,
+                    label: metric.name,
+                    unit: metric.unit,
+                    raw: submetricValues[metric.id] ?? "",
+                    set: (raw: string) =>
+                      setSubmetricValues((current) => ({
+                        ...current,
+                        [metric.id]: raw,
+                      })),
+                  })),
+                ].map((item) => (
+                  <View key={item.id} style={styles.nutritionField}>
+                    <Text style={[styles.nutritionLabel, { color: colors.muted }]}>{item.label}</Text>
+                    <View style={[styles.nutritionInput, { borderColor: colors.border }]}>
+                      <TextInput
+                        accessibilityLabel={item.label}
+                        value={item.raw}
+                        onChangeText={item.set}
+                        keyboardType="decimal-pad"
+                        placeholder="Optional"
+                        placeholderTextColor={colors.faint}
+                        style={[styles.nutritionText, { color: colors.ink }]}
+                      />
+                      <Text style={[styles.nutritionUnit, { color: colors.muted }]}>{item.unit}</Text>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            </>
+          ) : selected.id === "workout" ? null : selected.dataType === "photo" ? (
+            <>
+              <Text style={[styles.fieldLabel, { color: colors.muted }]}>Optional body measurements</Text>
+              <View style={styles.nutritionGrid}>
+                {[
+                  {
+                    id: "weight",
+                    label: "Weight",
+                    unit: "kg",
+                    raw: value,
+                    set: setValue,
+                  },
+                  ...bodyCompositionMetrics.map((metric) => ({
+                    id: metric.id,
+                    label: metric.name,
+                    unit: metric.unit,
+                    raw: submetricValues[metric.id] ?? "",
+                    set: (raw: string) =>
+                      setSubmetricValues((current) => ({
+                        ...current,
+                        [metric.id]: raw,
+                      })),
+                  })),
+                ].map((item) => (
+                  <View key={item.id} style={styles.nutritionField}>
+                    <Text style={[styles.nutritionLabel, { color: colors.muted }]}>{item.label}</Text>
+                    <View style={[styles.nutritionInput, { borderColor: colors.border }]}>
+                      <TextInput
+                        accessibilityLabel={item.label}
+                        value={item.raw}
+                        onChangeText={item.set}
+                        keyboardType="decimal-pad"
+                        placeholder="Optional"
+                        placeholderTextColor={colors.faint}
+                        style={[styles.nutritionText, { color: colors.ink }]}
+                      />
+                      <Text style={[styles.nutritionUnit, { color: colors.muted }]}>{item.unit}</Text>
+                    </View>
+                  </View>
+                ))}
               </View>
               <Text style={styles.fieldLabel}>Caption (optional)</Text>
               <TextInput
@@ -1707,48 +2038,59 @@ function LogScreen() {
           ) : null}
           {selected.id === "workout" ? (
             <>
-              <Text style={styles.fieldLabel}>Workout type</Text>
-              <TextInput
-                value={label}
-                onChangeText={setLabel}
-                placeholder="e.g. Walk, strength training, cycling"
-                placeholderTextColor={palette.faint}
-                style={styles.fieldInput}
-              />
-              <Text style={styles.fieldLabel}>Workout details</Text>
+              <Text style={[styles.fieldLabel, { color: colors.muted }]}>Workout type</Text>
+              <View
+                style={[
+                  styles.workoutNameRow,
+                  { borderColor: colors.border },
+                ]}
+              >
+                <TextInput
+                  accessibilityLabel="Workout type"
+                  value={label}
+                  onChangeText={(nextLabel) => {
+                    setLabel(nextLabel);
+                    setWorkoutActivityKey("");
+                  }}
+                  placeholder="e.g. Walk, strength training, cycling"
+                  placeholderTextColor={colors.faint}
+                  style={[styles.workoutNameInput, { color: colors.ink }]}
+                />
+                <SelectionMenu
+                  title="Choose a workout type"
+                  items={workoutActivityChoices}
+                  selectedIds={workoutActivityKey ? [workoutActivityKey] : []}
+                  onChange={(ids) => {
+                    const activity = workoutStepActivities.find(
+                      (item) => item.key === ids[0],
+                    );
+                    if (!activity) return;
+                    setWorkoutActivityKey(activity.key);
+                    setLabel(activity.label);
+                  }}
+                  multiple={false}
+                  searchable
+                  compactIcon
+                  icon="chevron-down"
+                />
+              </View>
+              <Text style={[styles.fieldLabel, { color: colors.muted }]}>Workout details (optional)</Text>
+              <Text style={[styles.helper, styles.workoutHelper, { color: colors.muted }]}>Add the measurements you know and leave the rest blank. Each detail also respects its tracker visibility.</Text>
               <View style={styles.nutritionGrid}>
-                {[
-                  {
-                    label: "Duration",
-                    value: workoutDuration,
-                    set: setWorkoutDuration,
-                    unit: "min",
-                  },
-                  {
-                    label: "Calories",
-                    value: workoutCalories,
-                    set: setWorkoutCalories,
-                    unit: "kcal",
-                  },
-                  {
-                    label: "Distance",
-                    value: workoutDistance,
-                    set: setWorkoutDistance,
-                    unit: "km",
-                  },
-                ].map((item) => (
-                  <View key={item.label} style={styles.nutritionField}>
-                    <Text style={styles.nutritionLabel}>{item.label}</Text>
-                    <View style={styles.nutritionInput}>
+                {workoutDetailFields.map((item) => (
+                  <View key={item.metricId} style={styles.nutritionField}>
+                    <Text style={[styles.nutritionLabel, { color: colors.muted }]}>{item.label}</Text>
+                    <View style={[styles.nutritionInput, { borderColor: colors.border }]}>
                       <TextInput
+                        accessibilityLabel={`${item.label} (${item.unit})`}
                         value={item.value}
                         onChangeText={item.set}
                         keyboardType="decimal-pad"
-                        placeholder="0"
-                        placeholderTextColor={palette.faint}
-                        style={styles.nutritionText}
+                        placeholder="Optional"
+                        placeholderTextColor={colors.faint}
+                        style={[styles.nutritionText, { color: colors.ink }]}
                       />
-                      <Text style={styles.nutritionUnit}>{item.unit}</Text>
+                      <Text style={[styles.nutritionUnit, { color: colors.muted }]}>{item.unit}</Text>
                     </View>
                   </View>
                 ))}
@@ -1796,14 +2138,23 @@ function LogScreen() {
           </Pressable>
           <Button
             label={
-              replaceMode
+              selected.id === "weight"
+                ? "Save body measurements"
+                : selected.id === "workout"
+                  ? "Save workout"
+                : replaceMode
                 ? "Save today's total"
                 : `Add ${selected.name.toLowerCase()}`
             }
             icon="checkmark"
             onPress={() => saveEntry()}
             disabled={
-              selected.dataType === "photo"
+              selected.id === "weight"
+                ? !value.trim() &&
+                  !bodyCompositionMetrics.some((metric) =>
+                    (submetricValues[metric.id] ?? "").trim(),
+                  )
+                : selected.dataType === "photo"
                 ? !entryImage
                 : selected.id === "blood_pressure_systolic"
                   ? !value.trim() || !bpDiastolic.trim()
@@ -1821,12 +2172,116 @@ function LogScreen() {
         </Card>
       ) : null}
     </Screen>
+    <Modal
+      transparent
+      visible={Boolean(pendingExit)}
+      animationType="fade"
+      onRequestClose={continueEditingDraft}
+      statusBarTranslucent
+    >
+      <View style={styles.unsavedPromptRoot}>
+        <View
+          accessibilityRole="alert"
+          style={[
+            styles.unsavedPromptCard,
+            { backgroundColor: colors.card, borderColor: colors.border },
+          ]}
+        >
+          <Text style={[styles.unsavedPromptTitle, { color: colors.ink }]}>Keep this log?</Text>
+          <Text style={[styles.unsavedPromptMessage, { color: colors.muted }]}>You have data that has not been saved yet.</Text>
+          <View style={styles.unsavedPromptActions}>
+            <Pressable
+              accessibilityRole="button"
+              onPress={continueEditingDraft}
+              style={({ pressed }) => [
+                styles.unsavedPromptButton,
+                { borderColor: colors.border, backgroundColor: colors.canvas },
+                pressed && styles.unsavedPromptPressed,
+              ]}
+            >
+              <Text
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.66}
+                style={[styles.unsavedPromptButtonText, { color: colors.ink }]}
+              >
+                Continue
+              </Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              onPress={discardDraftAndLeave}
+              style={({ pressed }) => [
+                styles.unsavedPromptButton,
+                { borderColor: palette.red, backgroundColor: palette.red },
+                pressed && styles.unsavedPromptPressed,
+              ]}
+            >
+              <Text numberOfLines={1} style={styles.unsavedPromptPrimaryText}>Discard</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              onPress={saveDraftAndLeave}
+              style={({ pressed }) => [
+                styles.unsavedPromptButton,
+                { borderColor: accent, backgroundColor: accent },
+                pressed && styles.unsavedPromptPressed,
+              ]}
+            >
+              <Text numberOfLines={1} style={styles.unsavedPromptPrimaryText}>Save</Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
+    </Modal>
+    </>
   );
 }
 
 export default LogScreen;
 
 const styles = StyleSheet.create({
+  unsavedPromptRoot: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 18,
+    backgroundColor: "rgba(2, 8, 23, 0.68)",
+  },
+  unsavedPromptCard: {
+    width: "100%",
+    maxWidth: 480,
+    borderWidth: 1,
+    borderRadius: 22,
+    padding: 18,
+    gap: 10,
+    shadowColor: "#000",
+    shadowOpacity: 0.24,
+    shadowRadius: 22,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 16,
+  },
+  unsavedPromptTitle: { fontSize: 18, lineHeight: 24, fontWeight: "900" },
+  unsavedPromptMessage: { fontSize: 13, lineHeight: 19 },
+  unsavedPromptActions: {
+    flexDirection: "row",
+    alignItems: "stretch",
+    gap: 7,
+    marginTop: 5,
+  },
+  unsavedPromptButton: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 40,
+    borderWidth: 1,
+    borderRadius: 11,
+    paddingHorizontal: 5,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  unsavedPromptButtonText: { fontSize: 11, fontWeight: "900", textAlign: "center" },
+  unsavedPromptPrimaryText: { color: palette.white, fontSize: 11, fontWeight: "900" },
+  unsavedPromptPressed: { opacity: 0.78 },
   timerShortcut: {
     minHeight: 34,
     borderWidth: 1,
@@ -1977,6 +2432,23 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   foodNameInput: { flex: 1, paddingHorizontal: 10, ...typography.body },
+  workoutNameRow: {
+    minHeight: 42,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingLeft: 10,
+    paddingRight: 5,
+    marginBottom: 8,
+  },
+  workoutNameInput: {
+    flex: 1,
+    minWidth: 0,
+    paddingVertical: 8,
+    ...typography.body,
+  },
   foodSearchButton: {
     width: 40,
     height: 40,
@@ -2134,6 +2606,8 @@ const styles = StyleSheet.create({
   },
   completionTitle: { color: palette.ink, ...typography.sectionTitle, fontWeight: "800" },
   helper: { color: palette.muted, ...typography.supporting, marginTop: 2 },
+  weightHelper: { marginTop: -1, marginBottom: 9 },
+  workoutHelper: { marginTop: -1, marginBottom: 9 },
   attachRow: {
     flexDirection: "row",
     alignItems: "center",

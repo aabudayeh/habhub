@@ -43,7 +43,7 @@ const pages: {
   { id: "calendar", label: "Schedule", icon: "calendar-outline" },
   { id: "journal", label: "Journal", icon: "book-outline" },
   { id: "performance", label: "Performance", icon: "speedometer-outline" },
-  { id: "recapfeed", label: "Recap", icon: "newspaper-outline" },
+  { id: "recapfeed", label: "Feed", icon: "newspaper-outline" },
   { id: "chat", label: "Chat", icon: "chatbubbles-outline" },
 ];
 
@@ -375,7 +375,7 @@ export default function DisplaySettings() {
               ["showCalendar", "Schedule", "Reminders, tasks, and prompts", "calendar-outline"],
               ["showJournal", "Journal", "Notes collected across the app", "book-outline"],
               ["showPerformance", "Performance", "Strengths, trends, and focus areas", "speedometer-outline"],
-              ["showRecap", "Recap", "Group feed, milestones, and meaningful shared logs", "newspaper-outline"],
+              ["showRecap", "Feed", "Group milestones and meaningful shared logs", "newspaper-outline"],
               ["showStatus", "Status", "A visual dashboard around your tracked goals", "accessibility-outline"],
               ["showAiAssistant", "MetRal AI", "Floating logging and setup assistant", "sparkles-outline"],
             ] as [ToggleKey, string, string, keyof typeof Ionicons.glyphMap][]

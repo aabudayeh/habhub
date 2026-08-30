@@ -1,19 +1,11 @@
-import { MuscleGroup, WorkoutExerciseTrackingMode } from "@/src/types";
+import {
+  ExerciseCategory,
+  MuscleGroup,
+  WorkoutExerciseTrackingField,
+  WorkoutExerciseTrackingMode,
+} from "@/src/types";
 
-export type ExerciseCategory =
-  | "strength"
-  | "cardio"
-  | "conditioning"
-  | "mobility"
-  | "mind_body"
-  | "team_sport"
-  | "racket_sport"
-  | "combat"
-  | "outdoor"
-  | "water"
-  | "winter"
-  | "multisport"
-  | "other";
+export type { ExerciseCategory } from "@/src/types";
 
 export type ExerciseHealthAliases = {
   /** Values returned as ExerciseSession.exerciseType. */
@@ -33,6 +25,8 @@ export type ExerciseCatalogItem = {
   equipment: "barbell" | "dumbbell" | "machine" | "cable" | "bodyweight" | "other";
   category: ExerciseCategory;
   trackingMode: WorkoutExerciseTrackingMode;
+  /** Optional multi-field set editor; legacy catalog rows resolve from mode. */
+  trackingFields?: WorkoutExerciseTrackingField[];
   aliases: string[];
   health?: ExerciseHealthAliases;
   supportsDistance?: boolean;
@@ -201,6 +195,9 @@ function activity(
     equipment: "other",
     category,
     trackingMode: "duration",
+    trackingFields: options?.supportsDistance
+      ? ["duration", "distance"]
+      : ["duration"],
     aliases: options?.aliases ?? [],
     health,
     supportsDistance: options?.supportsDistance,
@@ -214,7 +211,11 @@ function activity(
  * app through Health Connect; enum names are retained only as safe title
  * aliases when Samsung has no distinct Health Connect session type.
  */
-const ACTIVITY_EXERCISES: ExerciseCatalogItem[] = [
+/**
+ * Canonical session-level workouts. Keep this separate from individual
+ * strength movements so activity pickers never turn into an exercise library.
+ */
+export const SESSION_ACTIVITY_EXERCISES: readonly ExerciseCatalogItem[] = [
   activity("walking", "Walking", "cardio", 3.5, { healthConnectSessionTypes: [79], healthConnectSegmentTypes: [64], appleWorkoutTypes: [52], samsungTypes: ["WALKING"] }, { aliases: ["Walk"], supportsDistance: true }),
   activity("running", "Running", "cardio", 7, { healthConnectSessionTypes: [56], healthConnectSegmentTypes: [46], appleWorkoutTypes: [37], samsungTypes: ["RUNNING"] }, { aliases: ["Run", "Jogging"], supportsDistance: true }),
   activity("track_running", "Track running", "cardio", 7, { appleWorkoutTypes: [49], samsungTypes: ["TRACK_RUNNING"] }, { supportsDistance: true }),
@@ -401,7 +402,7 @@ const normalizedStrengthExercises = STRENGTH_EXERCISES.map(
 
 export const EXERCISE_CATALOG: ExerciseCatalogItem[] = [
   ...normalizedStrengthExercises.filter((item) => item.key !== "custom"),
-  ...ACTIVITY_EXERCISES,
+  ...SESSION_ACTIVITY_EXERCISES,
   normalizedStrengthExercises.find((item) => item.key === "custom")!,
 ];
 
@@ -463,6 +464,22 @@ export function exerciseFromActivityName(name?: string) {
 
 export function catalogExercise(key?: string) {
   return key ? catalogByKey.get(key) : undefined;
+}
+
+export function catalogExerciseTrackingFields(
+  exercise: Pick<
+    ExerciseCatalogItem,
+    "trackingMode" | "trackingFields" | "supportsDistance"
+  >,
+): WorkoutExerciseTrackingField[] {
+  if (exercise.trackingFields?.length)
+    return [...new Set(exercise.trackingFields)];
+  if (exercise.trackingMode === "duration")
+    return exercise.supportsDistance
+      ? ["duration", "distance"]
+      : ["duration"];
+  if (exercise.trackingMode === "reps") return ["reps"];
+  return ["weight", "reps"];
 }
 
 export function exerciseKey(name: string, supplied?: string) {

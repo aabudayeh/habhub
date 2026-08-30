@@ -491,6 +491,20 @@ export default function GroupSettings() {
               accent={accent}
             />
             <NotificationPreferenceRow
+              title="Reactions to your updates"
+              detail="Likes, hearts, cheers and other reactions from this group"
+              value={
+                groupNotificationPreferences.socialReactions ??
+                notifications.socialReactions !== false
+              }
+              disabled={groupNotificationPreferences.enabled === false}
+              onValueChange={(socialReactions) =>
+                patchGroupNotifications({ socialReactions })
+              }
+              colors={colors}
+              accent={accent}
+            />
+            <NotificationPreferenceRow
               title="Lead changes"
               detail="First-place changes in selected leaderboard trackers"
               value={

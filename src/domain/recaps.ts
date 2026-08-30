@@ -1,5 +1,6 @@
 import {
   AppState,
+  GroupChallenge,
   MetricDefinition,
   NutritionDetails,
   PhotoUpdate,
@@ -14,6 +15,16 @@ import {
 } from "./metrics";
 import { performanceOverview } from "./performance";
 import { estimateLevelWalkingFromSteps } from "./health";
+import {
+  acceptedChallengeParticipantIds,
+  challengeWinnerIds,
+  expandGroupChallengeOccurrences,
+  groupChallengeEndDate,
+  groupChallengeProgress,
+  groupChallengeSourceId,
+  challengeSettlementKey,
+  type ResolvedChallengePlacement,
+} from "./groupChallenges";
 
 export type RecapScope = "personal" | "group";
 
@@ -34,7 +45,8 @@ export type RecapFeedKind =
   | "workout"
   | "photo"
   | "leader"
-  | "badge";
+  | "badge"
+  | "challenge";
 
 export type RecapFeedItem = {
   id: string;
@@ -52,8 +64,16 @@ export type RecapFeedItem = {
   image?: PhotoUpdate["uri"];
   nutrition?: NutritionDetails;
   socialTarget: {
-    type: "recap_feed" | "metric_entry" | "photo_update" | "badge";
+    type:
+      | "recap_feed"
+      | "metric_entry"
+      | "photo_update"
+      | "badge"
+      | "group_challenge";
     id: string;
+    ownerUserId?: string;
+    cloudPublished?: boolean;
+    localDate?: string;
   };
   deepLink?: {
     pathname: string;
@@ -107,6 +127,9 @@ export function buildGroupRecapFeed(
     color: string;
     status: string;
   }[] = [],
+  challenges: readonly GroupChallenge[] = [],
+  settledChallengeOccurrences?: ReadonlySet<string>,
+  settledChallengePlacements?: readonly ResolvedChallengePlacement[],
 ): RecapFeedItem[] {
   const dateSet = new Set(dates);
   const groupMetricIds = new Set(
@@ -167,7 +190,13 @@ export function buildGroupRecapFeed(
       color: metric.color,
       image: entry.imageUri ? { uri: entry.imageUri } : undefined,
       nutrition: entry.nutrition,
-      socialTarget: { type: "metric_entry", id: entry.id },
+      socialTarget: {
+        type: "metric_entry",
+        id: entry.cloudId ?? entry.id,
+        ownerUserId: entry.userId,
+        cloudPublished: Boolean(entry.cloudId),
+        localDate: entry.localDate,
+      },
       deepLink: {
         pathname: "/leaderboard-detail",
         params: {
@@ -222,7 +251,7 @@ export function buildGroupRecapFeed(
       color: badge.color,
       socialTarget: {
         type: "badge",
-        id: `${badge.id}:${badge.anchorDate}`,
+        id: `${badge.memberId}:${badge.id}:${badge.anchorDate}`,
       },
       deepLink: {
         pathname: "/badges",
@@ -233,6 +262,127 @@ export function buildGroupRecapFeed(
           highlight: badge.id,
         },
       },
+    });
+  }
+  const orderedDates = [...dateSet].sort();
+  const challengeOccurrences = orderedDates.length
+    ? expandGroupChallengeOccurrences(
+        challenges.filter((challenge) => challenge.groupId === state.group.id),
+        orderedDates[0],
+        orderedDates[orderedDates.length - 1],
+        200,
+      )
+    : [];
+  const today = dateKey();
+  for (const challenge of challengeOccurrences) {
+    const metric =
+      (state.group.metricConfiguration ?? []).find(
+        (candidate) => candidate.id === challenge.metricId,
+      ) ?? state.metrics.find((candidate) => candidate.id === challenge.metricId);
+    if (!metric) continue;
+    const sourceId = groupChallengeSourceId(challenge);
+    const endDate = groupChallengeEndDate(challenge);
+    const accepted = acceptedChallengeParticipantIds(challenge).length;
+    const deepLink = {
+      pathname: "/challenges",
+      params: {
+        challengeId: sourceId,
+        challengeOccurrenceDate: challenge.localDate,
+        challengeFocusAt: challenge.updatedAt,
+      },
+    };
+    if (dateSet.has(challenge.localDate)) {
+      items.push({
+        id: `challenge:${sourceId}:${challenge.localDate}:started`,
+        kind: "challenge",
+        localDate: challenge.localDate,
+        createdAt: `${challenge.localDate}T00:01:00`,
+        memberId: challenge.creatorId,
+        metricId: challenge.metricId,
+        eyebrow: "CHALLENGE STARTED",
+        title: challenge.title?.trim() || `${metric.name} challenge`,
+        body:
+          endDate === challenge.localDate
+            ? `${accepted} participant${accepted === 1 ? "" : "s"} competing today.`
+            : `${accepted} participant${accepted === 1 ? "" : "s"} competing through ${friendlyDate(endDate)}.`,
+        value:
+          challenge.target === undefined
+            ? "Open challenge"
+            : formatMetricValue(metric, challenge.target),
+        icon: "flag-outline",
+        color: metric.color,
+        socialTarget: {
+          type: "group_challenge",
+          id: `${sourceId}:${challenge.localDate}:started`,
+        },
+        deepLink,
+      });
+    }
+    if (
+      endDate >= today ||
+      !dateSet.has(endDate) ||
+      (settledChallengeOccurrences &&
+        !settledChallengeOccurrences.has(
+          challengeSettlementKey(sourceId, challenge.localDate),
+        ))
+    )
+      continue;
+    const settlementKey = challengeSettlementKey(
+      sourceId,
+      challenge.localDate,
+    );
+    const settledPlacement = settledChallengePlacements?.find(
+      (result) =>
+        challengeSettlementKey(result.challengeId, result.localDate) ===
+        settlementKey,
+    );
+    const progress = groupChallengeProgress(state, challenge, metric);
+    const winnerIds = settledChallengePlacements
+      ? (settledPlacement?.placements ?? [])
+          .filter((placement) => placement.winner === true)
+          .map((placement) => placement.memberId)
+      : challengeWinnerIds(
+          progress,
+          challenge.target,
+          metric.rankingDirection,
+        );
+    const winnerNames = winnerIds
+      .map((winnerId) =>
+        state.group.members.find((member) => member.id === winnerId),
+      )
+      .filter((member): member is NonNullable<typeof member> => Boolean(member))
+      .map((member) => memberDisplayName(state, member));
+    const winningPlacement = settledPlacement?.placements.find(
+      (placement) => placement.winner === true,
+    );
+    const winningRow = progress.find((row) => winnerIds.includes(row.member.id));
+    items.push({
+      id: `challenge:${sourceId}:${challenge.localDate}:result`,
+      kind: "challenge",
+      localDate: endDate,
+      createdAt: `${endDate}T23:57:00`,
+      memberId: winnerIds.length === 1 ? winnerIds[0] : undefined,
+      metricId: challenge.metricId,
+      eyebrow: "CHALLENGE RESULT",
+      title: winnerNames.length
+        ? `${winnerNames.join(" & ")} won ${challenge.title?.trim() || `${metric.name} challenge`}`
+        : `${challenge.title?.trim() || `${metric.name} challenge`} finished`,
+      body: winnerNames.length
+        ? `${winnerNames.length === 1 ? "The winner" : "The winners"} topped the final standings.`
+        : "The final standings are ready.",
+      value:
+        winningPlacement?.value !== undefined
+          ? formatMetricValue(metric, winningPlacement.value)
+          : winningRow?.mode === "exact"
+            ? winningRow.valueLabel
+            : undefined,
+      icon: "trophy-outline",
+      color: metric.color,
+      socialTarget: {
+        type: "group_challenge",
+        id: `${sourceId}:${challenge.localDate}:result`,
+      },
+      deepLink,
     });
   }
   // One daily group headline gives the feed rhythm without duplicating every
@@ -348,6 +498,9 @@ export function buildRecapStories(
   state: AppState,
   scope: RecapScope,
   anchor = dateKey(),
+  challenges: readonly GroupChallenge[] = [],
+  settledChallengeOccurrences?: ReadonlySet<string>,
+  settledChallengePlacements?: readonly ResolvedChallengePlacement[],
 ): RecapStory[] {
   const current = dateRangeEnding(anchor, 7);
   const previous = dateRangeEnding(current[0], 8).slice(0, 7);
@@ -355,7 +508,127 @@ export function buildRecapStories(
     scope === "personal"
       ? personalStories(state, current, previous)
       : groupStories(state, current, previous);
-  return deterministicShuffle(stories, `${anchor}:${scope}`).slice(0, 8);
+  if (scope === "personal")
+    return deterministicShuffle(stories, `${anchor}:${scope}`).slice(0, 8);
+  const moments = groupChallengeStories(
+    state,
+    current,
+    challenges,
+    settledChallengeOccurrences,
+    settledChallengePlacements,
+  ).slice(0, 2);
+  return [
+    ...moments,
+    ...deterministicShuffle(stories, `${anchor}:${scope}`).slice(
+      0,
+      Math.max(0, 8 - moments.length),
+    ),
+  ];
+}
+
+function groupChallengeStories(
+  state: AppState,
+  dates: string[],
+  challenges: readonly GroupChallenge[],
+  settledChallengeOccurrences?: ReadonlySet<string>,
+  settledChallengePlacements?: readonly ResolvedChallengePlacement[],
+) {
+  if (!dates.length) return [];
+  const today = dateKey();
+  return expandGroupChallengeOccurrences(
+    challenges.filter((challenge) => challenge.groupId === state.group.id),
+    dates[0],
+    dates[dates.length - 1],
+    24,
+  )
+    .map((challenge): RecapStory | undefined => {
+      const metric =
+        (state.group.metricConfiguration ?? []).find(
+          (candidate) => candidate.id === challenge.metricId,
+        ) ?? state.metrics.find((candidate) => candidate.id === challenge.metricId);
+      if (!metric) return undefined;
+      const endDate = groupChallengeEndDate(challenge);
+      if (
+        endDate < today &&
+        settledChallengeOccurrences &&
+        !settledChallengeOccurrences.has(
+          challengeSettlementKey(
+            groupChallengeSourceId(challenge),
+            challenge.localDate,
+          ),
+        )
+      )
+        return undefined;
+      const sourceId = groupChallengeSourceId(challenge);
+      const settlementKey = challengeSettlementKey(
+        sourceId,
+        challenge.localDate,
+      );
+      const settledPlacement = settledChallengePlacements?.find(
+        (result) =>
+          challengeSettlementKey(result.challengeId, result.localDate) ===
+          settlementKey,
+      );
+      const progress = groupChallengeProgress(state, challenge, metric);
+      const winnerIds = endDate < today
+        ? settledChallengePlacements
+          ? (settledPlacement?.placements ?? [])
+              .filter((placement) => placement.winner === true)
+              .map((placement) => placement.memberId)
+          : challengeWinnerIds(
+              progress,
+              challenge.target,
+              metric.rankingDirection,
+            )
+        : [];
+      const winners = winnerIds
+        .map((winnerId) =>
+          state.group.members.find((member) => member.id === winnerId),
+        )
+        .filter((member): member is NonNullable<typeof member> => Boolean(member))
+        .map((member) => memberDisplayName(state, member));
+      const winningPlacement = settledPlacement?.placements.find(
+        (placement) => placement.winner === true,
+      );
+      const winningRow = progress.find((row) => winnerIds.includes(row.member.id));
+      const name = challenge.title?.trim() || `${metric.name} challenge`;
+      if (endDate < today)
+        return {
+          id: `group-challenge-result:${sourceId}:${challenge.localDate}`,
+          scope: "group",
+          eyebrow: "CHALLENGE RESULT",
+          title: winners.length ? `${winners.join(" & ")} won` : name,
+          stat:
+            winningPlacement?.value !== undefined
+              ? formatMetricValue(metric, winningPlacement.value)
+              : winningRow?.mode === "exact"
+                ? winningRow.valueLabel
+                : "Finished",
+          body: winners.length
+            ? name
+            : "The final standings are ready to revisit together.",
+          icon: "trophy-outline",
+          color: metric.color,
+        };
+      const accepted = acceptedChallengeParticipantIds(challenge).length;
+      return {
+        id: `group-challenge-active:${sourceId}:${challenge.localDate}`,
+        scope: "group",
+        eyebrow: "ACTIVE CHALLENGE",
+        title: name,
+        stat:
+          challenge.target === undefined
+            ? `${accepted} competing`
+            : formatMetricValue(metric, challenge.target),
+        body:
+          endDate === challenge.localDate
+            ? "The group is competing today."
+            : `The group is competing through ${friendlyDate(endDate)}.`,
+        icon: "flag-outline",
+        color: metric.color,
+      };
+    })
+    .filter((story): story is RecapStory => Boolean(story));
 }
 
 function personalStories(

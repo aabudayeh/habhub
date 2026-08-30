@@ -7,6 +7,15 @@ import {
   isRetryablePushDeliveryError,
 } from "../src/domain/pushDelivery.ts";
 
+// Metro supplies require() for bundled demo assets reached by the alert-domain
+// fixture. Install the focused validator stub before loading that graph.
+globalThis.require = (source) => source;
+const { buildAlerts } = await import("../src/domain/alerts.ts");
+const {
+  stageChatShareImage,
+  stagedChatShareImage,
+} = await import("../src/storage/chatShareImageStaging.ts");
+
 const read = (file) => fs.readFileSync(file, "utf8");
 const push = read("src/notifications/push.ts");
 const webPush = read("src/notifications/webPush.ts");
@@ -14,8 +23,10 @@ const webWorker = read("public/habhub-sw.js");
 const webManifest = JSON.parse(read("public/manifest.webmanifest"));
 const layout = read("app/_layout.tsx");
 const notifications = read("app/notifications.tsx");
+const groupSettings = read("app/group-settings.tsx");
 const auth = read("src/auth/AuthProvider.tsx");
 const cloud = read("src/cloud/groupCloud.ts");
+const cloudSyncProvider = read("src/cloud/CloudSyncProvider.tsx");
 const edge = read("supabase/functions/send-push/index.ts");
 const expand = read(
   "supabase/migrations/202608140001_group_notification_events.sql",
@@ -31,17 +42,57 @@ const group = read("app/(tabs)/group.tsx");
 const alertDomain = read("src/domain/alerts.ts");
 const inAppChatBanner = read("src/components/InAppChatBanner.tsx");
 const chatScreen = read("app/(tabs)/chat.tsx");
+const chatShareDomain = read("src/domain/social.ts");
+const chatShareImageStaging = read("src/storage/chatShareImageStaging.ts");
+const recapScreen = read("app/recap.tsx");
+const leaderboardDetail = read("app/leaderboard-detail.tsx");
 const groupNotificationHook = read("src/cloud/useGroupNotificationEvents.ts");
 const accountNotificationHook = read("src/cloud/useAccountNotificationEvents.ts");
 const groupSocialHook = read("src/cloud/useGroupSocialEngagement.ts");
+const groupChallengesHook = read("src/cloud/useGroupChallenges.ts");
+const settledChallengeResultsHook = read(
+  "src/cloud/useSettledChallengeResults.ts",
+);
+const groupSocialClient = read("src/cloud/groupSocial.ts");
 const allAcceptedMigration = read(
   "supabase/migrations/202608230004_challenge_all_accepted_notification.sql",
 );
 const socialEngagementMigration = read(
   "supabase/migrations/202608270001_group_social_engagement.sql",
 );
+const socialReactionRpcMigration = read(
+  "supabase/migrations/202608280001_durable_group_log_social_identity.sql",
+);
+const socialCheerMigration = read(
+  "supabase/migrations/202608300001_social_cheers.sql",
+);
+const challengeRankMigration = read(
+  "supabase/migrations/202608270005_challenge_rank_rewards.sql",
+);
 
 assert.doesNotThrow(() => assertPushDeliveryComplete({ sent: 2 }));
+const stagedMetricAttachment = {
+  kind: "metric_log",
+  entryId: "entry-1",
+  metricId: "food",
+  localDate: "2026-08-30",
+  memberId: "member-2",
+};
+stageChatShareImage(
+  "account-1",
+  "group-1",
+  stagedMetricAttachment,
+  "https://private.example/signed-photo",
+);
+assert.equal(
+  stagedChatShareImage("account-1", "group-1", stagedMetricAttachment),
+  "https://private.example/signed-photo",
+);
+assert.equal(
+  stagedChatShareImage("account-2", "group-1", stagedMetricAttachment),
+  undefined,
+  "staged attachment media must not cross account boundaries",
+);
 assert.doesNotThrow(() =>
   assertPushDeliveryComplete({ sent: 0, deduplicated: true }),
 );
@@ -295,11 +346,13 @@ assert.match(
 );
 assert.match(edge, /data: \{ \.\.\.event\.data, senderName: nickname \}/);
 assert.match(cloud, /`Group message in \$\{state\.group\.name\}`/);
-assert.match(cloud, /`\$\{sender\.name\}: \$\{message\.text \|\| fallback\}`/);
+assert.match(cloud, /`\$\{sender\.name\}: \$\{visibleCopy\}`/);
 assert.match(alertDomain, /`Group message in \$\{state\.group\.name\}`/);
-assert.match(alertDomain, /"A group member"\}: \$\{message\.text/);
+assert.match(alertDomain, /"A group member"\}: \$\{messagePreview\}/);
 assert.match(inAppChatBanner, /`Group message in \$\{state\.group\.name\}`/);
 assert.match(inAppChatBanner, /`\$\{senderName\}: \$\{preview\}`/);
+assert.match(inAppChatBanner, /chatSharePreview\(message\.text\)/);
+assert.match(inAppChatBanner, /hasAttachment \? " · Attachment" : ""/);
 assert.match(
   edge,
   /\.\.\.\(direct \? \{ recipient: senderId \} : \{\}\)/,
@@ -315,10 +368,20 @@ assert.match(
   /data\?\.conversationType === "direct"[\s\S]{0,180}target\.searchParams\.set\("recipient", data\.senderId/,
   "the service worker must upgrade older direct payloads from senderId to recipient",
 );
-assert.match(chatScreen, /useLocalSearchParams<\{ recipient\?/);
+assert.match(chatScreen, /useLocalSearchParams<\{\s*recipient\?/);
 assert.match(edge, /legacyMembershipCanonicalEvent/);
 assert.match(edge, /legacyCommittedCanonicalEvent/);
 assert.match(edge, /legacyCompetitionCanonicalEvent/);
+assert.match(
+  edge,
+  /category: "challenge"[\s\S]{0,700}route: "\/challenges"/,
+  "legacy challenge pushes must open the dedicated Challenges screen",
+);
+assert.match(
+  challengeRankMigration,
+  /'\{route\}'[\s\S]{0,200}'\/challenges'[\s\S]{0,260}category = 'challenge'/,
+  "queued challenge pushes must be upgraded before dispatch",
+);
 assert.match(edge, /\^\\d\{4\}-\\d\{2\}-\\d\{2\}\$/);
 assert.match(edge, /group_membership_transitions/);
 assert.match(edge, /dispatchConfiguration\?\.emitters_active === true/);
@@ -779,10 +842,366 @@ assert.match(
 );
 assert.doesNotMatch(groupSocialHook, /\.channel\(`group-social:/);
 assert.doesNotMatch(groupSocialHook, /realtimeRef|\.send\(\{/);
+const optimisticReactionPaint = groupSocialHook.indexOf(
+  "reactionsRef.current = optimistic",
+);
+const reactionTargetRepair = groupSocialHook.indexOf(
+  "let resolvedTarget = await mutationTarget(target)",
+);
+assert.ok(
+  optimisticReactionPaint >= 0 &&
+    reactionTargetRepair > optimisticReactionPaint,
+  "reaction controls must paint before target repair or network work",
+);
+assert.match(recapScreen, /const FEED_PAGE_SIZE = 30/);
+assert.match(recapScreen, /const feedState = useDeferredValue\(state\)/);
+assert.match(recapScreen, /visibleFeed\.slice\(0, renderLimit\)/);
+assert.match(recapScreen, /const MemoFeedCard = React\.memo/);
+assert.match(
+  recapScreen,
+  /const stories =\s*storyDeck\?\.key === storySourceKey \? storyDeck\.stories : \[\]/,
+  "an old recap deck must render as empty after its account, group, scope, or date changes",
+);
+assert.match(
+  recapScreen,
+  /if \(storyDeck\?\.key === storySourceKey\) return[\s\S]{0,260}!challengeCloud\.initialLoadComplete[\s\S]{0,100}!settledChallengeResults\.initialLoadComplete[\s\S]{0,360}setIndex\(0\)[\s\S]{0,120}setStoryDeck\(\{ key: storySourceKey, stories: sourceStories \}\)/,
+  "the story screen must wait for both first cloud reads and then freeze one coherent page-one deck",
+);
+assert.match(
+  groupChallengesHook,
+  /\.finally\(\(\) => \{[\s\S]{0,600}setInitiallyLoadedGroupId\(groupId\)/,
+  "challenge readiness must be tied to the group whose first read completed, not a transient loading flag",
+);
+assert.match(
+  groupChallengesHook,
+  /initialLoadComplete: initiallyLoadedGroupId === groupId/,
+);
+assert.match(
+  settledChallengeResultsHook,
+  /\.finally\(\(\) => \{[\s\S]{0,300}setInitiallyLoadedGroupId\(groupId\)/,
+  "settled-result readiness must be tied to the group whose first read completed",
+);
+assert.match(
+  settledChallengeResultsHook,
+  /initialLoadComplete: initiallyLoadedGroupId === groupId/,
+);
+assert.match(
+  socialReactionRpcMigration,
+  /create or replace function public\.set_group_social_reaction[\s\S]*?v_actor_id uuid := auth\.uid\(\)/i,
+  "reaction writes must derive the actor on the server",
+);
+assert.match(
+  socialReactionRpcMigration,
+  /create or replace function public\.set_group_social_reaction[\s\S]*?public\.valid_group_social_target\(\s*p_group_id,\s*p_target_type,\s*p_target_id\s*\)/i,
+  "reaction writes must revalidate the shared target on the server",
+);
+assert.match(
+  socialReactionRpcMigration,
+  /grant execute on function public\.set_group_social_reaction\(uuid, text, text, text\)[\s\S]{0,80}authenticated/i,
+  "only authenticated clients may call the reaction mutation boundary",
+);
+assert.match(
+  groupSocialClient,
+  /\.rpc\("set_group_social_reaction"[\s\S]{0,300}p_reaction:/,
+  "the client must use the server-owned reaction mutation instead of a direct RLS upsert",
+);
+assert.doesNotMatch(
+  groupSocialClient,
+  /from\("group_social_reactions"\)[\s\S]{0,160}\.upsert\(/,
+  "the client must not fall back to the failing direct reaction upsert",
+);
 
 assert.match(group, /groupFeedUnreadCount/);
 assert.match(group, /router\.navigate\("\/alerts\?scope=group"/);
+
+const clientChatPayload = cloud.slice(
+  cloud.indexOf("function chatPushPayload"),
+  cloud.indexOf("type CloudRecentActivityResult"),
+);
+assert.match(chatShareDomain, /parseChatShareMessage/);
+assert.match(chatShareDomain, /chatSharePreview/);
+assert.match(chatShareDomain, /buildChatShareMessage/);
+assert.match(chatShareDomain, /habhub:\/\/recap/);
+assert.match(chatShareDomain, /habhub:\/\/challenge/);
+assert.match(chatShareDomain, /habhub:\/\/metric-log/);
+assert.match(chatScreen, /recapShareAt/);
+assert.match(chatScreen, /challengeShareAt/);
+assert.match(chatScreen, /metricLogShareAt/);
+assert.doesNotMatch(
+  chatScreen,
+  /sharedAttachmentImageUri/,
+  "signed or private image URLs must not be transported through navigation",
+);
+assert.match(chatShareImageStaging, /attachmentIdentity/);
+assert.match(
+  chatShareImageStaging,
+  /\$\{accountId\}\\u0000\$\{groupId\}/,
+);
+assert.match(chatScreen, /stagedChatShareImage/);
+assert.match(chatScreen, /sharedAttachmentThumbnail/);
+assert.match(recapScreen, /stageChatShareImage/);
+assert.match(leaderboardDetail, /stageChatShareImage/);
+assert.doesNotMatch(recapScreen, /sharedAttachmentImageUri/);
+assert.doesNotMatch(leaderboardDetail, /sharedAttachmentImageUri/);
+assert.match(chatScreen, /pathname: "\/\(tabs\)\/recapfeed"/);
+assert.match(cloudSyncProvider, /isUploadableSharedAttachmentUri\(message\)/);
+assert.match(
+  cloudSyncProvider,
+  /chatSharePreview\(message\.text\)\.hasAttachment/,
+  "an authorized staged image must be copied into the sender-owned chat path before publication",
+);
+const ownedChatMediaUpload = cloudSyncProvider.slice(
+  cloudSyncProvider.indexOf("async function uploadOwnedChatMessageMedia"),
+  cloudSyncProvider.indexOf("function snapshotPayload"),
+);
+assert.match(
+  ownedChatMediaUpload,
+  /message\.senderId === userId[\s\S]{0,160}message\.groupId === state\.group\.id[\s\S]{0,160}message\.conversationId === `group:\$\{state\.group\.id\}`[\s\S]{0,320}\.slice\(-CHAT_OUTBOX_RECOVERY_LIMIT\)/,
+  "chat image recovery must apply the active-account/group predicate before its bounded media window",
+);
+const targetedChatOutbox = cloudSyncProvider.slice(
+  cloudSyncProvider.indexOf("const flushChatOutbox = useCallback"),
+  cloudSyncProvider.indexOf("const recoverChatOutbox = useCallback"),
+);
+assert.match(
+  targetedChatOutbox,
+  /prepareChatMessageMedia\(messageId\)[\s\S]{0,140}pushCloudMessagesNow\(prepared, messageId\)/,
+  "a shared image must become durable before the lightweight message outbox acknowledges it",
+);
+assert.match(
+  cloud,
+  /missingOrMediaRepair[\s\S]{0,260}message\.imageStoragePath[\s\S]{0,120}remote\.image_path !== message\.imageStoragePath[\s\S]{0,900}image_path: message\.imageStoragePath/,
+  "chat recovery must repair an already-published relational row that is missing its durable image path",
+);
+assert.match(clientChatPayload, /chatSharePreview\(message\.text\)/);
+assert.match(clientChatPayload, /Shared an attachment/);
+assert.match(clientChatPayload, /visibleCopy/);
+assert.match(clientChatPayload, /hasAttachment \? " · Attachment" : ""/);
+assert.doesNotMatch(
+  clientChatPayload,
+  /message\.text \|\| fallback/,
+  "client chat pushes must never expose attachment transport links",
+);
+
+const canonicalChat = edge.slice(
+  edge.indexOf("async function canonicalChatEvent"),
+  edge.indexOf("async function legacyMembershipCanonicalEvent"),
+);
+const canonicalChatPreview = edge.slice(
+  edge.indexOf("function canonicalChatPreview"),
+  edge.indexOf("function normalizedUuid"),
+);
+assert.match(canonicalChat, /image_path, metadata, push_dispatched_at/);
+assert.match(canonicalChat, /canonicalChatPreview\(stored\.content, stored\.metadata\)/);
+assert.doesNotMatch(canonicalChat, /stored\.content\?\.trim\(\)/);
+assert.match(canonicalChatPreview, /\(\?:recap\|challenge\|metric-log\)/);
+assert.match(canonicalChatPreview, /Shared an attachment/);
+assert.match(canonicalChatPreview, /localizedChatFallback/);
+assert.match(canonicalChatPreview, /hasAttachment \? " · Attachment" : ""/);
+assert.match(edge, /event\.eventType === "social_reaction"[\s\S]{0,180}socialReactions/);
+assert.match(notifications, /title="Reactions to your updates"/);
+assert.match(groupSettings, /groupNotificationPreferences\.socialReactions/);
+assert.match(groupNotificationHook, /event\.kind === "social_reaction"[\s\S]{0,100}preferences\?\.socialReactions === false/);
+const effectiveGroupPreferencesStart = group.indexOf(
+  "const effectiveGroupNotificationPreferences",
+);
+const groupNotificationHookCall = group.indexOf(
+  "useGroupNotificationEvents(",
+  effectiveGroupPreferencesStart,
+);
+const effectiveGroupPreferencesBlock = group.slice(
+  effectiveGroupPreferencesStart,
+  groupNotificationHookCall + 180,
+);
+assert.ok(
+  effectiveGroupPreferencesStart >= 0 &&
+    groupNotificationHookCall > effectiveGroupPreferencesStart,
+  "the Leaderboard must build effective preferences before reading its notification feed",
+);
+assert.match(
+  effectiveGroupPreferencesBlock,
+  /groupPreferences\?\.socialReactions \?\?[\s\S]{0,120}state\.settings\.notifications\.socialReactions \?\?[\s\S]{0,80}true/,
+  "the Leaderboard bell must apply the same per-group then global reaction preference fallback as push and Alerts",
+);
+assert.match(
+  effectiveGroupPreferencesBlock,
+  /useGroupNotificationEvents\([\s\S]{0,120}effectiveGroupNotificationPreferences/,
+  "the Leaderboard unread count must consume the effective preferences",
+);
+assert.match(alertDomain, /socialReactionsEnabled/);
+assert.match(
+  alertDomain,
+  /const groupEventsEnabled = groupPreferences\?\.enabled !== false[\s\S]{0,180}groupEventsEnabled &&[\s\S]{0,180}groupPreferences\?\.socialReactions \?\?[\s\S]{0,100}notifications\.socialReactions/,
+  "the account-wide Alerts feed must honor both the group master switch and the effective reaction preference",
+);
+for (const challengePreference of [
+  "challengeUpdates",
+  "challengeStandings",
+  "challengeReminders",
+  "challengeResults",
+])
+  assert.match(
+    alertDomain,
+    new RegExp(`groupPreferences\\?\\.${challengePreference} === false`),
+    `the Alerts feed must honor ${challengePreference}`,
+  );
+assert.match(socialCheerMigration, /'thumbs_down', 'cheer'/);
+assert.match(socialCheerMigration, /when 'cheer' then 'cheered'/);
+const photoReactionPushPayload = socialCheerMigration.slice(
+  socialCheerMigration.indexOf("else\n    jsonb_build_object", socialCheerMigration.indexOf("v_data := case")),
+  socialCheerMigration.indexOf("end;", socialCheerMigration.indexOf("v_data := case")),
+);
+assert.match(
+  photoReactionPushPayload,
+  /'route', '\/\(tabs\)\/recapfeed'[\s\S]{0,220}'highlight', 'photo:' \|\| new\.target_id/,
+  "a photo-reaction push must open and highlight the interactive group feed rather than the paged story",
+);
+assert.doesNotMatch(photoReactionPushPayload, /'route', '\/recap'/);
+assert.match(alertDomain, /chatSharePreview\(message\.text\)/);
+assert.match(
+  chatShareDomain,
+  /text\.replace\(chatShareTransportPattern, ''\)/,
+  "malformed or legacy attachment links must still be stripped from visible notification copy",
+);
+assert.match(alertDomain, /hasAttachment \? " · Attachment" : ""/);
+assert.match(alertDomain, /hasAttachment[\s\S]{0,80}"Sent an attachment"/);
+assert.match(
+  alertDomain,
+  /systemCategory: AlertCategory = groupConversation \? "lead" : "today"/,
+  "system goal updates must be filed under Leaderboard or Today rather than Messages",
+);
+assert.match(alertDomain, /category: systemUpdate\s*\? systemCategory/);
+assert.doesNotMatch(
+  alertDomain,
+  /detail:[\s\S]{0,180}message\.text \|\|/,
+  "the notification feed must never render raw attachment transport links",
+);
+const attachmentAlertState = {
+  currentUserId: "member-1",
+  entries: [],
+  metrics: [],
+  photos: [],
+  todos: [],
+  group: {
+    id: "group-1",
+    name: "Goal Getters",
+    members: [
+      {
+        id: "member-1",
+        name: "Ahmad",
+        initials: "A",
+        color: "#ff6655",
+      },
+    ],
+    metricConfiguration: [],
+  },
+  settings: {
+    notifications: {
+      groupPreferencesByGroup: {},
+      leadChanges: false,
+      metricIds: [],
+      reminders: false,
+      todoReminders: false,
+      groupMetricActivity: false,
+      chatReadAtByConversation: {},
+    },
+  },
+  messages: [
+  {
+    id: "attachment-alert-fixture",
+    groupId: "group-1",
+    senderId: "member-1",
+    conversationId: "group:group-1",
+    kind: "message",
+    text: "Check this out\nhabhub://metric-log?entryId=entry-1&metricId=food&localDate=2026-08-28",
+    createdAt: "2026-08-28T14:35:00.000Z",
+  },
+  {
+    id: "system-alert-fixture",
+    groupId: "group-1",
+    senderId: "system",
+    conversationId: "group:group-1",
+    kind: "cheer",
+    text: "A group member reached a goal.",
+    createdAt: "2026-08-28T14:36:00.000Z",
+  },
+  {
+    id: "legacy-attachment-alert-fixture",
+    groupId: "group-1",
+    senderId: "member-1",
+    conversationId: "group:group-1",
+    kind: "message",
+    text: "habhub://metric-log?entryId=legacy-entry&metricId=food&localDate=invalid",
+    createdAt: "2026-08-28T14:37:00.000Z",
+  },
+  {
+    id: "personal-system-alert-fixture",
+    groupId: "group-1",
+    senderId: "system",
+    recipientId: "member-1",
+    conversationId: "direct:system:member-1",
+    kind: "reminder",
+    text: "Your tracker is almost complete.",
+    createdAt: "2026-08-28T14:38:00.000Z",
+  },
+  ],
+};
+const renderedAttachmentAlert = buildAlerts(attachmentAlertState).find(
+  (alert) => alert.id === "message-attachment-alert-fixture",
+);
+assert.ok(renderedAttachmentAlert);
+assert.equal(renderedAttachmentAlert.category, "message");
+assert.equal(renderedAttachmentAlert.detail.includes("habhub://"), false);
+assert.match(renderedAttachmentAlert.detail, /Check this out · Attachment/);
+const renderedLegacyAttachmentAlert = buildAlerts(attachmentAlertState).find(
+  (alert) => alert.id === "message-legacy-attachment-alert-fixture",
+);
+assert.ok(renderedLegacyAttachmentAlert);
+assert.equal(renderedLegacyAttachmentAlert.detail.includes("habhub://"), false);
+assert.match(renderedLegacyAttachmentAlert.detail, /Sent an attachment/);
+const renderedSystemAlert = buildAlerts(attachmentAlertState).find(
+  (alert) => alert.id === "message-system-alert-fixture",
+);
+assert.equal(renderedSystemAlert?.category, "lead");
+assert.equal(renderedSystemAlert?.detail, "A group member reached a goal.");
+assert.equal(renderedSystemAlert?.unread, true);
+assert.equal(renderedSystemAlert?.readCursorKey, "group-1:lead");
+const renderedPersonalSystemAlert = buildAlerts(attachmentAlertState).find(
+  (alert) => alert.id === "message-personal-system-alert-fixture",
+);
+assert.equal(renderedPersonalSystemAlert?.category, "today");
+assert.equal(renderedPersonalSystemAlert?.scope, "personal");
+assert.equal(renderedPersonalSystemAlert?.unread, true);
+assert.equal(renderedPersonalSystemAlert?.readCursorKey, "group-1:today");
+const readSystemAlertState = {
+  ...attachmentAlertState,
+  settings: {
+    ...attachmentAlertState.settings,
+    notifications: {
+      ...attachmentAlertState.settings.notifications,
+      activityReadAtByCategory: {
+        "group-1:lead": "2026-08-28T14:36:00.000Z",
+        "group-1:today": "2026-08-28T14:38:00.000Z",
+      },
+    },
+  },
+};
+const readSystemAlerts = buildAlerts(readSystemAlertState);
+assert.equal(
+  readSystemAlerts.find(
+    (alert) => alert.id === "message-system-alert-fixture",
+  )?.unread,
+  false,
+);
+assert.equal(
+  readSystemAlerts.find(
+    (alert) => alert.id === "message-personal-system-alert-fixture",
+  )?.unread,
+  false,
+);
 assert.match(alerts, /markGroupFeedRead\(visibleUnreadEventIds\)/);
+assert.match(alerts, /activityReadAtByCategory/);
+assert.match(alerts, /visibleActivityReadCursors/);
 assert.match(
   alerts,
   /if \(filter === "all"\) return unreadEventIds/,

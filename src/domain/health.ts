@@ -14,8 +14,15 @@ import {
   catalogExercise,
   exerciseFromActivityName,
 } from '@/src/domain/exerciseCatalog';
+import {
+  equivalentStepEstimate,
+  normalizeStepCoveragePreferences,
+  resolveNormalizedStepCoverageActivity,
+  resolveNormalizedStepCoverageChoice,
+  stepCoverageSessionIdentity,
+} from '@/src/domain/stepCoveragePreferences';
 import { HealthImportRecord } from '@/src/health/types';
-import { AppState, EnergyProfile, HealthDataType, HealthMetricField, HealthMetricMapping, HealthProvider, HealthSourcePreference, MetricDefinition, MetricEntry, NutritionDetails, Visibility } from '@/src/types';
+import { AppState, EnergyProfile, HealthDataType, HealthMetricField, HealthMetricMapping, HealthProvider, HealthSourcePreference, MetricDefinition, MetricEntry, NutritionDetails, StepCoveragePreferences, Visibility } from '@/src/types';
 import {
   workoutActivityFamily,
   workoutQualifies,
@@ -127,6 +134,10 @@ function entryFor(
     sourceRecordId: record.id,
     sourceOrigin: origin,
     sourceUpdatedAt: record.updatedAt,
+    ...(record.type === 'workouts' &&
+    Number(record.measurements?.steps ?? 0) > 0
+      ? { sourceWorkoutSteps: Number(record.measurements!.steps) }
+      : {}),
   };
 }
 
@@ -484,6 +495,7 @@ export function mapHealthRecordsToEntries(
   profileOrWeight: StepActivityProfile | number = 70,
   sourcePreferences?: Record<string, HealthSourcePreference>,
   existingEntries: readonly MetricEntry[] = [],
+  stepCoveragePreferences?: StepCoveragePreferences,
 ) {
   const entries: MetricEntry[] = [];
   const entryById = new Map<string, MetricEntry>();
@@ -718,6 +730,7 @@ export function mapHealthRecordsToEntries(
     metrics,
     profileOrWeight,
     existingEntries,
+    stepCoveragePreferences,
   );
 }
 
@@ -735,7 +748,7 @@ export type UnrecordedStepActivity = {
  * Workout calories that still need to be added to an Active energy tracker.
  *
  * A manual/app workout row is an independent contribution, so it must not
- * suppress a calorie estimate for a different synced walking/running session.
+ * suppress a calorie estimate for a different synced walking/running/hiking session.
  * Conversely, an imported ActiveCaloriesBurned stream normally already
  * contains the provider's workout calories. In that case adding a second
  * workout-derived value would count the same activity twice.
@@ -780,8 +793,12 @@ export type StepActivityProfile = Pick<
   "age" | "sex" | "heightCm" | "weightKg"
 >;
 
-const DEFAULT_WALKING_SPEED_MPS = 1.34;
+// A daily step total has no session pace. Keep its reverse conversion on one
+// ordinary-walk assumption, independent of every workout recorded that day.
+const UNRECORDED_WALKING_SPEED_MPS = 1.4;
+const ASSUMED_RUNNING_SPEED_KMH = 9;
 const LEGACY_STEP_LENGTH_M = 0.762;
+const LEGACY_RUNNING_STEP_LENGTH_M = 1;
 const LEGACY_WALKING_KCAL_PER_KG_KM = 0.53;
 
 function clamp(value: number, minimum: number, maximum: number) {
@@ -797,6 +814,78 @@ function stepProfile(profileOrWeight: StepActivityProfile | number) {
         weightKg: profileOrWeight,
       }
     : profileOrWeight;
+}
+
+/**
+ * Profile-aware step length for one recorded walking, hiking, or running
+ * workout. If both measured distance and duration exist, their exact pace is
+ * used; otherwise the safe activity-family pace is used only for step length.
+ *
+ * Walking/hiking equation (Lee et al.; speed is centimetres/second):
+ *   length_m = (-16.14 - 0.06*age_y + 0.31*height_cm
+ *     - 0.04*weight_kg + 0.02*sex_female + 0.30*speed_cm_s) / 100
+ * Running equation (Malisoux et al.; speed is kilometres/hour):
+ *   length_m = -0.255 - 0.001*age_y + 0.279*height_m
+ *     + 0.083*speed_kmh
+ *
+ * Sources:
+ * https://doi.org/10.1080/1091367X.2026.2634091
+ * https://doi.org/10.1177/23259671231204629
+ */
+export function movementStepLengthForCoverage(
+  input: {
+    distanceKm?: number;
+    durationMinutes?: number;
+    running?: boolean;
+  },
+  profileOrWeight: StepActivityProfile | number,
+) {
+  const profile = stepProfile(profileOrWeight);
+  const distanceKm = Math.max(0, Number(input.distanceKm) || 0);
+  const durationMinutes = Math.max(0, Number(input.durationMinutes) || 0);
+  const running = input.running === true;
+  const hasMeasuredSpeed = distanceKm > 0 && durationMinutes > 0;
+  const speedKmh = hasMeasuredSpeed
+    ? distanceKm / (durationMinutes / 60)
+    : running
+      ? ASSUMED_RUNNING_SPEED_KMH
+      : UNRECORDED_WALKING_SPEED_MPS * 3.6;
+  const heightCm = Number(profile.heightCm) || 0;
+  const hasProfileHeight = heightCm >= 130 && heightCm <= 220;
+  if (!hasProfileHeight) {
+    return {
+      stepLengthM: running
+        ? LEGACY_RUNNING_STEP_LENGTH_M
+        : LEGACY_STEP_LENGTH_M,
+      speedKmh,
+      speedSource: hasMeasuredSpeed ? 'measured' as const : 'assumed' as const,
+    };
+  }
+  const age = clamp(Number(profile.age) || 35, 18, 90);
+  if (running) {
+    const predictedStepLengthM =
+      -0.255 - 0.001 * age + 0.279 * (heightCm / 100) + 0.083 * speedKmh;
+    return {
+      stepLengthM: clamp(predictedStepLengthM, 0.6, 2),
+      speedKmh,
+      speedSource: hasMeasuredSpeed ? 'measured' as const : 'assumed' as const,
+    };
+  }
+  const weightKg = clamp(Number(profile.weightKg) || 70, 35, 300);
+  const sexTerm = profile.sex === 'female' ? 1 : 0;
+  const predictedStepLengthM =
+    (-16.14 -
+      0.06 * age +
+      0.31 * heightCm -
+      0.04 * weightKg +
+      0.02 * sexTerm +
+      0.3 * ((speedKmh / 3.6) * 100)) /
+    100;
+  return {
+    stepLengthM: clamp(predictedStepLengthM, 0.4, 1.05),
+    speedKmh,
+    speedSource: hasMeasuredSpeed ? 'measured' as const : 'assumed' as const,
+  };
 }
 
 /**
@@ -823,7 +912,8 @@ export function estimateLevelWalkingFromSteps(
   const heightCm = Number(profile.heightCm) || 0;
   const age = clamp(Number(profile.age) || 35, 18, 90);
   const hasProfileHeight = heightCm >= 130 && heightCm <= 220;
-  const speedMps = DEFAULT_WALKING_SPEED_MPS;
+  // This fixed 1.4 m/s is deliberately not derived from any workout pace.
+  const speedMps = UNRECORDED_WALKING_SPEED_MPS;
 
   // Regression inputs are centimetres, kilograms and centimetres/second.
   // The published sex coefficient is negligible (0.02 cm) but retained.
@@ -867,8 +957,60 @@ export function estimateLevelWalkingFromSteps(
   };
 }
 
-const MOVEMENT_WORKOUT = /(walk|run|hike|treadmill)/i;
-const RUNNING_WORKOUT = /(run|treadmill)/i;
+/**
+ * Best available movement distance for subtracting a recorded walk/run/hike from
+ * the daily Steps total. Provider-reported distance is authoritative. When it
+ * is absent, active calories and active duration are combined with the same
+ * body-profile walking model used by the reverse step estimate; duration-only
+ * sessions retain the conservative habitual-speed fallback.
+ */
+export function movementDistanceForStepCoverage(
+  input: {
+    distanceKm?: number;
+    durationMinutes?: number;
+    activeCalories?: number;
+    running?: boolean;
+  },
+  profileOrWeight: StepActivityProfile | number,
+) {
+  const measuredDistance = Math.max(0, Number(input.distanceKm) || 0);
+  if (measuredDistance > 0) return measuredDistance;
+  const durationMinutes = Math.max(0, Number(input.durationMinutes) || 0);
+  const activeCalories = Math.max(0, Number(input.activeCalories) || 0);
+  const running = input.running === true;
+  const profile = stepProfile(profileOrWeight);
+  const weightKg = clamp(Number(profile.weightKg) || 70, 35, 300);
+  const heightCm = Number(profile.heightCm) || 0;
+
+  if (activeCalories > 0) {
+    let calorieDistanceKm =
+      activeCalories /
+      (weightKg * (running ? 1 : LEGACY_WALKING_KCAL_PER_KG_KM));
+    if (!running && durationMinutes > 0 && heightCm >= 130 && heightCm <= 220) {
+      const oxygenCostMlKgMin =
+        (activeCalories * 1_000) / (weightKg * durationMinutes * 5);
+      const inferredSpeedMps = Math.sqrt(
+        Math.max(0, (oxygenCostMlKgMin - 3.85) * (heightCm / 100) / 5.97),
+      );
+      if (Number.isFinite(inferredSpeedMps) && inferredSpeedMps > 0) {
+        calorieDistanceKm =
+          (clamp(inferredSpeedMps, 0.5, 2.2) * durationMinutes * 60) /
+          1_000;
+      }
+    }
+    if (durationMinutes > 0) {
+      return clamp(
+        calorieDistanceKm,
+        (durationMinutes / 60) * (running ? 4 : 1),
+        (durationMinutes / 60) * (running ? 20 : 8),
+      );
+    }
+    return calorieDistanceKm;
+  }
+  return durationMinutes > 0
+    ? (durationMinutes / 60) * (running ? 9 : 5)
+    : 0;
+}
 
 export function isCalculatedStepFallback(entry: MetricEntry) {
   return (
@@ -893,6 +1035,19 @@ export function isDailyActiveEnergyAggregateEntry(entry: MetricEntry) {
     (label.endsWith('total') ||
       (entry.sourceProvider === 'google_health' &&
         /(?:^|:)daily(?::|$)/i.test(entry.sourceRecordId ?? entry.id)))
+  );
+}
+
+/** Only a discrete activity interval may be explicitly converted to Steps. */
+export function isEligibleStandaloneActiveEnergyForStepCoverage(
+  entry: MetricEntry,
+) {
+  const label = (entry.label ?? '').trim();
+  return (
+    !isCalculatedStepFallback(entry) &&
+    !isFitbitRestingEnergyEntry(entry) &&
+    !isDailyActiveEnergyAggregateEntry(entry) &&
+    !/(?:resting energy|basal metabolic|\bbmr\b)/i.test(label)
   );
 }
 
@@ -1033,10 +1188,10 @@ export function unrecordedStepActivity(
   metrics: MetricDefinition[],
   steps: number,
   profileOrWeight: StepActivityProfile | number,
+  stepCoveragePreferences?: StepCoveragePreferences,
 ): UnrecordedStepActivity {
-  const walkingEstimate = estimateLevelWalkingFromSteps(
-    steps,
-    profileOrWeight,
+  const normalizedStepCoveragePreferences = normalizeStepCoveragePreferences(
+    stepCoveragePreferences,
   );
   const workoutMetricIds = new Set(
     metrics
@@ -1079,38 +1234,56 @@ export function unrecordedStepActivity(
       )
       .map((metric) => metric.id),
   );
-  const sessions = dayEntries.filter(
-    (entry) =>
-      workoutMetricIds.has(entry.metricId) &&
-      Boolean(entry.sourceRecordId) &&
-      !isCalculatedStepFallback(entry) &&
-      MOVEMENT_WORKOUT.test(entry.label ?? ""),
-  );
-  const sessionKeys = new Map<
-    string,
-    { sourceProvider: MetricEntry["sourceProvider"]; sourceRecordId: string }
-  >();
-  for (const session of sessions) {
-    const sourceRecordId = session.sourceRecordId!;
-    sessionKeys.set(`${session.sourceProvider ?? "health"}\u0000${sourceRecordId}`, {
-      sourceProvider: session.sourceProvider,
-      sourceRecordId,
-    });
+  const linkedRows = new Map<string, MetricEntry[]>();
+  const sessionKeys = new Map<string, MetricEntry>();
+  for (const entry of dayEntries) {
+    if (isCalculatedStepFallback(entry)) continue;
+    const identity = stepCoverageSessionIdentity(entry);
+    if (!identity) continue;
+    const rows = linkedRows.get(identity);
+    if (rows) rows.push(entry);
+    else linkedRows.set(identity, [entry]);
+    const explicitlyClassifiedActiveEnergy =
+      activeEnergyIds.has(entry.metricId) &&
+      isEligibleStandaloneActiveEnergyForStepCoverage(entry) &&
+      Boolean(
+        normalizedStepCoveragePreferences.sessions[identity]?.activityKey,
+      );
+    if (
+      (workoutMetricIds.has(entry.metricId) ||
+        explicitlyClassifiedActiveEnergy) &&
+      resolveNormalizedStepCoverageActivity(
+        entry,
+        normalizedStepCoveragePreferences,
+      )
+    )
+      sessionKeys.set(identity, entry);
   }
-  const sameSession = (
-    entry: MetricEntry,
-    source: { sourceProvider: MetricEntry["sourceProvider"]; sourceRecordId: string },
-  ) =>
-    entry.sourceRecordId === source.sourceRecordId &&
-    entry.sourceProvider === source.sourceProvider;
   let coveredSteps = 0;
   let estimatedWorkoutCalories = 0;
-  for (const source of sessionKeys.values()) {
-    const matching = dayEntries.filter((entry) => sameSession(entry, source));
-    const label =
-      matching.find((entry) => MOVEMENT_WORKOUT.test(entry.label ?? ""))?.label ??
-      "";
-    const running = RUNNING_WORKOUT.test(label);
+  for (const [identity, representative] of sessionKeys) {
+    const matching = linkedRows.get(identity) ?? [representative];
+    const labeled =
+      matching.find((entry) =>
+        resolveNormalizedStepCoverageActivity(
+          entry,
+          normalizedStepCoveragePreferences,
+        ),
+      ) ??
+      representative;
+    const activity = resolveNormalizedStepCoverageActivity(
+      labeled,
+      normalizedStepCoveragePreferences,
+    );
+    const coverage = resolveNormalizedStepCoverageChoice(
+      labeled,
+      normalizedStepCoveragePreferences,
+    );
+    if (!activity || !coverage?.included) continue;
+    const running =
+      activity.key === "running" ||
+      activity.key === "track_running" ||
+      activity.key === "treadmill_running";
     const distanceKm = Math.max(
       0,
       ...matching
@@ -1123,13 +1296,54 @@ export function unrecordedStepActivity(
         .filter((entry) => durationIds.has(entry.metricId))
         .map((entry) => Number(entry.value || 0)),
     );
-    const estimatedDistanceKm =
-      distanceKm || (durationMinutes / 60) * (running ? 9 : 5);
-    coveredSteps +=
-      (estimatedDistanceKm * 1000) /
-      (running ? 1 : walkingEstimate.stepLengthM);
+    const measuredSessionCalories = Math.max(
+      0,
+      ...matching
+        .filter(
+          (entry) =>
+            calorieIds.has(entry.metricId) ||
+            activeEnergyIds.has(entry.metricId),
+        )
+        .map((entry) => Number(entry.value || 0)),
+      ...matching.map(
+        (entry) => Number(entry.submetricValues?.exercise ?? 0),
+      ),
+    );
+    const directWorkoutSteps = Math.max(
+      0,
+      ...matching.map((entry) => Number(entry.sourceWorkoutSteps ?? 0)),
+    );
+    const estimatedDistanceKm = movementDistanceForStepCoverage(
+      {
+        distanceKm,
+        durationMinutes,
+        activeCalories: measuredSessionCalories,
+        running,
+      },
+      profileOrWeight,
+    );
+    if (directWorkoutSteps > 0) {
+      coveredSteps += directWorkoutSteps;
+    } else if (activity.mode === "equivalent") {
+      const equivalent = equivalentStepEstimate(
+        activity,
+        {
+          durationMinutes,
+          activeCalories: measuredSessionCalories,
+        },
+        { weightKg: stepProfile(profileOrWeight).weightKg },
+      );
+      coveredSteps += equivalent?.steps ?? 0;
+    } else {
+      const workoutStepLength = movementStepLengthForCoverage(
+        { distanceKm, durationMinutes, running },
+        profileOrWeight,
+      );
+      coveredSteps +=
+        (estimatedDistanceKm * 1000) / workoutStepLength.stepLengthM;
+    }
 
-    // A provider can expose a walking/running session with duration and
+    // A provider can expose a walking/running/hiking session with duration and
     // distance but omit ActiveCaloriesBurned (this is common when a workout
     // was forwarded by another app). In that case the session still needs to
     // contribute to Active energy and therefore Total energy burned. Prefer a
@@ -1138,13 +1352,28 @@ export function unrecordedStepActivity(
     // distance. The final metric composition below uses this estimate only
     // when no day-level ActiveCaloriesBurned rows exist, so an overlapping
     // provider total can never be counted twice.
-    const hasMeasuredSessionCalories = matching.some(
-      (entry) =>
-        (calorieIds.has(entry.metricId) ||
-          activeEnergyIds.has(entry.metricId)) &&
-        Number(entry.value || 0) > 0,
-    );
-    if (!hasMeasuredSessionCalories && estimatedDistanceKm > 0) {
+    const hasMeasuredSessionCalories = measuredSessionCalories > 0;
+    if (
+      !hasMeasuredSessionCalories &&
+      activity.mode === "equivalent" &&
+      durationMinutes > 0 &&
+      Number(activity.met ?? 0) > 0
+    ) {
+      const weightKg = clamp(
+        Number(stepProfile(profileOrWeight).weightKg) || 70,
+        35,
+        300,
+      );
+      // Active energy excludes the resting 1-MET component. Using gross MET
+      // here would silently re-introduce BMR into the Active energy tracker
+      // for a manually opted-in equivalent activity.
+      estimatedWorkoutCalories +=
+        ((Number(activity.met) - 1) *
+          3.5 *
+          weightKg *
+          durationMinutes) /
+        200;
+    } else if (!hasMeasuredSessionCalories && estimatedDistanceKm > 0) {
       const weightKg = clamp(
         Number(stepProfile(profileOrWeight).weightKg) || 70,
         35,
@@ -1190,7 +1419,7 @@ export function unrecordedStepActivity(
   };
 }
 
-function appendStepFallbackEntries(entries:MetricEntry[],userId:string,visibility:HealthImportVisibility,metrics:MetricDefinition[]|undefined,profileOrWeight:StepActivityProfile|number,existingEntries:readonly MetricEntry[]=[]){
+function appendStepFallbackEntries(entries:MetricEntry[],userId:string,visibility:HealthImportVisibility,metrics:MetricDefinition[]|undefined,profileOrWeight:StepActivityProfile|number,existingEntries:readonly MetricEntry[]=[],stepCoveragePreferences?:StepCoveragePreferences){
   if(!metrics)return entries;
   const stepIds=metrics.filter((metric)=>metric.healthMapping?.dataType==='steps'&&metric.healthMapping.field==='value').map((metric)=>metric.id);
   const fallback=metrics.filter((metric)=>metric.stepFallback);
@@ -1219,9 +1448,9 @@ function appendStepFallbackEntries(entries:MetricEntry[],userId:string,visibilit
     const dayEntries=[...contextualById.values()];
     const steps=Math.max(0,...importedDayEntries.filter((entry)=>stepIdSet.has(entry.metricId)).map((entry)=>Number(entry.value||0)));
     if(steps<=0)continue;
-    const estimate=unrecordedStepActivity(dayEntries,metrics,steps,profileOrWeight);
+    const estimate=unrecordedStepActivity(dayEntries,metrics,steps,profileOrWeight,stepCoveragePreferences);
     const stepEntry=importedDayEntries.find((entry)=>stepIdSet.has(entry.metricId))!;
-    const make=(metricId:string,value:number,suffix:string):MetricEntry=>({id:`health:${stepEntry.sourceProvider??'health_connect'}:step-fallback:${day}:${metricId}:${suffix}`,metricId,userId,value:Math.round(value*10)/10,localDate:day,recordedAt:stepEntry.recordedAt,visibility:importedMetricVisibility(visibility,metricId),source:'calculated',label:'Estimated unrecorded walking from steps',note:`Uses ${Math.round(estimate.uncoveredSteps).toLocaleString()} steps not already explained by walking or running workouts.`,sourceProvider:stepEntry.sourceProvider,sourceRecordId:`step-fallback:${day}`,sourceOrigin:stepEntry.sourceOrigin});
+    const make=(metricId:string,value:number,suffix:string):MetricEntry=>({id:`health:${stepEntry.sourceProvider??'health_connect'}:step-fallback:${day}:${metricId}:${suffix}`,metricId,userId,value:Math.round(value*10)/10,localDate:day,recordedAt:stepEntry.recordedAt,visibility:importedMetricVisibility(visibility,metricId),source:'calculated',label:'Estimated unrecorded walking from steps',note:`Uses ${Math.round(estimate.uncoveredSteps).toLocaleString()} steps not already explained by workouts included in Step coverage.`,sourceProvider:stepEntry.sourceProvider,sourceRecordId:`step-fallback:${day}`,sourceOrigin:stepEntry.sourceOrigin});
     for(const metric of fallback){
       const mapping=metric.healthMapping;
       if(mapping?.dataType==='active_energy'&&mapping.field==='value'){

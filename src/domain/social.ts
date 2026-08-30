@@ -3,6 +3,205 @@ import { translateDomainText } from '@/src/i18n/domain';
 
 export type MessageCategory = 'cheer' | 'taunt' | 'reminder';
 
+export type RecapShareAttachment = {
+  kind: 'recap';
+  scope: 'group' | 'personal';
+  highlight?: string;
+  anchor?: string;
+  title?: string;
+};
+
+export type ChallengeShareAttachment = {
+  kind: 'challenge';
+  challengeId: string;
+  title?: string;
+  occurrenceDate?: string;
+  groupId?: string;
+  audience?: 'group' | 'public';
+};
+
+export type MetricLogShareAttachment = {
+  kind: 'metric_log';
+  entryId: string;
+  metricId: string;
+  localDate: string;
+  memberId?: string;
+  title?: string;
+};
+
+export type ChatShareAttachment =
+  | RecapShareAttachment
+  | ChallengeShareAttachment
+  | MetricLogShareAttachment;
+
+const recapSharePattern = /habhub:\/\/recap\?([^\s]+)/i;
+const challengeSharePattern = /habhub:\/\/challenge\?([^\s]+)/i;
+const metricLogSharePattern = /habhub:\/\/metric-log\?([^\s]+)/i;
+const chatShareTransportPattern =
+  /habhub:\/\/(?:recap|challenge|metric-log)\?[^\s]*/gi;
+
+function isCalendarDate(value: string | undefined) {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split('-').map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return parsed.getUTCFullYear() === year &&
+    parsed.getUTCMonth() === month - 1 &&
+    parsed.getUTCDate() === day;
+}
+
+/**
+ * Recap shares remain compatible with existing persisted chat rows by using a
+ * compact deep link inside the message content. Consumers must use this parser
+ * so the transport link is never rendered as message or notification copy.
+ */
+export function parseRecapShareMessage(text: string) {
+  const match = recapSharePattern.exec(text);
+  if (!match) return undefined;
+  const query = new URLSearchParams(match[1]);
+  const scope = query.get('scope') === 'personal' ? 'personal' : 'group';
+  const visibleText = `${text.slice(0, match.index)}${text.slice(match.index + match[0].length)}`.trim();
+  return {
+    attachment: {
+      kind: 'recap',
+      scope,
+      highlight: query.get('highlight') ?? undefined,
+      anchor: query.get('anchor') ?? undefined,
+      title: query.get('title') ?? undefined,
+    } satisfies RecapShareAttachment,
+    text: visibleText,
+  };
+}
+
+export function parseChallengeShareMessage(text: string) {
+  const match = challengeSharePattern.exec(text);
+  if (!match) return undefined;
+  const query = new URLSearchParams(match[1]);
+  const challengeId = query.get('challengeId')?.trim();
+  if (!challengeId) return undefined;
+  const visibleText = `${text.slice(0, match.index)}${text.slice(match.index + match[0].length)}`.trim();
+  return {
+    attachment: {
+      kind: 'challenge',
+      challengeId,
+      title: query.get('title') ?? undefined,
+      occurrenceDate: query.get('occurrenceDate') ?? undefined,
+      groupId: query.get('groupId') ?? undefined,
+      audience: query.get('audience') === 'public' ? 'public' : 'group',
+    } satisfies ChallengeShareAttachment,
+    text: visibleText,
+  };
+}
+
+export function parseMetricLogShareMessage(text: string) {
+  const match = metricLogSharePattern.exec(text);
+  if (!match) return undefined;
+  const query = new URLSearchParams(match[1]);
+  const entryId = query.get('entryId')?.trim();
+  const metricId = query.get('metricId')?.trim();
+  const localDate = query.get('localDate')?.trim();
+  const memberId = query.get('memberId')?.trim() || undefined;
+  const title = query.get('title')?.trim() || undefined;
+  if (
+    !entryId ||
+    entryId.length > 400 ||
+    !metricId ||
+    metricId.length > 200 ||
+    !isCalendarDate(localDate) ||
+    (memberId?.length ?? 0) > 200 ||
+    (title?.length ?? 0) > 160
+  )
+    return undefined;
+  const visibleText = `${text.slice(0, match.index)}${text.slice(match.index + match[0].length)}`.trim();
+  return {
+    attachment: {
+      kind: 'metric_log',
+      entryId,
+      metricId,
+      localDate: localDate!,
+      memberId,
+      title,
+    } satisfies MetricLogShareAttachment,
+    text: visibleText,
+  };
+}
+
+export function parseChatShareMessage(text: string) {
+  return parseRecapShareMessage(text) ??
+    parseChallengeShareMessage(text) ??
+    parseMetricLogShareMessage(text);
+}
+
+/**
+ * Returns notification-safe chat copy while keeping the parsed attachment for
+ * navigation. The defensive transport-link removal is deliberately separate
+ * from attachment validation: an older or malformed deep link must never leak
+ * into alert cards or push notification previews.
+ */
+export function chatSharePreview(text: string) {
+  const shared = parseChatShareMessage(text);
+  const transportLinks = text.match(chatShareTransportPattern) ?? [];
+  return {
+    attachment: shared?.attachment,
+    text: (shared?.text ?? text.replace(chatShareTransportPattern, '')).trim(),
+    hasAttachment: Boolean(shared || transportLinks.length),
+  };
+}
+
+export function buildRecapShareMessage(
+  attachment: RecapShareAttachment,
+  userText = '',
+) {
+  const query = new URLSearchParams({ scope: attachment.scope });
+  if (attachment.highlight) query.set('highlight', attachment.highlight);
+  if (attachment.anchor) query.set('anchor', attachment.anchor);
+  if (attachment.title) query.set('title', attachment.title.slice(0, 160));
+  const link = `habhub://recap?${query.toString()}`;
+  const copy = userText.trim();
+  return copy ? `${copy}\n${link}` : link;
+}
+
+export function buildChallengeShareMessage(
+  attachment: ChallengeShareAttachment,
+  userText = '',
+) {
+  const query = new URLSearchParams({ challengeId: attachment.challengeId });
+  if (attachment.title) query.set('title', attachment.title.slice(0, 160));
+  if (attachment.occurrenceDate)
+    query.set('occurrenceDate', attachment.occurrenceDate);
+  if (attachment.groupId) query.set('groupId', attachment.groupId);
+  if (attachment.audience) query.set('audience', attachment.audience);
+  const link = `habhub://challenge?${query.toString()}`;
+  const copy = userText.trim();
+  return copy ? `${copy}\n${link}` : link;
+}
+
+export function buildMetricLogShareMessage(
+  attachment: MetricLogShareAttachment,
+  userText = '',
+) {
+  const query = new URLSearchParams({
+    entryId: attachment.entryId,
+    metricId: attachment.metricId,
+    localDate: attachment.localDate,
+  });
+  if (attachment.memberId) query.set('memberId', attachment.memberId);
+  if (attachment.title) query.set('title', attachment.title.slice(0, 160));
+  const link = `habhub://metric-log?${query.toString()}`;
+  const copy = userText.trim();
+  return copy ? `${copy}\n${link}` : link;
+}
+
+export function buildChatShareMessage(
+  attachment: ChatShareAttachment,
+  userText = '',
+) {
+  if (attachment.kind === 'recap')
+    return buildRecapShareMessage(attachment, userText);
+  if (attachment.kind === 'challenge')
+    return buildChallengeShareMessage(attachment, userText);
+  return buildMetricLogShareMessage(attachment, userText);
+}
+
 const parts: Record<MessageCategory, { openings: string[]; bodies: string[]; endings: string[] }> = {
   cheer: {
     openings: ['Nice work!', 'That is momentum.', 'Big win!', 'You showed up.', 'Strong move!', 'Look at you go!'],

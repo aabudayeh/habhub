@@ -14,6 +14,7 @@ import {
 } from "@/src/domain/todos";
 import { dateKey } from "@/src/domain/date";
 import { supabase } from "@/src/lib/supabase";
+import { subscribePrivateBroadcast } from "@/src/cloud/privateBroadcast";
 import { useApp } from "@/src/state/AppProvider";
 import { GroupTodoItem } from "@/src/types";
 import { useTutorialSandbox } from "@/src/tutorial/TutorialSandboxContext";
@@ -32,68 +33,6 @@ function loadGroupTodosShared(groupId: string) {
   });
   groupTodoLoadsByGroup.set(groupId, request);
   return request;
-}
-
-type GroupTodoRealtimeChannel = ReturnType<
-  NonNullable<typeof supabase>["channel"]
->;
-
-type GroupTodoRealtimeEntry = {
-  channel: GroupTodoRealtimeChannel;
-  listeners: Set<() => void>;
-  references: number;
-};
-
-const groupTodoRealtimeByGroup = new Map<string, GroupTodoRealtimeEntry>();
-
-/**
- * Every hook in this JS runtime shares one group topic/channel. A per-hook
- * topic would isolate the sender from every other device, while separate
- * channels with the same topic can replace each other inside supabase-js.
- */
-function acquireGroupTodoRealtime(
-  groupId: string,
-  onInvalidated: () => void,
-) {
-  if (!supabase) return undefined;
-  let entry = groupTodoRealtimeByGroup.get(groupId);
-  if (!entry) {
-    const listeners = new Set<() => void>();
-    const channel = supabase
-      .channel(`group-todos:${groupId}`)
-      .on("broadcast", { event: "changed" }, () => {
-        for (const listener of [...listeners]) listener();
-      })
-      .subscribe();
-    entry = { channel, listeners, references: 0 };
-    groupTodoRealtimeByGroup.set(groupId, entry);
-  }
-  const acquired = entry;
-  acquired.references += 1;
-  acquired.listeners.add(onInvalidated);
-  let released = false;
-  return {
-    send() {
-      return acquired.channel.send({
-        type: "broadcast",
-        event: "changed",
-        payload: {},
-      });
-    },
-    release() {
-      if (released) return;
-      released = true;
-      acquired.listeners.delete(onInvalidated);
-      acquired.references = Math.max(0, acquired.references - 1);
-      if (
-        acquired.references > 0 ||
-        groupTodoRealtimeByGroup.get(groupId) !== acquired
-      )
-        return;
-      groupTodoRealtimeByGroup.delete(groupId);
-      void supabase?.removeChannel(acquired.channel).catch(() => undefined);
-    },
-  };
 }
 
 function updateLocalGroupTodos(
@@ -119,9 +58,6 @@ export function useGroupTodos(groupId: string, enabled = true) {
   const [error, setError] = useState<string>();
   const requestRef = useRef<Promise<void> | null>(null);
   const groupIdRef = useRef(groupId);
-  const realtimeRef = useRef<
-    ReturnType<typeof acquireGroupTodoRealtime>
-  >(undefined);
   groupIdRef.current = groupId;
 
   const cloudEnabled =
@@ -185,18 +121,16 @@ export function useGroupTodos(groupId: string, enabled = true) {
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => void refresh(), 120);
     };
-    const realtime = acquireGroupTodoRealtime(groupId, queueRefresh);
-    realtimeRef.current = realtime;
+    const unsubscribe = subscribePrivateBroadcast(
+      `group:${groupId}:todos`,
+      "todos_updated",
+      queueRefresh,
+    );
     return () => {
       if (timer) clearTimeout(timer);
-      if (realtimeRef.current === realtime) realtimeRef.current = undefined;
-      realtime?.release();
+      unsubscribe();
     };
   }, [cloudEnabled, groupId, refresh]);
-
-  const broadcast = useCallback(() => {
-    void realtimeRef.current?.send().catch(() => undefined);
-  }, []);
 
   const save = useCallback(
     async (input: SaveGroupTodoInput) => {
@@ -270,11 +204,10 @@ export function useGroupTodos(groupId: string, enabled = true) {
         ...current.filter((todo) => todo.id !== saved.id),
         saved,
       ]);
-      broadcast();
       void refresh();
       return saved;
     },
-    [broadcast, cloudEnabled, refresh, state.currentUserId],
+    [cloudEnabled, refresh, state.currentUserId],
   );
 
   const toggle = useCallback(
@@ -324,14 +257,13 @@ export function useGroupTodos(groupId: string, enabled = true) {
       updateLocalGroupTodos(groupId, optimistic);
       try {
         await setGroupTodoCompletion(todo.id, !completed);
-        broadcast();
         void refresh();
       } catch (reason) {
         updateLocalGroupTodos(groupId, () => before);
         throw reason;
       }
     },
-    [broadcast, cloudEnabled, groupId, refresh, state.currentUserId],
+    [cloudEnabled, groupId, refresh, state.currentUserId],
   );
 
   const remove = useCallback(
@@ -346,14 +278,13 @@ export function useGroupTodos(groupId: string, enabled = true) {
       if (cloudEnabled) {
         try {
           await deleteGroupTodo(todoId);
-          broadcast();
         } catch (reason) {
           updateLocalGroupTodos(groupId, () => before);
           throw reason;
         }
-      } else broadcast();
+      }
     },
-    [broadcast, cloudEnabled, groupId],
+    [cloudEnabled, groupId],
   );
 
   return { todos, loading, ready, error, refresh, save, toggle, remove };

@@ -197,6 +197,7 @@ export function totalEnergyBurnedBreakdownEntries(
           state.metrics,
           stepCount,
           profile,
+          state.settings.stepCoveragePreferences,
         )
       : undefined;
     if (

@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText as Text } from "@/src/components/AppText";
 import { memberDisplayName } from "@/src/domain/members";
+import { chatSharePreview } from "@/src/domain/social";
 import { useApp } from "@/src/state/AppProvider";
 import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 import { useAppColors, useGroupAccent } from "@/src/theme";
@@ -93,7 +94,17 @@ export function InAppChatBanner() {
     const senderName = sender
       ? memberDisplayName(stateRef.current, sender)
       : "A group member";
-    const preview = message.text || "Sent an image";
+    const sharedMessage = chatSharePreview(message.text);
+    const hasAttachment = Boolean(
+      sharedMessage.hasAttachment || message.todoAttachment,
+    );
+    const preview = sharedMessage.text
+      ? `${sharedMessage.text}${hasAttachment ? " · Attachment" : ""}`
+      : hasAttachment
+        ? "Sent an attachment"
+        : message.imageUri
+          ? "Sent an image"
+          : "Sent a message";
     show({
       id: message.id,
       title: message.recipientId

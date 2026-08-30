@@ -6,6 +6,7 @@ import {
   safeMetricValue,
   scheduledGoalReached,
   trackedGoalSummary,
+  weightDailyGoalStatus,
 } from "./metrics";
 import { todoAppearsOnDate, todoResolvedOnDate } from "./schedule";
 import { todoMatchesViewFilter } from "./todos";
@@ -87,14 +88,16 @@ export function todayHeroSummary(
         : met && metric.id !== "deficit"
           ? 1
           : boundedProgress(
-              metricVisualProgress(
-                state,
-                metric,
-                userId,
-                localDate,
-                value,
-                effectiveGoalTarget(state, metric, userId, localDate),
-              ),
+              metric.id === "weight"
+                ? weightDailyGoalStatus(state, userId, localDate).progress
+                : metricVisualProgress(
+                    state,
+                    metric,
+                    userId,
+                    localDate,
+                    value,
+                    effectiveGoalTarget(state, metric, userId, localDate),
+                  ),
             ),
       unavailable,
       value,
@@ -103,10 +106,13 @@ export function todayHeroSummary(
   // Match Status/avatar semantics: Featured progress is the average progress
   // inside each scheduled goal, not only the fraction that crossed 100%.
   // To-Do-only mode remains a completed-item fraction.
+  const applicableGoalProgress = goalProgress.filter(
+    (goal) => !goal.unavailable,
+  );
   const progress = usesGoals
-    ? goalProgress.length
-      ? goalProgress.reduce((sum, goal) => sum + goal.progress, 0) /
-        goalProgress.length
+    ? applicableGoalProgress.length
+      ? applicableGoalProgress.reduce((sum, goal) => sum + goal.progress, 0) /
+        applicableGoalProgress.length
       : 0
     : total
       ? met / total

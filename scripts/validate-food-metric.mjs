@@ -775,7 +775,7 @@ assert.ok(
 );
 assert.match(
   provider,
-  /const nutrientSidecars: MetricEntry\[\] = capturedFoodNutrients\([\s\S]{0,1600}primaryEntry,[\s\S]{0,120}\.\.\.nutrientSidecars/,
+  /const nutrientSidecars: MetricEntry\[\] = capturedFoodNutrients\([\s\S]{0,2600}primaryEntry,[\s\S]{0,120}\.\.\.nutrientSidecars/,
   "manual Food must atomically emit every positive nutrient sidecar",
 );
 assert.match(
@@ -814,14 +814,19 @@ assert.match(
 );
 assert.match(
   detail,
-  /const canAddEntry =[\s\S]{0,100}Boolean\(persistedTracker\)/,
-  "a virtual nutrient page must not expose write actions until the tracker is explicitly added",
+  /const loggingDestination = metricLoggingDestination\(tracker\)[\s\S]{0,300}const canAddEntry = Boolean\(\s*loggingTargetId/,
+  "a nutrient detail must expose its source Food logger without creating the nutrient tracker",
+);
+assert.match(
+  detail,
+  /pathname: "\/\(tabs\)\/log"[\s\S]{0,300}metric: loggingTargetId![\s\S]{0,300}focusMetric:/,
+  "a nutrient detail add action must route to Food logging instead of a direct nutrient row",
 );
 assert.match(detail, /strokeDasharray=/);
 assert.doesNotMatch(detail, /foodMacroBarGoalTick: \{[\s\S]{0,180}borderStyle: "dashed"/);
 assert.match(
   detail,
-  /\["week", "month", "year", "overall"\]\.includes\([\s\S]{0,120}setCollapsedEntryDates/,
+  /const entryRangeView = \["week", "month", "year", "overall"\]\.includes\([\s\S]{0,120}const entriesSectionOpen = entriesOpenOverride \?\? !entryRangeView;[\s\S]{0,220}setCollapsedEntryDates\(\[\]\)/,
   "entry groups default collapsed only for the four date-range views",
 );
 assert.match(

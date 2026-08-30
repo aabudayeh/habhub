@@ -80,9 +80,32 @@ export function groupChallengeAvailability(
 }
 
 type ChallengeMetricShape = {
+  id?: string;
   dataType: string;
   sections: { group: boolean };
 };
+
+// Public challenges must use a slug that every account receives. A private
+// group's custom tracker has no shared schema outside that group, so exposing
+// it in the global catalogue would create incomparable totals.
+export const PUBLIC_CHALLENGE_METRIC_IDS = new Set([
+  "steps", "food", "exercise", "deficit", "energy_burned", "water",
+  "workout", "weight", "protein", "fat", "carbs", "fiber", "sodium",
+  "workout_duration", "body_fat", "lean_body_mass", "body_water_mass",
+  "bone_mass", "blood_pressure_systolic", "blood_pressure_diastolic",
+  "pulse", "workout_distance", "sugar", "saturated_fat", "cholesterol",
+  "potassium", "calcium", "iron", "magnesium", "vitamin_c", "vitamin_d",
+  "vitamin_b12", "sugar_alcohol", "starch", "trans_fat",
+  "monounsaturated_fat", "polyunsaturated_fat", "omega_3", "omega_6",
+  "phosphorus", "zinc", "copper", "manganese", "selenium", "iodine",
+  "chloride", "chromium", "molybdenum", "vitamin_a", "vitamin_e",
+  "vitamin_k", "vitamin_b1", "vitamin_b2", "vitamin_b3", "vitamin_b5",
+  "vitamin_b6", "vitamin_b9", "folic_acid", "biotin", "alcohol",
+  "caffeine", "weekly_deficit_balance", "sleep", "blood_glucose",
+  "menstrual_cycle", "menstrual_flow", "cycle_day", "days_until_period",
+  "overall_score", "todo_completion", "intermittent_fasting", "reading",
+  "study", "work", "screen_time",
+]);
 
 type ChallengeRankingDirection = "higher" | "lower" | "closest";
 type ChallengeWinnerRow = {
@@ -177,6 +200,22 @@ export function challengeWinnerIds(
     .map((row) => row.member.id);
 }
 
+/** Competition ranking: tied values share a place and the next place skips. */
+export function challengeStandingPosition(
+  value: number,
+  values: readonly number[],
+  target: number,
+  direction: ChallengeRankingDirection,
+) {
+  return (
+    1 +
+    values.filter(
+      (candidate) =>
+        compareChallengeValues(candidate, value, target, direction) < 0,
+    ).length
+  );
+}
+
 /** Goal-relative bar for open competitions; ranking still uses raw values. */
 export function openChallengeGoalProgress(
   displayProgress?: number,
@@ -207,6 +246,14 @@ export function validChallengeDate(value: string) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const parsed = new Date(`${value}T12:00:00Z`);
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+export function isPublicChallengeMetric(metric: ChallengeMetricShape) {
+  return (
+    isChallengeMetric(metric) &&
+    typeof metric.id === "string" &&
+    PUBLIC_CHALLENGE_METRIC_IDS.has(metric.id)
+  );
 }
 
 export function groupChallengeEndDate(challenge: GroupChallenge) {

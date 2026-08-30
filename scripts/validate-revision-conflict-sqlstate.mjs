@@ -17,6 +17,11 @@ const dailyStatusBatchMigration = read(
   "migrations",
   "202608240003_batch_daily_status_revision_fence.sql",
 );
+const restoredNonRetryMigration = read(
+  "supabase",
+  "migrations",
+  "202608280005_restore_nonretry_cloud_conflicts.sql",
+);
 
 const expectedFunctions = [
   "assert_account_snapshot_revision",
@@ -124,6 +129,46 @@ assert.match(
   /account_revision_required' using errcode = 'P0001'/i,
   "the batched daily-status fence must keep deterministic revision failures non-retryable",
 );
+
+const restoredExpectedFunctions = [
+  "apply_google_health_import",
+  "assert_account_snapshot_revision",
+  "project_google_health_group_data",
+];
+const restoredExpectedArray = restoredNonRetryMigration.match(
+  /expected_functions constant text\[\] := array\[([\s\S]*?)\n\s*\];/i,
+)?.[1];
+assert.ok(
+  restoredExpectedArray,
+  "the final non-retry migration must declare its complete drift allowlist",
+);
+assert.deepEqual(
+  [...restoredExpectedArray.matchAll(/'([a-z0-9_]+)'/g)].map(
+    (match) => match[1],
+  ),
+  restoredExpectedFunctions,
+  "later cloud migrations must repair exactly the retry-class functions they redefined",
+);
+assert.match(
+  restoredNonRetryMigration,
+  /pg_catalog\.replace\(\s*target\.function_definition,\s*'''40001''',\s*'''P0001'''\s*\)/i,
+  "the final migration must rewrite every allowlisted deterministic conflict",
+);
+assert.match(
+  restoredNonRetryMigration,
+  /if retry_functions is distinct from expected_functions/i,
+  "the final migration must fail closed if the live retry-class function set drifts",
+);
+assert.match(
+  restoredNonRetryMigration,
+  /if exists \([\s\S]*pg_catalog\.pg_get_functiondef[\s\S]*'''40001'''[\s\S]*raise exception 'A public function still uses retry-class SQLSTATE 40001'/i,
+  "the final migration must prove no public function retains retry-class 40001",
+);
+assert.doesNotMatch(
+  restoredNonRetryMigration,
+  /return\s+null|exception\s+when/i,
+  "the final migration must preserve atomic rejection rather than swallowing conflicts",
+);
 assert.match(
   provider,
   /stale_group_configuration/i,
@@ -145,5 +190,5 @@ assert.match(
 );
 
 console.log(
-  "Revision-fence validation passed: all five live CAS guards stay fail-closed and migrate from retry-class 40001 to P0001.",
+  "Revision-fence validation passed: deterministic CAS guards stay fail-closed and the final schema removes retry-class 40001 after later cloud redefinitions.",
 );

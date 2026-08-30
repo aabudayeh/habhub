@@ -4,6 +4,7 @@ import { statusForDay } from "@/src/domain/dataIndex";
 import {
   acceptedChallengeParticipantIds,
   challengeWinnerIds,
+  challengeStandingPosition,
   challengeValueOutcome,
   compareChallengeValues,
   groupChallengeOccurrenceId,
@@ -26,6 +27,7 @@ export {
   challengeCardId,
   challengeIdFromCard,
   challengeWinnerIds,
+  challengeStandingPosition,
   challengeValueOutcome,
   compareChallengeValues,
   groupChallengeAvailability,
@@ -38,6 +40,8 @@ export {
   groupChallengeParticipation,
   groupChallengeSourceId,
   isChallengeMetric,
+  isPublicChallengeMetric,
+  PUBLIC_CHALLENGE_METRIC_IDS,
   mergedLeaderboardCardOrder,
   openChallengeGoalProgress,
   validChallengeDate,
@@ -128,6 +132,9 @@ export type ChallengeMemberProgress = {
   progress: number;
   complete: boolean;
   valueLabel: string;
+  /** Competition rank. Ties share a position and skip the following place. */
+  standingPosition?: number;
+  competitorCount?: number;
 };
 
 export type ResolvedChallengeWin = {
@@ -135,6 +142,28 @@ export type ResolvedChallengeWin = {
   localDate: string;
   winnerIds: string[];
 };
+
+export type ResolvedChallengePlacement = {
+  challengeId: string;
+  localDate: string;
+  placements: {
+    memberId: string;
+    standingPosition: number;
+    competitorCount: number;
+    /** Immutable final value captured when the occurrence settles. */
+    value?: number;
+    /** True only when the participant satisfied the challenge win rules. */
+    winner?: boolean;
+  }[];
+};
+
+/** Stable identity shared by server result events, badges, and recap cards. */
+export function challengeSettlementKey(
+  challengeId: string,
+  occurrenceDate: string,
+) {
+  return `${challengeId}:${occurrenceDate}`;
+}
 
 /**
  * A custom challenge target may only use an exact value the viewer is already
@@ -227,30 +256,40 @@ export function groupChallengeProgress(
       row.complete = final && row.value === best;
     }
   }
-  return rows.sort((left, right) => {
-      if (left.mode !== right.mode) return left.mode === "exact" ? -1 : 1;
-      if (left.mode !== "exact") return 0;
+  const sorted = rows.sort((left, right) => {
+    if (left.mode !== right.mode) return left.mode === "exact" ? -1 : 1;
+    if (left.mode !== "exact") return 0;
       return compareChallengeValues(
         left.value,
         right.value,
         target ?? 0,
-        target === undefined ? "higher" : metric.rankingDirection,
-      );
-    });
+      target === undefined ? "higher" : metric.rankingDirection,
+    );
+  });
+  const exactRows = sorted.filter((row) => row.mode === "exact");
+  const exactValues = exactRows.map((row) => row.value);
+  exactRows.forEach((row) => {
+    row.standingPosition = challengeStandingPosition(
+      row.value,
+      exactValues,
+      target ?? 0,
+      target === undefined ? "higher" : metric.rankingDirection,
+    );
+    row.competitorCount = exactRows.length;
+  });
+  return sorted;
 }
 
-/**
- * Finalized, viewer-authorized outcomes only. Challenges dated today or later
- * remain live, and duplicate realtime rows cannot inflate a member's count.
- */
-export function resolvedGroupChallengeWins(
+/** Final tie-aware placements used by badges and stable, non-decreasing XP. */
+export function resolvedGroupChallengePlacements(
   state: AppState,
   challenges: readonly GroupChallenge[],
   throughDate: string,
   today: string,
-): ResolvedChallengeWin[] {
+  settledChallengeOccurrences?: ReadonlySet<string>,
+): ResolvedChallengePlacement[] {
   const seen = new Set<string>();
-  const resolved: ResolvedChallengeWin[] = [];
+  const resolved: ResolvedChallengePlacement[] = [];
   const earliest = challenges
     .map((challenge) => challenge.localDate)
     .sort()[0];
@@ -262,7 +301,14 @@ export function resolvedGroupChallengeWins(
       seen.has(challenge.id) ||
       challenge.groupId !== state.group.id ||
       groupChallengeEndDate(challenge) > throughDate ||
-      groupChallengeEndDate(challenge) >= today
+      groupChallengeEndDate(challenge) >= today ||
+      (settledChallengeOccurrences &&
+        !settledChallengeOccurrences.has(
+          challengeSettlementKey(
+            groupChallengeSourceId(challenge),
+            challenge.localDate,
+          ),
+        ))
     )
       continue;
     seen.add(challenge.id);
@@ -275,16 +321,31 @@ export function resolvedGroupChallengeWins(
       rows.length !== new Set(acceptedChallengeParticipantIds(challenge)).size
     )
       continue;
-    const winnerIds = challengeWinnerIds(
-      rows,
-      challenge.target,
-      challenge.target === undefined ? "higher" : metric.rankingDirection,
+    const winnerIds = new Set(
+      challengeWinnerIds(
+        rows,
+        challenge.target,
+        challenge.target === undefined ? "higher" : metric.rankingDirection,
+      ),
     );
-    if (winnerIds.length)
+    const placements = rows.flatMap((row) =>
+      row.mode === "exact" &&
+      row.standingPosition !== undefined &&
+      row.competitorCount !== undefined
+        ? [{
+            memberId: row.member.id,
+            standingPosition: row.standingPosition,
+            competitorCount: row.competitorCount,
+            value: row.value,
+            winner: winnerIds.has(row.member.id),
+          }]
+        : [],
+    );
+    if (placements.length === rows.length)
       resolved.push({
         challengeId: challenge.id,
         localDate: challenge.localDate,
-        winnerIds: [...new Set(winnerIds)],
+        placements,
       });
   }
   return resolved.sort(
@@ -292,4 +353,28 @@ export function resolvedGroupChallengeWins(
       right.localDate.localeCompare(left.localDate) ||
       left.challengeId.localeCompare(right.challengeId),
   );
+}
+
+/**
+ * Finalized, viewer-authorized outcomes only. Challenges dated today or later
+ * remain live, and duplicate realtime rows cannot inflate a member's count.
+ */
+export function resolvedGroupChallengeWins(
+  state: AppState,
+  challenges: readonly GroupChallenge[],
+  throughDate: string,
+  today: string,
+): ResolvedChallengeWin[] {
+  return resolvedGroupChallengePlacements(
+    state,
+    challenges,
+    throughDate,
+    today,
+  ).map((result) => ({
+    challengeId: result.challengeId,
+    localDate: result.localDate,
+    winnerIds: result.placements
+      .filter((placement) => placement.winner === true)
+      .map((placement) => placement.memberId),
+  }));
 }

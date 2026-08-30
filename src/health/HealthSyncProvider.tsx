@@ -666,6 +666,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
         current.settings.energyProfile,
         sourcePreferences,
         healthFallbackContextForRead(currentDayEntries, current.metrics, ['steps']),
+        current.settings.stepCoveragePreferences,
       );
       await importHealthEntries(
         entries,
@@ -799,6 +800,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
           current.settings.energyProfile,
           sourcePreferences,
           healthFallbackContextForRead(current.entries, current.metrics, ['steps']),
+          current.settings.stepCoveragePreferences,
         );
         // Four native slices become one reducer update, one React render, and
         // one deferred/coalesced snapshot write. Keep the cloud gate open while
@@ -973,6 +975,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
             current.settings.energyProfile,
             sourcePreferences,
             healthFallbackContextForRead(current.entries, current.metrics, dataTypes),
+            current.settings.stepCoveragePreferences,
           );
           importedCount = entries.length;
           cumulativeImportedCount = importedCount;
@@ -1015,6 +1018,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
             current.settings.energyProfile,
             sourcePreferences,
             healthFallbackContextForRead(current.entries, current.metrics, dataTypes),
+            current.settings.stepCoveragePreferences,
           );
           importedCount = entries.length;
           cumulativeImportedCount =
@@ -1063,6 +1067,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
             current.settings.energyProfile,
             sourcePreferences,
             healthFallbackContextForRead(current.entries, current.metrics, dataTypes),
+            current.settings.stepCoveragePreferences,
           );
           importedCount = entries.length;
           cumulativeImportedCount = importedCount;

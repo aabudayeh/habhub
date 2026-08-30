@@ -148,7 +148,11 @@ assert.doesNotMatch(
 
 const authProvider = fs.readFileSync("src/auth/AuthProvider.tsx", "utf8");
 const cloudProvider = fs.readFileSync("src/cloud/CloudSyncProvider.tsx", "utf8");
-assert.match(authProvider, /deleteGoogleHealthStepCheckpoint\(userId\)/);
+assert.match(
+  authProvider,
+  /async function purgeSignedOutAccountCaches\(accountId: string\)[\s\S]{0,220}deleteGoogleHealthStepCheckpoint\(accountId\)/,
+  "the shared account-boundary purge must delete the encrypted Steps checkpoint",
+);
 assert.match(
   appProvider,
   /commitReducedState\(next, true, "local"\)\.then\(\(\) =>[\s\S]{0,100}deleteGoogleHealthStepCheckpoint/,

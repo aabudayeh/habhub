@@ -19,3 +19,7 @@ export async function deleteGoogleHealthGroupCheckpoint(
   _accountId: string,
   _groupId: string,
 ) {}
+
+export async function deleteGoogleHealthGroupCheckpointsForAccount(
+  _accountId: string,
+) {}

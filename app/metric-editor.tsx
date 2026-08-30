@@ -379,7 +379,9 @@ export default function TrackerEditor() {
     ? metricVisualization(tracker)
     : {
         detailDay: "progress" as const,
-        detailRange: "bar" as const,
+        // Resolve after the tracker has its final data type and any special
+        // behavior, rather than freezing every new tracker to bars.
+        detailRange: "auto" as const,
         progressOverview: "bar" as const,
         progressGrid: "intensity" as const,
       };
