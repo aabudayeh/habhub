@@ -23,6 +23,7 @@ export type PaceAlert = {
   id: string;
   category: AlertCategory;
   icon: keyof typeof Ionicons.glyphMap;
+  iconFamily?: "ionicons" | "party-popper";
   color: string;
   title: string;
   detail: string;
@@ -357,6 +358,10 @@ export function buildAlerts(
             : reminder
               ? "flame-outline"
               : "swap-vertical-outline",
+      iconFamily:
+        socialReaction && event.reaction === "cheer"
+          ? "party-popper"
+          : "ionicons",
       color: socialReaction
         ? event.reaction === "cheer"
           ? palette.amber

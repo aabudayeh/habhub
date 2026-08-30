@@ -112,6 +112,10 @@ function repairKnownMetricDefaults(
       name: "Photo progress",
       dataType: "photo" as const,
       manualEntry: true,
+      // Old untouched defaults omitted this field (which behaved as enabled).
+      // Preserve an explicit user choice while migrating that legacy omission
+      // to the new no-target default.
+      goalEnabled: metric.goalEnabled ?? false,
     };
   if (metric.id === "todo_completion")
     return {

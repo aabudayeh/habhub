@@ -28,6 +28,7 @@ import {
   AppText as Text,
   AppTextInput as TextInput,
 } from "@/src/components/AppText";
+import { CheerIcon } from "@/src/components/CheerIcon";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { TAB_SCENE_SAFE_AREA_EDGES } from "@/src/domain/webSafeArea";
 import { translateUiText, useLocale } from "@/src/i18n";
@@ -1405,7 +1406,7 @@ function ChatScreen() {
             <View style={styles.quickRow}>
               <Quick
                 label="Cheer"
-                icon="sparkles-outline"
+                partyPopper
                 onPress={() => suggest("cheer")}
               />
               <Quick
@@ -1558,10 +1559,12 @@ function ConversationButton({
 function Quick({
   label,
   icon,
+  partyPopper = false,
   onPress,
 }: {
   label: string;
-  icon: keyof typeof Ionicons.glyphMap;
+  icon?: keyof typeof Ionicons.glyphMap;
+  partyPopper?: boolean;
   onPress: () => void;
 }) {
   const accent = useGroupAccent();
@@ -1575,7 +1578,11 @@ function Quick({
         pressed && styles.pressed,
       ]}
     >
-      <Ionicons name={icon} size={14} color={accent} />
+      {partyPopper ? (
+        <CheerIcon size={15} color={accent} />
+      ) : icon ? (
+        <Ionicons name={icon} size={14} color={accent} />
+      ) : null}
       <Text style={[styles.quickText, { color: accent }]}>{label}</Text>
     </Pressable>
   );

@@ -18,6 +18,9 @@ const metricDetailSource = read("app/metric-detail.tsx");
 const leaderboardDetailSource = read("app/leaderboard-detail.tsx");
 const recapSource = read("app/recap.tsx");
 const alertsSource = read("src/domain/alerts.ts");
+const alertPageSource = read("app/alerts.tsx");
+const chatSource = read("app/(tabs)/chat.tsx");
+const cheerIconSource = read("src/components/CheerIcon.tsx");
 
 assert.match(
   typesSource,
@@ -271,9 +274,13 @@ assert.match(
   /const canOpenWorkout = loggingDestination === "workout"/,
   "Workout-owned and workout-derived details must share the centralized Gym shortcut.",
 );
-assert.match(leaderboardDetailSource, /\["cheer", "sparkles-outline"\]/);
-assert.match(recapSource, /icon="sparkles" count=\{counts\("cheer"\)\}/);
-assert.match(alertsSource, /event\.reaction === "cheer"[\s\S]{0,40}\? "sparkles-outline"/);
+assert.match(leaderboardDetailSource, /reaction === "cheer"[\s\S]{0,120}<CheerIcon/);
+assert.match(leaderboardDetailSource, /\["cheer", null\]/);
+assert.match(recapSource, /icon="party-popper" count=\{counts\("cheer"\)\}/);
+assert.match(alertsSource, /event\.reaction === "cheer"[\s\S]{0,80}\? "party-popper"/);
+assert.match(alertPageSource, /alert\.iconFamily === "party-popper"[\s\S]{0,80}<CheerIcon/);
+assert.match(chatSource, /label="Cheer"[\s\S]{0,80}partyPopper/);
+assert.match(cheerIconSource, /MaterialCommunityIcons[\s\S]{0,120}name="party-popper"/);
 assert.doesNotMatch(leaderboardDetailSource, /\["cheer", "megaphone-outline"\]/);
 assert.match(
   metricDetailSource,

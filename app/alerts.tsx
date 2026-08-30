@@ -5,6 +5,7 @@ import { Pressable, StyleSheet, View } from "react-native";
 
 import { AppText as Text } from "@/src/components/AppText";
 import { BadgeMedallion } from "@/src/components/BadgeMedallion";
+import { CheerIcon } from "@/src/components/CheerIcon";
 import { useLocale, useTranslation } from "@/src/i18n";
 import {
   Avatar,
@@ -490,11 +491,15 @@ export default function Alerts() {
                           { backgroundColor: `${alert.color}18` },
                         ]}
                       >
-                        <Ionicons
-                          name={alert.icon}
-                          size={20}
-                          color={alert.color}
-                        />
+                        {alert.iconFamily === "party-popper" ? (
+                          <CheerIcon size={21} color={alert.color} />
+                        ) : (
+                          <Ionicons
+                            name={alert.icon}
+                            size={20}
+                            color={alert.color}
+                          />
+                        )}
                       </View>
                     )}
                     <View style={styles.copy}>

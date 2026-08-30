@@ -246,6 +246,7 @@ const BASE_METRICS: MetricDefinition[] = [
     aggregation: "max",
     rankingDirection: "higher",
     goal: { kind: "complete", target: 1 },
+    goalEnabled: false,
     scoreWeight: 0,
     defaultVisibility: "group",
     sections: { today: false, group: false, insights: true },

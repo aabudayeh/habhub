@@ -1,10 +1,32 @@
 import { MetricEntry, PhotoUpdate } from "@/src/types";
 
 /**
- * Deliberately use a short, useful scale instead of forcing dozens of taps.
- * The UI walks this scale with compact minus/plus controls.
+ * Keep the half-speed option, then expose every whole-number speed so the
+ * buttons and draggable control never skip a value the user wants.
  */
-export const PHOTO_VIDEO_SPEEDS = [0.5, 1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20] as const;
+export const PHOTO_VIDEO_SPEEDS = [
+  0.5,
+  1,
+  2,
+  3,
+  4,
+  5,
+  6,
+  7,
+  8,
+  9,
+  10,
+  11,
+  12,
+  13,
+  14,
+  15,
+  16,
+  17,
+  18,
+  19,
+  20,
+] as const;
 export type PhotoVideoSpeed = (typeof PHOTO_VIDEO_SPEEDS)[number];
 
 export function adjacentPhotoVideoSpeed(
@@ -17,6 +39,13 @@ export function adjacentPhotoVideoSpeed(
     Math.min(PHOTO_VIDEO_SPEEDS.length - 1, currentIndex + direction),
   );
   return PHOTO_VIDEO_SPEEDS[nextIndex];
+}
+
+export function photoVideoSpeedAtOffset(offset: number, trackWidth: number) {
+  if (trackWidth <= 0) return PHOTO_VIDEO_SPEEDS[0];
+  const ratio = Math.max(0, Math.min(1, offset / trackWidth));
+  const index = Math.round(ratio * (PHOTO_VIDEO_SPEEDS.length - 1));
+  return PHOTO_VIDEO_SPEEDS[index];
 }
 
 /**

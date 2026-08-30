@@ -2613,9 +2613,8 @@ const styles = StyleSheet.create({
   primaryMeasurementText: {
     flex: 1,
     minWidth: 0,
-    fontSize: 22,
-    lineHeight: 27,
-    fontWeight: "900",
+    ...typography.cardTitle,
+    fontWeight: "800",
     paddingVertical: 10,
   },
   primaryMeasurementUnit: {

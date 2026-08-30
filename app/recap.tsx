@@ -19,6 +19,7 @@ import {
 } from "react-native";
 
 import { AppText as Text, AppTextInput as TextInput } from "@/src/components/AppText";
+import { CheerIcon } from "@/src/components/CheerIcon";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import { DateRangeNavigator, PeriodChoiceBar } from "@/src/components/PeriodNavigator";
 import { Avatar, Card, Chip, IconButton, PageHeader, Screen } from "@/src/components/ui";
@@ -589,7 +590,7 @@ function FeedCard({ item, currentUserId, members, timeFormat, highlighted, onLay
         </Pressable>
         <View style={[styles.actions, { borderTopColor: colors.border }]}>
           <ReactionButton icon="heart" count={counts("heart")} active={mine?.reaction === "heart"} color="#E65D75" onPress={() => onReact("heart")} />
-          <ReactionButton icon="sparkles" count={counts("cheer")} active={mine?.reaction === "cheer"} color="#E3A72F" onPress={() => onReact("cheer")} />
+          <ReactionButton icon="party-popper" count={counts("cheer")} active={mine?.reaction === "cheer"} color="#E3A72F" onPress={() => onReact("cheer")} />
           <ReactionButton icon="thumbs-up" count={counts("thumbs_up")} active={mine?.reaction === "thumbs_up"} color={accent} onPress={() => onReact("thumbs_up")} />
           <ReactionButton icon="thumbs-down" count={counts("thumbs_down")} active={mine?.reaction === "thumbs_down"} color="#D87C42" onPress={() => onReact("thumbs_down")} />
           <Pressable onPress={() => setCommentsOpen((value) => !value)} style={styles.actionButton}><Ionicons name="chatbubble-outline" size={15} color={colors.muted} /><Text style={[styles.actionText, { color: colors.muted }]}>{comments.length || "Comment"}</Text></Pressable>
@@ -678,10 +679,13 @@ const MemoFeedCard = React.memo(
     sameFeedComments(left.comments, right.comments),
 );
 
-function ReactionButton({ icon, count, active, color, onPress }: { icon: "heart" | "thumbs-up" | "thumbs-down" | "sparkles"; count: number; active: boolean; color: string; onPress: () => void }) {
+function ReactionButton({ icon, count, active, color, onPress }: { icon: "heart" | "thumbs-up" | "thumbs-down" | "party-popper"; count: number; active: boolean; color: string; onPress: () => void }) {
   const colors = useAppColors();
-  const outline = `${icon}-outline` as keyof typeof Ionicons.glyphMap;
-  return <Pressable onPress={onPress} style={[styles.actionButton, active && { backgroundColor: `${color}18` }]}><Ionicons name={active ? icon : outline} size={15} color={active ? color : colors.muted} />{count ? <Text style={[styles.actionText, { color: active ? color : colors.muted }]}>{count}</Text> : null}</Pressable>;
+  const iconColor = active ? color : colors.muted;
+  const reactionIcon = icon === "party-popper"
+    ? <CheerIcon size={16} color={iconColor} />
+    : <Ionicons name={active ? icon : `${icon}-outline`} size={15} color={iconColor} />;
+  return <Pressable onPress={onPress} style={[styles.actionButton, active && { backgroundColor: `${color}18` }]}>{reactionIcon}{count ? <Text style={[styles.actionText, { color: iconColor }]}>{count}</Text> : null}</Pressable>;
 }
 
 const storyStyles = StyleSheet.create({

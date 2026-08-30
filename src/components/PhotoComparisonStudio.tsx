@@ -24,6 +24,7 @@ import {
   photoFrameDurationMs,
   photoIndexAtOffset,
   photoMeasurementLabel,
+  photoVideoSpeedAtOffset,
   photoWeightLabel,
   PHOTO_VIDEO_SPEEDS,
   PhotoVideoSpeed,
@@ -273,6 +274,7 @@ export function PhotoComparisonStudio({
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState<PhotoVideoSpeed>(1);
   const [trackWidth, setTrackWidth] = useState(0);
+  const [speedTrackWidth, setSpeedTrackWidth] = useState(0);
   const [collageOpen, setCollageOpen] = useState(false);
   const [collageIds, setCollageIds] = useState<string[]>(() =>
     ordered.length > 1 ? [ordered[0].id, ordered.at(-1)!.id] : [],
@@ -339,6 +341,10 @@ export function PhotoComparisonStudio({
 
   function handleTrackLayout(event: LayoutChangeEvent) {
     setTrackWidth(event.nativeEvent.layout.width);
+  }
+
+  function seekSpeed(offset: number) {
+    setSpeed(photoVideoSpeedAtOffset(offset, speedTrackWidth));
   }
 
   function chooseCollage(ids: string[]) {
@@ -707,32 +713,76 @@ export function PhotoComparisonStudio({
         >
           <Ionicons name="play-skip-forward" size={16} color={accent} />
         </Pressable>
+      </View>
+
+      <View style={styles.speedRow}>
+        <Text style={[styles.speedLabel, { color: colors.muted }]}>Slideshow speed</Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Decrease slideshow speed"
+          disabled={speed === PHOTO_VIDEO_SPEEDS[0]}
+          onPress={() => setSpeed((current) => adjacentPhotoVideoSpeed(current, -1))}
+          style={[
+            styles.speedStepButton,
+            { borderColor: colors.border },
+            speed === PHOTO_VIDEO_SPEEDS[0] && styles.disabled,
+          ]}
+        >
+          <Ionicons name="remove" size={14} color={accent} />
+        </Pressable>
         <View
           accessibilityRole="adjustable"
           accessibilityLabel="Slideshow speed"
           accessibilityValue={{ min: 0.5, max: 20, now: speed, text: `${speed} times` }}
-          style={[styles.speedGroup, { borderColor: colors.border }]}
+          accessibilityActions={[{ name: "increment" }, { name: "decrement" }]}
+          onAccessibilityAction={(event) => {
+            if (event.nativeEvent.actionName === "increment")
+              setSpeed((current) => adjacentPhotoVideoSpeed(current, 1));
+            if (event.nativeEvent.actionName === "decrement")
+              setSpeed((current) => adjacentPhotoVideoSpeed(current, -1));
+          }}
+          onLayout={(event) => setSpeedTrackWidth(event.nativeEvent.layout.width)}
+          onStartShouldSetResponder={() => true}
+          onMoveShouldSetResponder={() => true}
+          onResponderGrant={(event) => seekSpeed(event.nativeEvent.locationX)}
+          onResponderMove={(event) => seekSpeed(event.nativeEvent.locationX)}
+          style={styles.speedTrackTouchTarget}
         >
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Decrease slideshow speed"
-            disabled={speed === PHOTO_VIDEO_SPEEDS[0]}
-            onPress={() => setSpeed((current) => adjacentPhotoVideoSpeed(current, -1))}
-            style={[styles.speedStepButton, speed === PHOTO_VIDEO_SPEEDS[0] && styles.disabled]}
-          >
-            <Ionicons name="remove" size={14} color={accent} />
-          </Pressable>
-          <Text translate={false} style={[styles.speedText, { color: colors.ink }]}>{speed}×</Text>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Increase slideshow speed"
-            disabled={speed === PHOTO_VIDEO_SPEEDS.at(-1)}
-            onPress={() => setSpeed((current) => adjacentPhotoVideoSpeed(current, 1))}
-            style={[styles.speedStepButton, speed === PHOTO_VIDEO_SPEEDS.at(-1) && styles.disabled]}
-          >
-            <Ionicons name="add" size={14} color={accent} />
-          </Pressable>
+          <View style={[styles.speedTrack, { backgroundColor: colors.border }]}>
+            <View
+              style={[
+                styles.speedTrackFill,
+                {
+                  backgroundColor: accent,
+                  width: `${(PHOTO_VIDEO_SPEEDS.indexOf(speed) / (PHOTO_VIDEO_SPEEDS.length - 1)) * 100}%`,
+                },
+              ]}
+            />
+            <View
+              style={[
+                styles.speedTrackThumb,
+                {
+                  backgroundColor: accent,
+                  left: `${(PHOTO_VIDEO_SPEEDS.indexOf(speed) / (PHOTO_VIDEO_SPEEDS.length - 1)) * 100}%`,
+                },
+              ]}
+            />
+          </View>
         </View>
+        <Text translate={false} style={[styles.speedText, { color: colors.ink }]}>{speed}×</Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Increase slideshow speed"
+          disabled={speed === PHOTO_VIDEO_SPEEDS.at(-1)}
+          onPress={() => setSpeed((current) => adjacentPhotoVideoSpeed(current, 1))}
+          style={[
+            styles.speedStepButton,
+            { borderColor: colors.border },
+            speed === PHOTO_VIDEO_SPEEDS.at(-1) && styles.disabled,
+          ]}
+        >
+          <Ionicons name="add" size={14} color={accent} />
+        </Pressable>
       </View>
 
       {ordered.length > 1 ? (
@@ -865,12 +915,17 @@ const styles = StyleSheet.create({
   rangeDates: { flexDirection: "row", justifyContent: "space-between", gap: 8 },
   rangeDate: { flex: 1, fontSize: 6.5 },
   rangeDateRight: { textAlign: "right" },
-  playbackRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  playbackRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
   roundButton: { width: 34, height: 34, borderWidth: 1, borderRadius: 11, alignItems: "center", justifyContent: "center" },
   playButton: { width: 38, height: 38, borderRadius: 13, alignItems: "center", justifyContent: "center" },
-  speedGroup: { marginLeft: "auto", minWidth: 88, height: 32, borderWidth: 1, borderRadius: 10, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  speedStepButton: { width: 28, height: 30, alignItems: "center", justifyContent: "center" },
-  speedText: { minWidth: 30, textAlign: "center", fontSize: 7.5, fontWeight: "900" },
+  speedRow: { minHeight: 34, flexDirection: "row", alignItems: "center", gap: 7 },
+  speedLabel: { fontSize: 7.5, fontWeight: "800" },
+  speedStepButton: { width: 30, height: 30, borderWidth: 1, borderRadius: 10, alignItems: "center", justifyContent: "center" },
+  speedTrackTouchTarget: { flex: 1, minWidth: 70, height: 30, justifyContent: "center" },
+  speedTrack: { height: 5, borderRadius: 999, position: "relative" },
+  speedTrackFill: { height: 5, borderRadius: 999 },
+  speedTrackThumb: { position: "absolute", top: -5, marginLeft: -7, width: 15, height: 15, borderRadius: 8, borderWidth: 2, borderColor: palette.white },
+  speedText: { minWidth: 30, textAlign: "center", fontSize: 8, fontWeight: "900" },
   disabled: { opacity: 0.45 },
   sectionToggle: { borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 10, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   toggleCopy: { flexDirection: "row", alignItems: "center", gap: 7 },

@@ -13,6 +13,7 @@ import {
   findNodeHandle,
 } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
+import { CheerIcon } from "@/src/components/CheerIcon";
 import { LocalizedAlert as Alert, useLocalization } from "@/src/i18n";
 import { localizeMetricName } from "@/src/i18n/domain";
 
@@ -1161,7 +1162,7 @@ function LogRow({
                 ["thumbs_up", "thumbs-up-outline"],
                 ["thumbs_down", "thumbs-down-outline"],
                 ["heart", "heart-outline"],
-                ["cheer", "sparkles-outline"],
+                ["cheer", null],
               ] as const
             ).map(([reaction, icon]) => {
               const selected = reactions.some(
@@ -1187,17 +1188,22 @@ function LogRow({
                     },
                   ]}
                 >
-                  <Ionicons
-                    name={
-                      selected && reaction === "heart"
-                        ? "heart"
-                        : selected && reaction === "cheer"
-                          ? "sparkles"
-                          : icon
-                    }
-                    size={14}
-                    color={selected ? metric.color : colors.muted}
-                  />
+                  {reaction === "cheer" ? (
+                    <CheerIcon
+                      size={15}
+                      color={selected ? metric.color : colors.muted}
+                    />
+                  ) : (
+                    <Ionicons
+                      name={
+                        selected && reaction === "heart"
+                          ? "heart"
+                          : (icon ?? "heart-outline")
+                      }
+                      size={14}
+                      color={selected ? metric.color : colors.muted}
+                    />
+                  )}
                   {count ? (
                     <Text translate={false} style={[styles.socialCount, { color: selected ? metric.color : colors.muted }]}>
                       {count}

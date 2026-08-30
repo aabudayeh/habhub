@@ -10,7 +10,9 @@ import {
   nearestPhotoMeasurement,
   photoFrameDurationMs,
   photoIndexAtOffset,
+  photoVideoSpeedAtOffset,
   photoWeightLabel,
+  PHOTO_VIDEO_SPEEDS,
 } from "../src/domain/photoProgress.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -63,8 +65,17 @@ assert.match(
 );
 assert.equal(photoFrameDurationMs(2), 500);
 assert.equal(photoFrameDurationMs(20), 50);
-assert.equal(adjacentPhotoVideoSpeed(15, 1), 20);
+assert.deepEqual(
+  [...PHOTO_VIDEO_SPEEDS],
+  [0.5, ...Array.from({ length: 20 }, (_, index) => index + 1)],
+  "Slideshow speed must retain half-speed and expose every whole speed from 1x through 20x.",
+);
+assert.equal(adjacentPhotoVideoSpeed(12, 1), 13);
+assert.equal(adjacentPhotoVideoSpeed(19, 1), 20);
 assert.equal(adjacentPhotoVideoSpeed(0.5, -1), 0.5);
+assert.equal(photoVideoSpeedAtOffset(0, 100), 0.5);
+assert.equal(photoVideoSpeedAtOffset(50, 100), 10);
+assert.equal(photoVideoSpeedAtOffset(100, 100), 20);
 assert.equal(photoIndexAtOffset(50, 100, 5), 2);
 
 const seed = read("src/data/seed.ts");
@@ -75,6 +86,16 @@ const logScreen = read("app/(tabs)/log.tsx");
 const memberComparison = read("app/member/[id].tsx");
 assert.match(seed, /id: "progress_photo",[\s\S]{0,80}name: "Photo progress"/);
 assert.match(migration, /metric\.id === "progress_photo"[\s\S]{0,120}name: "Photo progress"/);
+assert.match(
+  seed,
+  /id: "progress_photo"[\s\S]{0,300}goalEnabled: false/,
+  "Photo progress must be goal-free by default.",
+);
+assert.match(
+  migration,
+  /metric\.id === "progress_photo"[\s\S]{0,500}goalEnabled: metric\.goalEnabled \?\? false/,
+  "Legacy Photo progress defaults must become goal-free without overwriting an explicit user choice.",
+);
 assert.match(metricDetail, /tracker\.id === "progress_photo"[\s\S]{0,180}<PhotoComparisonStudio/);
 assert.match(
   logScreen,
@@ -90,6 +111,11 @@ assert.match(
   logScreen,
   /selected\.id === "weight"[\s\S]{0,1500}primaryMeasurementInput[\s\S]{0,300}accessibilityLabel="Weight"[\s\S]{0,1000}Body composition \(optional\)/,
   "Weight must remain the visually primary measurement in its multi-metric log.",
+);
+assert.match(
+  logScreen,
+  /primaryMeasurementText:\s*\{[\s\S]{0,160}\.\.\.typography\.cardTitle[\s\S]{0,120}fontWeight:\s*"800"/,
+  "The highlighted Weight input must use the standard app input type scale.",
 );
 assert.match(
   logScreen,
@@ -122,6 +148,7 @@ assert.match(
 );
 assert.match(studio, /PHOTO_VIDEO_SPEEDS\.at\(-1\)/);
 assert.match(studio, /adjacentPhotoVideoSpeed\(current, 1\)/);
+assert.match(studio, /onResponderMove=\{\(event\) => seekSpeed\(event\.nativeEvent\.locationX\)\}/);
 assert.match(studio, /accessibilityLabel="Save slideshow video locally"/);
 assert.match(studio, /accessibilityLabel="Share slideshow video with another app"/);
 assert.match(studio, /Alert\.alert\([\s\S]{0,80}"Video saved"/);
