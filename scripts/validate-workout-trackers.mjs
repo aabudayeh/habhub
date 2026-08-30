@@ -1200,13 +1200,24 @@ assert.match(
   /function pickWorkoutImage\([\s\S]{0,620}Camera[\s\S]{0,220}Photo library/,
   "a workout log must offer camera and library attachment without adding a permanent large picker",
 );
+assert.doesNotMatch(
+  gymScreen,
+  /function pickWorkoutImage\(\)[\s\S]{0,180}Platform\.OS === "web"[\s\S]{0,100}chooseWorkoutImage/,
+  "camera and photo-library choices must also be shown in the web workout flow",
+);
 const workoutPhotoEditorAt = gymScreen.indexOf("styles.workoutPhotoEditor");
 const workoutTemplateOptionsAt = gymScreen.search(/>\s*Template options\s*</);
 const workoutSaveAt = gymScreen.indexOf('id="workout-save"');
 assert.ok(
-  workoutPhotoEditorAt > workoutTemplateOptionsAt &&
-    workoutPhotoEditorAt < workoutSaveAt,
-  "the workout-photo action must stay visible at the bottom of the live workout, immediately before Save",
+  workoutPhotoEditorAt >= 0 &&
+    workoutPhotoEditorAt < workoutTemplateOptionsAt &&
+    workoutTemplateOptionsAt < workoutSaveAt,
+  "the workout-photo action must stay visible immediately above Template options in the live workout",
+);
+assert.match(
+  gymScreen,
+  /templateOptionsMenu: \{ marginTop: (?:8|9|10|11|12) \}/,
+  "the photo and Template options cards must retain a visible standard gap",
 );
 assert.match(
   gymScreen,

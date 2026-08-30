@@ -457,7 +457,20 @@ assert.match(pluginSource, /while \(count > 0\)[\s\S]*if \(diameter >= 8f\) brea
 assert.match(pluginSource, /drawPortraitAvatarCard/);
 assert.match(pluginSource, /val roomy = widthDp >= 165f/);
 assert.match(pluginSource, /widgetId in wideWidgetIds -> 203/);
-assert.match(pluginSource, /val portrait = context\.resources\.configuration\.orientation != Configuration\.ORIENTATION_LANDSCAPE[\s\S]*if \(portrait\) minWidth else maxWidth[\s\S]*if \(portrait\) maxHeight else minHeight/);
+assert.match(
+  pluginSource,
+  /val portrait = context\.resources\.configuration\.orientation != Configuration\.ORIENTATION_LANDSCAPE[\s\S]*val width = if \(portrait\) minWidth else maxWidth[\s\S]*val height = if \(widgetId in smallWidgetIds\)[\s\S]*else if \(portrait\)[\s\S]*maxHeight[\s\S]*else[\s\S]*minHeight/,
+);
+assert.match(
+  pluginSource,
+  /val height = if \(widgetId in smallWidgetIds\) \{[\s\S]{0,40}fallbackHeight[\s\S]{0,60}else if \(portrait\) \{[\s\S]{0,40}maxHeight/,
+  "The fixed-height Featured provider must ignore launcher-inflated maxHeight values",
+);
+assert.equal(
+  Number(smallInfo.match(/android:minResizeHeight="(\d+)dp"/)?.[1]),
+  Number(smallInfo.match(/android:maxResizeHeight="(\d+)dp"/)?.[1]),
+  "The Featured provider height normalized by the renderer must remain fixed in metadata",
+);
 assert.match(pluginSource, /goal\.optString\("title", "Goal"\)/);
 assert.match(pluginSource, /item\.optJSONArray\("goals"\)/);
 assert.match(pluginSource, /item\.optBoolean\("showProgressOutline", true\)/);

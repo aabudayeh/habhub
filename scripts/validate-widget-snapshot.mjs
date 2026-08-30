@@ -537,6 +537,11 @@ assert.match(
 );
 assert.match(
   nativeWidget,
+  /val height = if \(widgetId in smallWidgetIds\) \{[\s\S]{0,40}fallbackHeight[\s\S]{0,60}else if \(portrait\) \{[\s\S]{0,40}maxHeight/,
+  "The actual Featured provider must normalize One UI's inflated one-row height before choosing the compact layout",
+);
+assert.match(
+  nativeWidget,
   /if \(twoByOneFeatured\) 4f else 5\.1f,[\s\S]{0,120}if \(twoByOneFeatured\) 2\.8f else 4\.1f[\s\S]{0,180}if \(twoByOneFeatured\) 0f else 0\.04f/,
   "The 2 x 1 Featured widget must use its own fitted header treatment so TODAY'S FOCUS is not ellipsized",
 );
