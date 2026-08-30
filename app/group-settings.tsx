@@ -84,12 +84,16 @@ export default function GroupSettings() {
     approveMember,
     removeMember,
   } = useApp();
+  const me = state.group.members.find(
+    (member) => member.id === state.currentUserId,
+  )!;
+  const canEdit = me.role === "owner" || me.role === "admin";
   const auth = useAuth();
   const cloud = useCloudSyncActions();
   const routeFocused = useIsFocused();
   const challengeCloud = useGroupChallenges(state.group.id, {
-    discoverActive: true,
-    discoveryPollingEnabled: routeFocused,
+    discoverActive: canEdit,
+    discoveryPollingEnabled: canEdit && routeFocused,
   });
   const navigation = useNavigation();
   const colors = useAppColors();
@@ -102,10 +106,6 @@ export default function GroupSettings() {
     });
     return output;
   };
-  const me = state.group.members.find(
-    (member) => member.id === state.currentUserId,
-  )!;
-  const canEdit = me.role === "owner" || me.role === "admin";
   const personalSetup = isPersonalSetupGroup(state.group);
   const groupMetrics = (state.group.metricConfiguration ?? []).filter(
     (metric) => !isInternalTracker(metric),
@@ -131,7 +131,7 @@ export default function GroupSettings() {
     state.group.themeColor ?? palette.primary,
   );
   const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const [visibilityOpen, setVisibilityOpen] = useState(false);
+  const [visibilityOpen, setVisibilityOpen] = useState(!canEdit);
   const [notificationMembersOpen, setNotificationMembersOpen] = useState(false);
   const [notificationTrackersOpen, setNotificationTrackersOpen] = useState(false);
   const [joiningChallengeId, setJoiningChallengeId] = useState<string>();
@@ -448,6 +448,103 @@ export default function GroupSettings() {
           onPress: () => deleteGroupMetric(metricId),
         },
       ],
+    );
+  }
+
+  if (!canEdit) {
+    return (
+      <Screen>
+        <PageHeader
+          eyebrow={state.group.name}
+          translateEyebrow={false}
+          title="Tracker sharing"
+          subtitle="Choose what this group can see from each of your trackers."
+          showMenu={false}
+          action={
+            <IconButton
+              icon="close"
+              label="Close"
+              onPress={() => requestClose()}
+            />
+          }
+        />
+        <Card style={styles.status}>
+          <Ionicons name="shield-checkmark" size={22} color={accent} />
+          <View style={styles.copy}>
+            <Text style={[styles.name, { color: colors.ink }]}>Your data, your choice</Text>
+            <Text style={[styles.meta, { color: colors.muted }]}>
+              These choices affect only your entries. Group rules and other
+              members stay unchanged.
+            </Text>
+          </View>
+        </Card>
+        <SectionHeader title="Visibility" />
+        <Card style={styles.visibilityCard}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ expanded: visibilityOpen }}
+            onPress={() => setVisibilityOpen((open) => !open)}
+            style={styles.visibilityDisclosure}
+          >
+            <View style={[styles.icon, { backgroundColor: colors.primarySoft }]}>
+              <Ionicons name="eye-outline" size={18} color={accent} />
+            </View>
+            <View style={styles.copy}>
+              <Text style={[styles.name, { color: colors.ink }]}>What can this group see?</Text>
+              <Text translate={false} style={[styles.meta, { color: colors.muted }]}>
+                {visibilityCounts.group} {t("Exact values")} · {visibilityCounts.status} {t("Goal status only")} · {visibilityCounts.private} {t("Private")}
+              </Text>
+            </View>
+            <Ionicons name={visibilityOpen ? "chevron-up" : "chevron-down"} size={17} color={colors.muted} />
+          </Pressable>
+          {visibilityOpen ? (
+            <View style={[styles.visibilityBody, { borderTopColor: colors.border }]}>
+              {visibilityMetrics.map((metric, index) => (
+                <View
+                  key={metric.id}
+                  style={[
+                    styles.visibilityRow,
+                    index < visibilityMetrics.length - 1 && {
+                      borderBottomColor: colors.border,
+                      borderBottomWidth: StyleSheet.hairlineWidth,
+                    },
+                  ]}
+                >
+                  <View style={[styles.visibilityMetricIcon, { backgroundColor: `${metric.color}18` }]}>
+                    <Ionicons name={metric.icon as keyof typeof Ionicons.glyphMap} size={15} color={metric.color} />
+                  </View>
+                  <Text translate={false} numberOfLines={1} style={[styles.visibilityMetricName, { color: colors.ink }]}>
+                    {localizeMetricName(language, metric)}
+                  </Text>
+                  <View style={styles.visibilityChoices}>
+                    {trackerVisibilityOptions.map((option) => {
+                      const selected = metric.defaultVisibility === option.value;
+                      return (
+                        <Pressable
+                          key={option.value}
+                          accessibilityRole="button"
+                          accessibilityLabel={`${localizeMetricName(language, metric)}: ${t(option.label)}`}
+                          accessibilityState={{ selected }}
+                          onPress={() => updateMetric(metric.id, { defaultVisibility: option.value })}
+                          style={[
+                            styles.visibilityChoice,
+                            {
+                              backgroundColor: selected ? colors.primarySoft : colors.canvas,
+                              borderColor: selected ? accent : colors.border,
+                            },
+                          ]}
+                        >
+                          <Ionicons name={option.icon} size={13} color={selected ? accent : colors.muted} />
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </View>
+              ))}
+            </View>
+          ) : null}
+        </Card>
+      </Screen>
     );
   }
 

@@ -438,20 +438,11 @@ object HabHubWidgetRenderer {
     // one bitmap also stays safely below RemoteViews/Binder limits.
     val portrait = context.resources.configuration.orientation != Configuration.ORIENTATION_LANDSCAPE
     val width = if (portrait) minWidth else maxWidth
-    // The exposed Featured provider is deliberately a fixed one-row surface
-    // (its provider metadata fixes both resize heights at 50dp). Some launchers,
-    // notably Samsung One UI, still report a cell-derived maxHeight near a
-    // square widget. Using that inflated value made the real 2 x 1 widget take
-    // the non-compact renderer: TODAY'S FOCUS was ellipsized and the generic
-    // goal-row capacity stopped at six. Honour the provider's fixed height;
-    // horizontally resized 3-5 x 1 Featured widgets keep their reported width.
-    val height = if (widgetId in smallWidgetIds) {
-      fallbackHeight
-    } else if (portrait) {
-      maxHeight
-    } else {
-      minHeight
-    }
+    // Render at the launcher's current-orientation bounds. Forcing the
+    // provider's nominal 50dp height made Samsung stretch the bitmap over its
+    // taller real cell and distorted the established Featured-card layout.
+    // Launchers that honor 50dp still receive the compact seven-goal renderer.
+    val height = if (portrait) maxHeight else minHeight
     return HabHubWidgetSize(
       heightDp = height.coerceIn(42, 420).toFloat(),
       widthDp = width.coerceIn(42, 420).toFloat(),

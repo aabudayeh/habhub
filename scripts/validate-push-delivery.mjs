@@ -69,6 +69,9 @@ const socialCheerMigration = read(
 const socialOriginMigration = read(
   "supabase/migrations/202608300003_social_notification_origin.sql",
 );
+const promptSocialMigration = read(
+  "supabase/migrations/202608300004_prompt_social_push_dispatch.sql",
+);
 const challengeRankMigration = read(
   "supabase/migrations/202608270005_challenge_rank_rewards.sql",
 );
@@ -919,13 +922,61 @@ assert.match(
 );
 assert.match(
   groupSocialClient,
-  /\.rpc\("set_group_social_reaction"[\s\S]{0,360}p_reaction:[\s\S]{0,100}p_surface:/,
+  /const args = \{[\s\S]{0,260}p_reaction:[\s\S]{0,100}p_surface:[\s\S]{0,160}\.rpc\("set_group_social_reaction_v2", args\)/,
   "the client must use the server-owned reaction mutation instead of a direct RLS upsert",
 );
 assert.doesNotMatch(
   groupSocialClient,
   /from\("group_social_reactions"\)[\s\S]{0,160}\.upsert\(/,
   "the client must not fall back to the failing direct reaction upsert",
+);
+assert.match(
+  promptSocialMigration,
+  /create or replace function public\.set_group_social_reaction_v2[\s\S]{0,600}public\.set_group_social_reaction\(/i,
+  "the prompt reaction boundary must preserve the authoritative social mutation",
+);
+assert.match(
+  promptSocialMigration,
+  /'social-reaction:'[\s\S]{0,360}from public\.push_dispatch_events[\s\S]{0,180}event\.dispatcher_id = auth\.uid\(\)/i,
+  "the prompt reaction result must expose only the actor-owned canonical outbox key",
+);
+assert.match(
+  promptSocialMigration,
+  /create or replace function public\.add_group_social_comment_v2[\s\S]{0,220}security invoker[\s\S]{0,500}v_actor_id uuid := auth\.uid\(\)[\s\S]{0,1000}insert into public\.group_social_comments/i,
+  "prompt comments must derive their actor on the server and retain table RLS",
+);
+assert.match(
+  promptSocialMigration,
+  /grant execute on function public\.set_group_social_reaction_v2[\s\S]{0,120}authenticated/i,
+);
+assert.match(
+  promptSocialMigration,
+  /grant execute on function public\.add_group_social_comment_v2[\s\S]{0,120}authenticated/i,
+);
+assert.match(
+  promptSocialMigration,
+  /after insert or update of reaction, source_surface on public\.group_social_reactions/i,
+  "a destination-surface change must create the same canonical notification path",
+);
+assert.match(groupSocialClient, /\.rpc\("set_group_social_reaction_v2"/);
+assert.match(groupSocialClient, /\.rpc\("add_group_social_comment_v2"/);
+assert.match(groupSocialClient, /promptSocialRpcUnavailable/);
+const exactSocialDispatch = cloud.slice(
+  cloud.indexOf("export function dispatchCommittedGroupPushEvent"),
+  cloud.indexOf("export async function approveCloudGroupMember"),
+);
+assert.match(exactSocialDispatch, /dispatchPushWithBoundedRetry/);
+assert.match(exactSocialDispatch, /functions\.invoke\("send-push"/);
+assert.match(exactSocialDispatch, /body: \{ eventKey: stableEventKey \}/);
+assert.doesNotMatch(
+  exactSocialDispatch,
+  /recipient|title|copy|reaction/,
+  "the client may dispatch only the committed event key, never recipient or copy",
+);
+assert.match(
+  groupSocialHook,
+  /saved\.pushEventKey[\s\S]{0,120}dispatchCommittedGroupPushEvent\(saved\.pushEventKey\)[\s\S]{0,160}flushPendingGroupPushEvents/,
+  "social mutations must request their exact committed push immediately and retain the durable-drain fallback",
 );
 
 assert.match(group, /groupFeedUnreadCount/);

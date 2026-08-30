@@ -22,6 +22,7 @@ import android.provider.Settings
 import androidx.core.content.ContextCompat
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
+import com.facebook.react.bridge.ReadableArray
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
@@ -65,6 +66,7 @@ class HabHubNativeModule(
 
   override fun getConstants(): Map<String, Any> = mapOf(
     "nativeWorkoutActions" to true,
+    "nativePhotoVideo" to true,
     "localPhoneStepRecording" to true,
     "healthConnectOnDeviceSteps" to healthConnectOnDeviceStepsAvailable(),
   )
@@ -983,6 +985,38 @@ class HabHubNativeModule(
       promise.resolve(true)
     } catch (error: Exception) {
       promise.reject("widget_update_failed", error)
+    }
+  }
+
+  @ReactMethod
+  fun createPhotoProgressVideo(
+    frames: ReadableArray,
+    frameDurationMs: Double,
+    promise: Promise,
+  ) {
+    thread(name = "HabHubPhotoVideoEncoder") {
+      try {
+        val file = HabHubPhotoVideoExporter.create(
+          reactContext,
+          frames,
+          frameDurationMs,
+        )
+        promise.resolve(Uri.fromFile(file).toString())
+      } catch (error: Throwable) {
+        promise.reject("photo_video_export_failed", error)
+      }
+    }
+  }
+
+  @ReactMethod
+  fun savePhotoProgressVideo(fileUri: String, promise: Promise) {
+    thread(name = "HabHubPhotoVideoSave") {
+      try {
+        val source = HabHubPhotoVideoExporter.fileFromUri(fileUri)
+        promise.resolve(HabHubPhotoVideoExporter.save(reactContext, source))
+      } catch (error: Throwable) {
+        promise.reject("photo_video_save_failed", error)
+      }
     }
   }
 

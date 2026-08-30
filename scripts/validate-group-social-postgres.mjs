@@ -7,6 +7,7 @@ const migrations = await Promise.all(
     "supabase/migrations/202608300001_social_cheers.sql",
     "supabase/migrations/202608300002_group_feed_interaction_notifications.sql",
     "supabase/migrations/202608300003_social_notification_origin.sql",
+    "supabase/migrations/202608300004_prompt_social_push_dispatch.sql",
   ].map((path) => Deno.readTextFile(new URL(path, root))),
 );
 
@@ -385,6 +386,35 @@ if (
 )
   throw new Error("A Leaderboard-log reaction lost its origin-aware deep link.");
 
+const promptReaction = await db.query(`
+  select public.set_group_social_reaction_v2(
+    '${groupId}', 'metric_entry', '${entryId}', 'thumbs_up', 'leaderboard_log'
+  ) as result
+`);
+const promptReactionPayload = promptReaction.rows[0]?.result;
+if (
+  promptReactionPayload?.reaction?.reaction !== "thumbs_up" ||
+  typeof promptReactionPayload?.push_event_key !== "string"
+)
+  throw new Error(
+    "The prompt reaction boundary did not return its committed canonical push key.",
+  );
+if (
+  Number(
+    await scalar(`
+      select count(*)
+        from public.push_dispatch_events
+       where event_key = '${promptReactionPayload.push_event_key}'
+         and dispatcher_id = '${viewerId}'
+         and event_type = 'social_reaction'
+         and data ->> 'route' = '/leaderboard-detail'
+    `),
+  ) !== 1
+)
+  throw new Error(
+    "The prompt reaction key did not identify exactly one actor-owned outbox row.",
+  );
+
 await db.exec(`
   insert into public.group_social_comments (
     group_id, target_type, target_id, user_id, content
@@ -429,6 +459,37 @@ if (
   `)) !== "/leaderboard-detail"
 )
   throw new Error("A Leaderboard-log comment lost its origin-aware deep link.");
+
+const promptComment = await db.query(`
+  select public.add_group_social_comment_v2(
+    '${groupId}', 'metric_entry', '${entryId}',
+    'Prompt Leaderboard comment', 'leaderboard_log'
+  ) as result
+`);
+const promptCommentPayload = promptComment.rows[0]?.result;
+if (
+  promptCommentPayload?.comment?.content !== "Prompt Leaderboard comment" ||
+  promptCommentPayload?.comment?.user_id !== viewerId ||
+  typeof promptCommentPayload?.push_event_key !== "string"
+)
+  throw new Error(
+    "The prompt comment boundary did not derive the actor or return its committed push key.",
+  );
+if (
+  Number(
+    await scalar(`
+      select count(*)
+        from public.push_dispatch_events
+       where event_key = '${promptCommentPayload.push_event_key}'
+         and dispatcher_id = '${viewerId}'
+         and event_type = 'social_comment'
+         and data ->> 'route' = '/leaderboard-detail'
+    `),
+  ) !== 1
+)
+  throw new Error(
+    "The prompt comment key did not identify exactly one actor-owned outbox row.",
+  );
 
 for (const [type, id] of [
   ["photo_update", photoId],
@@ -570,5 +631,5 @@ if (
   throw new Error("An ambiguous legacy client id was guessed instead of rejected.");
 
 console.log(
-  "Group social PostgreSQL validation passed: canonical identities, origin-aware comment and reaction delivery, unchanged-reaction idempotency, forged-badge and tied-leader suppression, collision rejection, and privacy fences.",
+  "Group social PostgreSQL validation passed: canonical identities, prompt exact-event dispatch keys, origin-aware comment and reaction delivery, unchanged-reaction idempotency, forged-badge and tied-leader suppression, collision rejection, and privacy fences.",
 );

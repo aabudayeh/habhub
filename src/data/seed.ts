@@ -1888,8 +1888,8 @@ export function createInitialState(): AppState {
       tabOrder: [
         "index",
         "status",
-        "log",
         "group",
+        "log",
         "insights",
         "gym",
         "calendar",

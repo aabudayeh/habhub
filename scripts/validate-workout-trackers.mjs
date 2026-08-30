@@ -1378,9 +1378,9 @@ const workoutTemplateOptionsAt = gymScreen.search(/>\s*Template options\s*</);
 const workoutSaveAt = gymScreen.indexOf('id="workout-save"');
 assert.ok(
   workoutPhotoEditorAt >= 0 &&
-    workoutPhotoEditorAt < workoutSaveAt &&
-    workoutSaveAt < workoutTemplateOptionsAt,
-  "the live workout actions must remain ordered photo, Save or Update workout, then Template options",
+    workoutSaveAt < workoutPhotoEditorAt &&
+    workoutPhotoEditorAt < workoutTemplateOptionsAt,
+  "the live workout actions must remain ordered Save or Update workout, photo, then Template options",
 );
 assert.match(
   gymScreen,
@@ -1390,7 +1390,12 @@ assert.match(
 assert.match(
   gymScreen,
   /bottomActions: \{[\s\S]{0,120}marginTop: (?:8|9|10|11|12)/,
-  "Save or Update workout must retain a standard gap below the photo card",
+  "Save or Update workout must retain a standard gap below the workout summary",
+);
+assert.match(
+  gymScreen,
+  /workoutPhotoEditor: \{[\s\S]{0,80}marginTop: (?:8|9|10|11|12)/,
+  "The workout photo card must retain a standard gap below Save or Update workout",
 );
 assert.match(
   gymScreen,
@@ -1681,7 +1686,7 @@ assert.doesNotMatch(
 );
 assert.match(
   gymScreen,
-  /const workoutEditorTitle = selectedSessionLogged[\s\S]{0,180}"Logged exercises"[\s\S]{0,180}"Exercises to complete"/,
+  /const workoutEditorTitle = selectedSessionLogged[\s\S]{0,180}"Logged exercises"[\s\S]{0,100}"In progress"[\s\S]{0,100}"To complete"/,
   "Exercise hierarchy must state whether the user is reviewing logged work or preparing a workout",
 );
 assert.match(

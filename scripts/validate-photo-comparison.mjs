@@ -81,6 +81,10 @@ assert.equal(photoIndexAtOffset(50, 100, 5), 2);
 const seed = read("src/data/seed.ts");
 const migration = read("src/domain/stateMigration.ts");
 const studio = read("src/components/PhotoComparisonStudio.tsx");
+const weightSlider = read("src/components/WeightQuickSlider.tsx");
+const nativeVideo = read("plugins/habhub-android/java/HabHubPhotoVideoExporter.kt");
+const nativeModule = read("plugins/habhub-android/java/HabHubNativeModule.kt");
+const androidPlugin = read("plugins/withHabHubAndroid.js");
 const metricDetail = read("app/metric-detail.tsx");
 const logScreen = read("app/(tabs)/log.tsx");
 const memberComparison = read("app/member/[id].tsx");
@@ -103,6 +107,11 @@ assert.match(
   "Photo progress logging must persist optional body measurements to their canonical trackers.",
 );
 assert.match(
+  weightSlider,
+  /const normalizedValue = value\.trim\(\)\.replace\(",", "\."\);[\s\S]{0,100}normalizedValue \? Number\(normalizedValue\) : Number\.NaN/,
+  "An untouched Weight input must anchor the slider at the last logged value instead of treating an empty string as zero.",
+);
+assert.match(
   logScreen,
   /selected\.dataType === "photo"[\s\S]{0,4000}Optional body measurements[\s\S]{0,1200}bodyCompositionMetrics/,
   "Photo progress logging must expose compact optional Weight, Body fat, and Lean mass inputs.",
@@ -114,7 +123,7 @@ assert.match(
 );
 assert.match(
   logScreen,
-  /primaryMeasurementText:\s*\{[\s\S]{0,160}\.\.\.typography\.cardTitle[\s\S]{0,120}fontWeight:\s*"800"/,
+  /primaryMeasurementText:\s*\{[\s\S]{0,160}\.\.\.typography\.body[\s\S]{0,120}fontWeight:\s*"800"/,
   "The highlighted Weight input must use the standard app input type scale.",
 );
 assert.match(
@@ -148,11 +157,41 @@ assert.match(
 );
 assert.match(studio, /PHOTO_VIDEO_SPEEDS\.at\(-1\)/);
 assert.match(studio, /adjacentPhotoVideoSpeed\(current, 1\)/);
-assert.match(studio, /onResponderMove=\{\(event\) => seekSpeed\(event\.nativeEvent\.locationX\)\}/);
+assert.doesNotMatch(studio, />Slideshow speed</);
+assert.doesNotMatch(studio, /speedTrackTouchTarget/);
+assert.match(
+  studio,
+  /onResponderGrant=\{\(event\) => \{[\s\S]{0,220}pageX - event\.nativeEvent\.locationX[\s\S]{0,200}onResponderMove=\{\(event\) =>[\s\S]{0,100}pageX - trackPageXRef\.current/,
+  "Photo seeking must use stable page coordinates throughout a drag.",
+);
 assert.match(studio, /accessibilityLabel="Save slideshow video locally"/);
 assert.match(studio, /accessibilityLabel="Share slideshow video with another app"/);
 assert.match(studio, /Alert\.alert\([\s\S]{0,80}"Video saved"/);
 assert.match(studio, /await shareWebFile\(/);
+assert.match(studio, /createNativePhotoProgressVideo\(/);
+assert.match(studio, /saveNativePhotoProgressVideo\(/);
+assert.match(
+  studio,
+  /measurements: bodyEntries\.map[\s\S]{0,260}recordedAt: entry\.recordedAt/,
+  "Cached videos must invalidate when their displayed body measurements change.",
+);
+assert.match(studio, /Sharing\.shareAsync\(artifact\.uri,[\s\S]{0,160}mimeType: "video\/mp4"/);
+assert.match(nativeVideo, /MediaCodec\.createEncoderByType/);
+assert.match(nativeVideo, /MediaMuxer\.OutputFormat\.MUXER_OUTPUT_MPEG_4/);
+assert.match(nativeVideo, /MediaStore\.Video\.Media\.RELATIVE_PATH/);
+assert.match(
+  nativeVideo,
+  /encodingCompleted[\s\S]{0,900}muxerStopFailure[\s\S]{0,500}output\.delete\(\)[\s\S]{0,120}Android could not finalize the MP4 file/,
+  "Android video export must reject and remove an MP4 when muxer finalization fails.",
+);
+assert.match(
+  nativeVideo,
+  /bitmapToYuv420\(bitmap\)[\s\S]{0,100}finally[\s\S]{0,80}bitmap\.recycle\(\)/,
+  "Android video export must recycle each rendered bitmap even when color conversion fails.",
+);
+assert.match(nativeModule, /fun createPhotoProgressVideo\(/);
+assert.match(nativeModule, /fun savePhotoProgressVideo\(/);
+assert.match(androidPlugin, /"HabHubPhotoVideoExporter\.kt"/);
 assert.doesNotMatch(studio, /Save or share slideshow video/);
 assert.match(studio, /minimumSelected=\{2\}/);
 assert.match(studio, /onDeletePhoto\(active\.id\)/);

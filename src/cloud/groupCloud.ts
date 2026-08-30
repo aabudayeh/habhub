@@ -1879,6 +1879,24 @@ export function flushPendingGroupPushEvents() {
   return groupPushDrainPromise;
 }
 
+/** Dispatch one already-committed canonical outbox row immediately. This is
+ * the same narrow event-key boundary used by chat; the bounded retries and the
+ * server claim/acceptance ledgers make concurrent foreground/worker attempts
+ * safe. */
+export function dispatchCommittedGroupPushEvent(eventKey: string) {
+  const stableEventKey = eventKey.trim();
+  if (!stableEventKey)
+    return Promise.reject(new Error("A committed push event is required."));
+  const client = requireCloud();
+  return dispatchPushWithBoundedRetry(async () => {
+    const result = await client.functions.invoke("send-push", {
+      body: { eventKey: stableEventKey },
+    });
+    if (result.error) throw result.error;
+    assertPushDeliveryComplete(result.data);
+  });
+}
+
 export async function approveCloudGroupMember(groupId: string, userId: string) {
   const { error } = await requireCloud().rpc(
     "approve_group_member_transactionally",

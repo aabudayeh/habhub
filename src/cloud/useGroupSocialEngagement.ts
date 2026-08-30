@@ -15,6 +15,7 @@ import {
   saveGroupSocialReaction,
 } from "@/src/cloud/groupSocial";
 import {
+  dispatchCommittedGroupPushEvent,
   flushPendingGroupPushEvents,
   isCloudGroupId,
 } from "@/src/cloud/groupCloud";
@@ -83,7 +84,12 @@ export function useGroupSocialEngagement(
   const requestRef = useRef<Promise<void> | null>(null);
   const requestGenerationRef = useRef(0);
   const reactionMutationGenerationRef = useRef(new Map<string, number>());
-  const reactionWriteQueueRef = useRef(new Map<string, Promise<void>>());
+  const reactionWriteQueueRef = useRef(
+    new Map<
+      string,
+      Promise<{ pushEventKey?: string; requiresOutboxDrain?: boolean }>
+    >(),
+  );
   const confirmedReactionByMutationRef = useRef(
     new Map<string, GroupSocialReaction | undefined>(),
   );
@@ -281,10 +287,10 @@ export function useGroupSocialEngagement(
       // Serialize writes for one target. Rapid taps still paint immediately,
       // while the database always receives the user's choices in tap order.
       const previousWrite = reactionWriteQueueRef.current.get(mutationKey) ??
-        Promise.resolve();
+        Promise.resolve({});
       const write = previousWrite.catch(() => undefined).then(async () => {
         let resolvedTarget = await mutationTarget(target);
-        if (activeGroupRef.current !== operationGroupId) return;
+        if (activeGroupRef.current !== operationGroupId) return {};
         const resolvedTargetKey = persistedTargetKey(resolvedTarget);
         targetIds.add(resolvedTarget.id);
         setTargetAliases((current) => {
@@ -318,8 +324,9 @@ export function useGroupSocialEngagement(
           confirmSocialReactionBurst(
             confirmedReactionByMutationRef.current,
             mutationKey,
-            saved,
+            saved.reaction,
           );
+          return saved;
         } catch (reason) {
           if (
             nextReaction &&
@@ -338,18 +345,24 @@ export function useGroupSocialEngagement(
             confirmSocialReactionBurst(
               confirmedReactionByMutationRef.current,
               mutationKey,
-              saved,
+              saved.reaction,
             );
+            return saved;
           } else throw reason;
         }
       });
       reactionWriteQueueRef.current.set(mutationKey, write);
       try {
-        await write;
-        // The database trigger owns recipient/copy/privacy and creates the
-        // canonical outbox row. This merely asks the existing bounded drain to
-        // deliver it; failures remain durable for the next foreground pass.
-        void flushPendingGroupPushEvents().catch(() => undefined);
+        const saved = await write;
+        // Dispatch the exact trigger-owned row immediately, like chat. The
+        // broad drain remains only for staged-rollout clients whose database
+        // has not installed the prompt-result RPC yet.
+        if (saved.pushEventKey)
+          void dispatchCommittedGroupPushEvent(saved.pushEventKey).catch(() =>
+            flushPendingGroupPushEvents().catch(() => undefined),
+          );
+        else if (saved.requiresOutboxDrain)
+          void flushPendingGroupPushEvents().catch(() => undefined);
       } catch (reason) {
         if (
           activeGroupRef.current === operationGroupId &&
@@ -459,14 +472,16 @@ export function useGroupSocialEngagement(
         }
         if (activeGroupRef.current === operationGroupId) {
           commentsRef.current = commentsRef.current.map((item) =>
-            item.id === pendingId ? saved : item,
+            item.id === pendingId ? saved.comment : item,
           );
           setComments(commentsRef.current);
         }
-        // The insert trigger has already created an immutable recipient event
-        // and push outbox row. Ask the bounded dispatcher to deliver it now;
-        // a transient failure remains durable for the normal foreground drain.
-        void flushPendingGroupPushEvents().catch(() => undefined);
+        if (saved.pushEventKey)
+          void dispatchCommittedGroupPushEvent(saved.pushEventKey).catch(() =>
+            flushPendingGroupPushEvents().catch(() => undefined),
+          );
+        else if (saved.requiresOutboxDrain)
+          void flushPendingGroupPushEvents().catch(() => undefined);
       } catch (reason) {
         commentsRef.current = commentsRef.current.filter(
           (item) => item.id !== pendingId,

@@ -11,6 +11,7 @@ const {
 const NATIVE_SOURCES = [
   "HabHubNativeModule.kt",
   "HabHubNativePackage.kt",
+  "HabHubPhotoVideoExporter.kt",
   "HabHubNotificationsService.kt",
   "HabHubWidgetConfigActivity.kt",
   "HabHubWidgetProvider.kt",

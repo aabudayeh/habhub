@@ -64,6 +64,18 @@ type CommentRow = {
   updated_at: string;
 };
 
+export type GroupSocialReactionMutation = {
+  reaction?: GroupSocialReaction;
+  pushEventKey?: string;
+  requiresOutboxDrain?: boolean;
+};
+
+export type GroupSocialCommentMutation = {
+  comment: GroupSocialComment;
+  pushEventKey?: string;
+  requiresOutboxDrain?: boolean;
+};
+
 const SOCIAL_TARGETS_PER_REQUEST = 20;
 const SOCIAL_ROWS_PER_REQUEST = 1000;
 
@@ -84,6 +96,20 @@ function cloudError(error: unknown) {
     if (message) return new Error(message);
   }
   return error instanceof Error ? error : new Error(String(error));
+}
+
+function promptSocialRpcUnavailable(error: unknown, functionName: string) {
+  const message = cloudError(error).message;
+  return (
+    message.includes(functionName) &&
+    /schema cache|could not find|does not exist|pgrst202/i.test(message)
+  );
+}
+
+function pushEventKeyFrom(value: unknown) {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed || undefined;
 }
 
 function reactionFromRow(row: ReactionRow): GroupSocialReaction {
@@ -310,19 +336,44 @@ export async function saveGroupSocialReaction(input: {
   userId: string;
   reaction?: GroupSocialReactionKind;
   surface: GroupSocialInteractionSurface;
-}) {
+}): Promise<GroupSocialReactionMutation> {
   if (!supabase) throw new Error("Sign in to react to a shared item.");
-  const { data, error } = await supabase.rpc("set_group_social_reaction", {
+  const args = {
     p_group_id: input.groupId,
     p_target_type: input.target.type,
     p_target_id: input.target.id,
     p_reaction: input.reaction ?? null,
     p_surface: input.surface,
-  });
-  if (error) throw cloudError(error);
-  const row = Array.isArray(data) ? data[0] : data;
-  if (!row || !input.reaction) return undefined;
-  return reactionFromRow(row as ReactionRow);
+  };
+  const prompt = await supabase.rpc("set_group_social_reaction_v2", args);
+  if (!prompt.error) {
+    const payload = (Array.isArray(prompt.data)
+      ? prompt.data[0]
+      : prompt.data) as
+      | { reaction?: ReactionRow | null; push_event_key?: unknown }
+      | null;
+    return {
+      reaction:
+        input.reaction && payload?.reaction
+          ? reactionFromRow(payload.reaction)
+          : undefined,
+      pushEventKey: pushEventKeyFrom(payload?.push_event_key),
+    };
+  }
+  if (!promptSocialRpcUnavailable(prompt.error, "set_group_social_reaction_v2"))
+    throw cloudError(prompt.error);
+
+  // Staged rollout compatibility: an older database still commits the same
+  // durable trigger-owned event; the caller falls back to the bounded outbox
+  // drain until the forward migration is installed.
+  const legacy = await supabase.rpc("set_group_social_reaction", args);
+  if (legacy.error) throw cloudError(legacy.error);
+  const row = Array.isArray(legacy.data) ? legacy.data[0] : legacy.data;
+  return {
+    reaction:
+      row && input.reaction ? reactionFromRow(row as ReactionRow) : undefined,
+    requiresOutboxDrain: Boolean(input.reaction),
+  };
 }
 
 export async function addGroupSocialComment(input: {
@@ -331,10 +382,33 @@ export async function addGroupSocialComment(input: {
   userId: string;
   content: string;
   surface: GroupSocialInteractionSurface;
-}) {
+}): Promise<GroupSocialCommentMutation> {
   if (!supabase) throw new Error("Sign in to comment on a shared item.");
   const content = input.content.trim();
   if (!content) throw new Error("Write a comment first.");
+  const prompt = await supabase.rpc("add_group_social_comment_v2", {
+    p_group_id: input.groupId,
+    p_target_type: input.target.type,
+    p_target_id: input.target.id,
+    p_content: content,
+    p_surface: input.surface,
+  });
+  if (!prompt.error) {
+    const payload = (Array.isArray(prompt.data)
+      ? prompt.data[0]
+      : prompt.data) as
+      | { comment?: CommentRow | null; push_event_key?: unknown }
+      | null;
+    if (!payload?.comment)
+      throw new Error("The comment was not saved. Try again.");
+    return {
+      comment: commentFromRow(payload.comment),
+      pushEventKey: pushEventKeyFrom(payload.push_event_key),
+    };
+  }
+  if (!promptSocialRpcUnavailable(prompt.error, "add_group_social_comment_v2"))
+    throw cloudError(prompt.error);
+
   const { data, error } = await supabase
     .from("group_social_comments")
     .insert({
@@ -350,7 +424,10 @@ export async function addGroupSocialComment(input: {
     )
     .single();
   if (error) throw cloudError(error);
-  return commentFromRow(data as CommentRow);
+  return {
+    comment: commentFromRow(data as CommentRow),
+    requiresOutboxDrain: true,
+  };
 }
 
 export async function deleteGroupSocialComment(commentId: string) {

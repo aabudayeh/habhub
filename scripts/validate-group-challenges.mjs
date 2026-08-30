@@ -1681,11 +1681,11 @@ assert.match(
 );
 assert.match(groupSettings, /accessibilityState=\{\{ expanded: groupColorOpen \}\}/);
 assert.match(groupSettings, /setGroupTheme\(groupColorDraft\)/);
-assert.match(groupSettings, /discoverActive: true/);
+assert.match(groupSettings, /discoverActive: canEdit/);
 assert.match(
   groupSettings,
-  /const routeFocused = useIsFocused\(\)[\s\S]{0,160}discoveryPollingEnabled: routeFocused/,
-  "Group Settings must expose route focus to its discovery-only poll",
+  /const routeFocused = useIsFocused\(\)[\s\S]{0,180}discoveryPollingEnabled: canEdit && routeFocused/,
+  "Group Settings must expose route focus to its admin-only discovery poll without querying from the member sharing page",
 );
 assert.match(groupSettings, /availability === "active" \? "LIVE" : "UPCOMING"/);
 assert.match(groupSettings, /await challengeCloud\.respond\(sourceId, "accepted"\)/);

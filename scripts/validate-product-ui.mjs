@@ -14,6 +14,7 @@ const ui = read("src", "components", "ui.tsx");
 const status = read("app", "(tabs)", "status.tsx");
 const metricEditor = read("app", "metric-editor.tsx");
 const groupSettings = read("app", "group-settings.tsx");
+const leaderboard = read("app", "(tabs)", "group.tsx");
 
 const seededToday = seed.indexOf('"index"');
 const seededStatus = seed.indexOf('"status"');
@@ -113,6 +114,27 @@ assert.match(
   groupSettings,
   /const visibilityMetrics = useMemo\([\s\S]{0,180}groupMetrics[\s\S]{0,180}personalMetricsById\.get\(metric\.id\)/,
   "Group settings visibility must include every configured tracker, including calculated trackers",
+);
+assert.match(
+  groupSettings,
+  /if \(!canEdit\) \{[\s\S]*?title="Tracker sharing"[\s\S]*?updateMetric\(metric\.id, \{ defaultVisibility: option\.value \}\)[\s\S]*?<\/Screen>/,
+  "ordinary members must receive a dedicated personal tracker-sharing page rather than administrator controls",
+);
+const memberSettingsBranchAt = groupSettings.indexOf("if (!canEdit) {");
+const memberSettingsTitleAt = groupSettings.indexOf('title="Tracker sharing"');
+const memberSettingsCloseAt = groupSettings.indexOf("    );\n  }", memberSettingsTitleAt);
+const adminSettingsTitleAt = groupSettings.indexOf('title="Group settings"');
+assert.ok(
+  memberSettingsBranchAt >= 0 &&
+    memberSettingsTitleAt > memberSettingsBranchAt &&
+    memberSettingsCloseAt > memberSettingsTitleAt &&
+    adminSettingsTitleAt > memberSettingsCloseAt,
+  "administrator settings must remain outside the ordinary-member render branch",
+);
+assert.match(
+  leaderboard,
+  /label=\{canManageGroup \? "Group settings" : "Tracker sharing"\}[\s\S]{0,120}router\.navigate\("\/group-settings"/,
+  "every active group member must be able to open their authorized Group Settings surface",
 );
 
 console.log("Product navigation and compact UI validation passed.");

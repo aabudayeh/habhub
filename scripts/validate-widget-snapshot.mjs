@@ -537,8 +537,8 @@ assert.match(
 );
 assert.match(
   nativeWidget,
-  /val height = if \(widgetId in smallWidgetIds\) \{[\s\S]{0,40}fallbackHeight[\s\S]{0,60}else if \(portrait\) \{[\s\S]{0,40}maxHeight/,
-  "The actual Featured provider must normalize One UI's inflated one-row height before choosing the compact layout",
+  /val height = if \(portrait\) maxHeight else minHeight/,
+  "The Featured bitmap must retain the launcher's real current-orientation proportions instead of stretching a forced 50dp render",
 );
 assert.match(
   nativeWidget,

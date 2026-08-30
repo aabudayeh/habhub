@@ -1465,13 +1465,11 @@ function LeaderboardScreen() {
           action={
             editing ? (
               <View style={styles.headerActions}>
-                {canManageGroup ? (
-                  <IconButton
-                    icon="settings-outline"
-                    label="Group settings"
-                    onPress={() => router.navigate("/group-settings" as never)}
-                  />
-                ) : null}
+                <IconButton
+                  icon="settings-outline"
+                  label={canManageGroup ? "Group settings" : "Tracker sharing"}
+                  onPress={() => router.navigate("/group-settings" as never)}
+                />
                 <Pressable
                   onPress={finishLeaderboardEditing}
                   style={[styles.done, { backgroundColor: accent }]}
@@ -1481,6 +1479,11 @@ function LeaderboardScreen() {
               </View>
             ) : (
               <View style={styles.headerActions}>
+                <IconButton
+                  icon="settings-outline"
+                  label={canManageGroup ? "Group settings" : "Tracker sharing"}
+                  onPress={() => router.navigate("/group-settings" as never)}
+                />
                 {challengesEnabled ? (
                   <TutorialTarget id="leaderboard-create-challenge">
                     <IconButton

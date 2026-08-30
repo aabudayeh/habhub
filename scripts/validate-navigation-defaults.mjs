@@ -16,8 +16,8 @@ import {
 assert.deepEqual(DEFAULT_TAB_ORDER, [
   "index",
   "status",
-  "log",
   "group",
+  "log",
   "insights",
   "gym",
   "calendar",
@@ -56,8 +56,8 @@ assert.deepEqual(
   normalizeTabOrder(undefined).filter((id) => id !== "status"),
   [
     "index",
-    "log",
     "group",
+    "log",
     "insights",
     "gym",
     "calendar",
@@ -67,6 +67,15 @@ assert.deepEqual(
     "chat",
   ],
   "hiding Status must leave Today first and Chat last",
+);
+const enabledByDefault = DEFAULT_TAB_ORDER.filter((id) =>
+  ["index", "status", "group", "log", "insights", "gym", "chat"].includes(id),
+);
+assert.equal(enabledByDefault.length % 2, 1);
+assert.equal(
+  enabledByDefault.indexOf("log"),
+  Math.floor(enabledByDefault.length / 2),
+  "Log must occupy the exact middle of the odd default navigation set",
 );
 
 assert.equal(navigationDefaultsForVersion({ showStatus: false }, 24).showStatus, true);
@@ -126,6 +135,11 @@ assert.match(onboarding, /landingPage === "status" \|\| state\.settings\.showSta
 assert.match(seed, /version: 27/);
 assert.match(seed, /showStatus: true/);
 assert.match(seed, /showRecap: false/);
+assert.match(
+  seed,
+  /tabOrder: \[[\s\S]{0,100}"index",[\s\S]{0,60}"status",[\s\S]{0,60}"group",[\s\S]{0,60}"log",/,
+  "new accounts must seed the same centered-Log default order",
+);
 assert.match(provider, /const restoredState: AppState = \{[\s\S]{0,100}version: 27/);
 assert.doesNotMatch(cloudProvider, /version: 24/);
 

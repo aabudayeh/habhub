@@ -23,6 +23,7 @@ import { MetricSelector } from "@/src/components/MetricSelector";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import { SelectionMenu } from "@/src/components/SelectionMenu";
 import { TimeInput } from "@/src/components/TimeInput";
+import { WeightQuickSlider } from "@/src/components/WeightQuickSlider";
 import {
   useWebBackNavigationGuard,
   useWebBeforeUnload,
@@ -609,6 +610,22 @@ function LogScreen() {
   const numericToday = selected
     ? safeMetricValue(state, selected, state.currentUserId, logDate)
     : 0;
+  const lastLoggedWeight = useMemo(() => {
+    const latest = state.entries
+      .filter(
+        (entry) =>
+          entry.userId === state.currentUserId &&
+          entry.metricId === "weight" &&
+          Number.isFinite(Number(entry.value)) &&
+          Number(entry.value) > 0,
+      )
+      .sort(
+        (left, right) =>
+          right.recordedAt.localeCompare(left.recordedAt) ||
+          right.id.localeCompare(left.id),
+      )[0];
+    return latest ? Number(latest.value) : undefined;
+  }, [state.currentUserId, state.entries]);
   const textToday =
     selected?.dataType === "text"
       ? latestTextValue(state, selected.id, state.currentUserId, logDate)
@@ -1517,7 +1534,7 @@ function LogScreen() {
                   value={value}
                   onChangeText={setValue}
                   keyboardType="decimal-pad"
-                  placeholder="Optional"
+                  placeholder="0"
                   placeholderTextColor={colors.faint}
                   style={[styles.primaryMeasurementText, { color: colors.ink }]}
                 />
@@ -1525,6 +1542,14 @@ function LogScreen() {
                   {selected.unit}
                 </Text>
               </View>
+              {lastLoggedWeight !== undefined ? (
+                <WeightQuickSlider
+                  lastWeight={lastLoggedWeight}
+                  unit={selected.unit}
+                  value={value}
+                  onChange={setValue}
+                />
+              ) : null}
               <Text style={[styles.fieldLabel, styles.secondaryMeasurementLabel, { color: colors.muted }]}>Body composition (optional)</Text>
               <View style={styles.nutritionGrid}>
                 {bodyCompositionMetrics.map((metric) => ({
@@ -2601,21 +2626,21 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   primaryMeasurementInput: {
-    minHeight: 58,
+    minHeight: 43,
     borderWidth: 1.5,
-    borderRadius: 15,
-    paddingHorizontal: 13,
+    borderRadius: 12,
+    paddingHorizontal: 11,
     flexDirection: "row",
     alignItems: "center",
     gap: 9,
-    marginBottom: 12,
+    marginBottom: 9,
   },
   primaryMeasurementText: {
     flex: 1,
     minWidth: 0,
-    ...typography.cardTitle,
+    ...typography.body,
     fontWeight: "800",
-    paddingVertical: 10,
+    paddingVertical: 8,
   },
   primaryMeasurementUnit: {
     flexShrink: 0,

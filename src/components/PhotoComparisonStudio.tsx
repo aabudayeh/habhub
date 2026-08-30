@@ -24,11 +24,15 @@ import {
   photoFrameDurationMs,
   photoIndexAtOffset,
   photoMeasurementLabel,
-  photoVideoSpeedAtOffset,
   photoWeightLabel,
   PHOTO_VIDEO_SPEEDS,
   PhotoVideoSpeed,
 } from "@/src/domain/photoProgress";
+import {
+  createNativePhotoProgressVideo,
+  nativePhotoVideoAvailable,
+  saveNativePhotoProgressVideo,
+} from "@/src/native/photoVideo";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { MetricEntry, PhotoUpdate } from "@/src/types";
 
@@ -40,6 +44,13 @@ type PhotoComparisonStudioProps = {
   userId: string;
   locale: string;
   onDeletePhoto: (photoId: string) => void;
+};
+
+type VideoArtifact = {
+  key: string;
+  filename: string;
+  blob?: Blob;
+  uri?: string;
 };
 
 function sleep(milliseconds: number) {
@@ -274,7 +285,6 @@ export function PhotoComparisonStudio({
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState<PhotoVideoSpeed>(1);
   const [trackWidth, setTrackWidth] = useState(0);
-  const [speedTrackWidth, setSpeedTrackWidth] = useState(0);
   const [collageOpen, setCollageOpen] = useState(false);
   const [collageIds, setCollageIds] = useState<string[]>(() =>
     ordered.length > 1 ? [ordered[0].id, ordered.at(-1)!.id] : [],
@@ -284,24 +294,35 @@ export function PhotoComparisonStudio({
   const [videoAction, setVideoAction] = useState<"save" | "share" | null>(null);
   const [videoProgress, setVideoProgress] = useState(0);
   const collageRef = useRef<ViewShot>(null);
-  const videoArtifactRef = useRef<
-    { key: string; blob: Blob; filename: string } | undefined
-  >(undefined);
+  const trackPageXRef = useRef(0);
+  const videoArtifactRef = useRef<VideoArtifact | undefined>(undefined);
   const activeIndex = Math.max(0, ordered.findIndex((photo) => photo.id === activeId));
   const active = ordered[activeIndex];
   const selectedPhotos = ordered.filter((photo) => collageIds.includes(photo.id));
-  const videoArtifactKey = JSON.stringify({
-    photos: ordered.map((photo) => ({
-      id: photo.id,
-      localDate: photo.localDate,
-      capturedAt: photo.capturedAt,
-      createdAt: photo.createdAt,
-      uri: photo.uri,
-    })),
-    speed,
-    showBodyFat,
-    showLeanMass,
-  });
+  const videoArtifactKey = useMemo(
+    () =>
+      JSON.stringify({
+        photos: ordered.map((photo) => ({
+          id: photo.id,
+          localDate: photo.localDate,
+          capturedAt: photo.capturedAt,
+          createdAt: photo.createdAt,
+          uri: photo.uri,
+        })),
+        speed,
+        showBodyFat,
+        showLeanMass,
+        locale,
+        measurements: bodyEntries.map((entry) => ({
+          id: entry.id,
+          metricId: entry.metricId,
+          value: entry.value,
+          localDate: entry.localDate,
+          recordedAt: entry.recordedAt,
+        })),
+      }),
+    [bodyEntries, locale, ordered, showBodyFat, showLeanMass, speed],
+  );
 
   useEffect(() => {
     if (!ordered.length) return;
@@ -341,10 +362,6 @@ export function PhotoComparisonStudio({
 
   function handleTrackLayout(event: LayoutChangeEvent) {
     setTrackWidth(event.nativeEvent.layout.width);
-  }
-
-  function seekSpeed(offset: number) {
-    setSpeed(photoVideoSpeedAtOffset(offset, speedTrackWidth));
   }
 
   function chooseCollage(ids: string[]) {
@@ -394,7 +411,11 @@ export function PhotoComparisonStudio({
         const row = Math.floor(index / columns);
         const x = gap + column * (cellWidth + gap);
         const y = 78 + row * 580;
-        drawCover(context, image, x, y, cellWidth, 430);
+        try {
+          drawCover(context, image, x, y, cellWidth, 430);
+        } finally {
+          releaseWebImage(image);
+        }
         context.textAlign = "center";
         context.fillStyle = "#17211B";
         context.font = "700 18px sans-serif";
@@ -436,12 +457,46 @@ export function PhotoComparisonStudio({
     }
   }
 
-  async function createVideoArtifact() {
-    if (!webVideoAvailable() || ordered.length < 2)
-      throw new Error("Video export is not available in this browser.");
+  async function createVideoArtifact(): Promise<VideoArtifact> {
+    if (ordered.length < 2)
+      throw new Error("Add at least two progress photos before exporting video.");
     if (videoArtifactRef.current?.key === videoArtifactKey)
       return videoArtifactRef.current;
     setVideoProgress(0);
+    if (nativePhotoVideoAvailable()) {
+      const frames = ordered.map((photo) => {
+        const uri = imageSourceUri(photo.uri);
+        if (!uri) throw new Error("A selected photo is not available on this device.");
+        return {
+          uri,
+          date: fullPhotoDate(photo.localDate, locale),
+          metadata: [
+            photoWeightLabel(bodyEntries, userId, photo.localDate, locale),
+            showBodyFat
+              ? photoMeasurementLabel(bodyEntries, userId, photo.localDate, "body_fat", locale)?.compactLabel
+              : undefined,
+            showLeanMass
+              ? photoMeasurementLabel(bodyEntries, userId, photo.localDate, "lean_body_mass", locale)?.compactLabel
+              : undefined,
+          ].filter(Boolean) as string[],
+        };
+      });
+      setVideoProgress(0.1);
+      const uri = await createNativePhotoProgressVideo(
+        frames,
+        photoFrameDurationMs(speed),
+      );
+      const artifact: VideoArtifact = {
+        key: videoArtifactKey,
+        uri,
+        filename: "habhub-photo-progress.mp4",
+      };
+      videoArtifactRef.current = artifact;
+      setVideoProgress(1);
+      return artifact;
+    }
+    if (!webVideoAvailable())
+      throw new Error("Video export is not available on this device.");
     let stream: MediaStream | undefined;
     let recorder: MediaRecorder | undefined;
     let stopped: Promise<Blob> | undefined;
@@ -526,7 +581,7 @@ export function PhotoComparisonStudio({
       activeRecorder.stop();
       const blob = await stopped;
       const extension = mimeType.startsWith("video/mp4") ? "mp4" : "webm";
-      const artifact = {
+      const artifact: VideoArtifact = {
         key: videoArtifactKey,
         blob,
         filename: `habhub-photo-progress.${extension}`,
@@ -554,6 +609,15 @@ export function PhotoComparisonStudio({
     setVideoAction("save");
     try {
       const artifact = await createVideoArtifact();
+      if (artifact.uri) {
+        const savedName = await saveNativePhotoProgressVideo(artifact.uri);
+        Alert.alert(
+          "Video saved",
+          `${savedName} was saved to your Movies folder.`,
+        );
+        return;
+      }
+      if (!artifact.blob) throw new Error("The video file could not be created.");
       saveWebFile(artifact.blob, artifact.filename);
       Alert.alert(
         "Video saved",
@@ -575,6 +639,17 @@ export function PhotoComparisonStudio({
     setVideoAction("share");
     try {
       const artifact = await createVideoArtifact();
+      if (artifact.uri) {
+        if (!(await Sharing.isAvailableAsync()))
+          throw new Error("Sharing is not available on this device.");
+        await Sharing.shareAsync(artifact.uri, {
+          mimeType: "video/mp4",
+          dialogTitle: "Share HabHub photo progress",
+          UTI: "public.mpeg-4",
+        });
+        return;
+      }
+      if (!artifact.blob) throw new Error("The video file could not be created.");
       await shareWebFile(
         artifact.blob,
         artifact.filename,
@@ -673,8 +748,16 @@ export function PhotoComparisonStudio({
         onLayout={handleTrackLayout}
         onStartShouldSetResponder={() => ordered.length > 1}
         onMoveShouldSetResponder={() => ordered.length > 1}
-        onResponderGrant={(event) => seekTo(event.nativeEvent.locationX)}
-        onResponderMove={(event) => seekTo(event.nativeEvent.locationX)}
+        onMoveShouldSetResponderCapture={() => ordered.length > 1}
+        onResponderGrant={(event) => {
+          trackPageXRef.current =
+            event.nativeEvent.pageX - event.nativeEvent.locationX;
+          seekTo(event.nativeEvent.locationX);
+        }}
+        onResponderMove={(event) =>
+          seekTo(event.nativeEvent.pageX - trackPageXRef.current)
+        }
+        onResponderTerminationRequest={() => false}
         style={[styles.track, { backgroundColor: colors.border }]}
       >
         <View style={[styles.trackFill, { backgroundColor: accent, width: `${timelineProgress * 100}%` }]} />
@@ -686,37 +769,36 @@ export function PhotoComparisonStudio({
       </View>
 
       <View style={styles.playbackRow}>
-        <Pressable
-          accessibilityLabel="Previous photo"
-          disabled={activeIndex === 0}
-          onPress={() => setActiveId(ordered[Math.max(0, activeIndex - 1)].id)}
-          style={[styles.roundButton, { borderColor: colors.border }, activeIndex === 0 && styles.disabled]}
-        >
-          <Ionicons name="play-skip-back" size={16} color={accent} />
-        </Pressable>
-        <Pressable
-          accessibilityLabel={playing ? "Pause slideshow" : "Play slideshow"}
-          disabled={ordered.length < 2}
-          onPress={() => {
-            if (!playing && activeIndex >= ordered.length - 1) setActiveId(ordered[0].id);
-            setPlaying((value) => !value);
-          }}
-          style={[styles.playButton, { backgroundColor: accent }, ordered.length < 2 && styles.disabled]}
-        >
-          <Ionicons name={playing ? "pause" : "play"} size={18} color={palette.white} />
-        </Pressable>
-        <Pressable
-          accessibilityLabel="Next photo"
-          disabled={activeIndex >= ordered.length - 1}
-          onPress={() => setActiveId(ordered[Math.min(ordered.length - 1, activeIndex + 1)].id)}
-          style={[styles.roundButton, { borderColor: colors.border }, activeIndex >= ordered.length - 1 && styles.disabled]}
-        >
-          <Ionicons name="play-skip-forward" size={16} color={accent} />
-        </Pressable>
-      </View>
-
-      <View style={styles.speedRow}>
-        <Text style={[styles.speedLabel, { color: colors.muted }]}>Slideshow speed</Text>
+        <View style={styles.playbackButtons}>
+          <Pressable
+            accessibilityLabel="Previous photo"
+            disabled={activeIndex === 0}
+            onPress={() => setActiveId(ordered[Math.max(0, activeIndex - 1)].id)}
+            style={[styles.roundButton, { borderColor: colors.border }, activeIndex === 0 && styles.disabled]}
+          >
+            <Ionicons name="play-skip-back" size={16} color={accent} />
+          </Pressable>
+          <Pressable
+            accessibilityLabel={playing ? "Pause slideshow" : "Play slideshow"}
+            disabled={ordered.length < 2}
+            onPress={() => {
+              if (!playing && activeIndex >= ordered.length - 1) setActiveId(ordered[0].id);
+              setPlaying((current) => !current);
+            }}
+            style={[styles.playButton, { backgroundColor: accent }, ordered.length < 2 && styles.disabled]}
+          >
+            <Ionicons name={playing ? "pause" : "play"} size={18} color={palette.white} />
+          </Pressable>
+          <Pressable
+            accessibilityLabel="Next photo"
+            disabled={activeIndex >= ordered.length - 1}
+            onPress={() => setActiveId(ordered[Math.min(ordered.length - 1, activeIndex + 1)].id)}
+            style={[styles.roundButton, { borderColor: colors.border }, activeIndex >= ordered.length - 1 && styles.disabled]}
+          >
+            <Ionicons name="play-skip-forward" size={16} color={accent} />
+          </Pressable>
+        </View>
+        <View style={styles.speedRow}>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Decrease slideshow speed"
@@ -730,45 +812,6 @@ export function PhotoComparisonStudio({
         >
           <Ionicons name="remove" size={14} color={accent} />
         </Pressable>
-        <View
-          accessibilityRole="adjustable"
-          accessibilityLabel="Slideshow speed"
-          accessibilityValue={{ min: 0.5, max: 20, now: speed, text: `${speed} times` }}
-          accessibilityActions={[{ name: "increment" }, { name: "decrement" }]}
-          onAccessibilityAction={(event) => {
-            if (event.nativeEvent.actionName === "increment")
-              setSpeed((current) => adjacentPhotoVideoSpeed(current, 1));
-            if (event.nativeEvent.actionName === "decrement")
-              setSpeed((current) => adjacentPhotoVideoSpeed(current, -1));
-          }}
-          onLayout={(event) => setSpeedTrackWidth(event.nativeEvent.layout.width)}
-          onStartShouldSetResponder={() => true}
-          onMoveShouldSetResponder={() => true}
-          onResponderGrant={(event) => seekSpeed(event.nativeEvent.locationX)}
-          onResponderMove={(event) => seekSpeed(event.nativeEvent.locationX)}
-          style={styles.speedTrackTouchTarget}
-        >
-          <View style={[styles.speedTrack, { backgroundColor: colors.border }]}>
-            <View
-              style={[
-                styles.speedTrackFill,
-                {
-                  backgroundColor: accent,
-                  width: `${(PHOTO_VIDEO_SPEEDS.indexOf(speed) / (PHOTO_VIDEO_SPEEDS.length - 1)) * 100}%`,
-                },
-              ]}
-            />
-            <View
-              style={[
-                styles.speedTrackThumb,
-                {
-                  backgroundColor: accent,
-                  left: `${(PHOTO_VIDEO_SPEEDS.indexOf(speed) / (PHOTO_VIDEO_SPEEDS.length - 1)) * 100}%`,
-                },
-              ]}
-            />
-          </View>
-        </View>
         <Text translate={false} style={[styles.speedText, { color: colors.ink }]}>{speed}×</Text>
         <Pressable
           accessibilityRole="button"
@@ -783,6 +826,7 @@ export function PhotoComparisonStudio({
         >
           <Ionicons name="add" size={14} color={accent} />
         </Pressable>
+        </View>
       </View>
 
       {ordered.length > 1 ? (
@@ -854,7 +898,7 @@ export function PhotoComparisonStudio({
             </View>
           ) : null}
 
-          {webVideoAvailable() ? (
+          {webVideoAvailable() || nativePhotoVideoAvailable() ? (
             <View style={styles.videoActions}>
               <Pressable
                 accessibilityRole="button"
@@ -885,7 +929,7 @@ export function PhotoComparisonStudio({
             <View style={[styles.videoNote, { backgroundColor: colors.primarySoft }]}>
               <Ionicons name="information-circle-outline" size={15} color={accent} />
               <Text style={[styles.videoNoteText, { color: colors.muted }]}>
-                Live playback works here. Video export is available in a browser with built-in video encoding; MP4 is used when that browser supports it, otherwise WebM.
+                Live playback works here. Video export is unavailable on this device.
               </Text>
             </View>
           )}
@@ -915,16 +959,12 @@ const styles = StyleSheet.create({
   rangeDates: { flexDirection: "row", justifyContent: "space-between", gap: 8 },
   rangeDate: { flex: 1, fontSize: 6.5 },
   rangeDateRight: { textAlign: "right" },
-  playbackRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
+  playbackRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
+  playbackButtons: { flexDirection: "row", alignItems: "center", gap: 6 },
   roundButton: { width: 34, height: 34, borderWidth: 1, borderRadius: 11, alignItems: "center", justifyContent: "center" },
   playButton: { width: 38, height: 38, borderRadius: 13, alignItems: "center", justifyContent: "center" },
-  speedRow: { minHeight: 34, flexDirection: "row", alignItems: "center", gap: 7 },
-  speedLabel: { fontSize: 7.5, fontWeight: "800" },
+  speedRow: { minHeight: 34, flexDirection: "row", alignItems: "center", gap: 5 },
   speedStepButton: { width: 30, height: 30, borderWidth: 1, borderRadius: 10, alignItems: "center", justifyContent: "center" },
-  speedTrackTouchTarget: { flex: 1, minWidth: 70, height: 30, justifyContent: "center" },
-  speedTrack: { height: 5, borderRadius: 999, position: "relative" },
-  speedTrackFill: { height: 5, borderRadius: 999 },
-  speedTrackThumb: { position: "absolute", top: -5, marginLeft: -7, width: 15, height: 15, borderRadius: 8, borderWidth: 2, borderColor: palette.white },
   speedText: { minWidth: 30, textAlign: "center", fontSize: 8, fontWeight: "900" },
   disabled: { opacity: 0.45 },
   sectionToggle: { borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 10, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },

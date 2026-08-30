@@ -7,8 +7,9 @@ import type { LandingPage, UserSettings } from "@/src/types";
 export const DEFAULT_TAB_ORDER: readonly LandingPage[] = [
   "index",
   "status",
-  "log",
   "group",
+  // The seven pages enabled by default place Log at their exact center.
+  "log",
   "insights",
   "gym",
   "calendar",

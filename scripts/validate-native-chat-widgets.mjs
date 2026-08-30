@@ -459,12 +459,12 @@ assert.match(pluginSource, /val roomy = widthDp >= 165f/);
 assert.match(pluginSource, /widgetId in wideWidgetIds -> 203/);
 assert.match(
   pluginSource,
-  /val portrait = context\.resources\.configuration\.orientation != Configuration\.ORIENTATION_LANDSCAPE[\s\S]*val width = if \(portrait\) minWidth else maxWidth[\s\S]*val height = if \(widgetId in smallWidgetIds\)[\s\S]*else if \(portrait\)[\s\S]*maxHeight[\s\S]*else[\s\S]*minHeight/,
+  /val portrait = context\.resources\.configuration\.orientation != Configuration\.ORIENTATION_LANDSCAPE[\s\S]{0,180}val width = if \(portrait\) minWidth else maxWidth[\s\S]{0,500}val height = if \(portrait\) maxHeight else minHeight/,
 );
-assert.match(
+assert.doesNotMatch(
   pluginSource,
-  /val height = if \(widgetId in smallWidgetIds\) \{[\s\S]{0,40}fallbackHeight[\s\S]{0,60}else if \(portrait\) \{[\s\S]{0,40}maxHeight/,
-  "The fixed-height Featured provider must ignore launcher-inflated maxHeight values",
+  /val height = if \(widgetId in smallWidgetIds\)[\s\S]{0,80}fallbackHeight/,
+  "Featured bitmaps must not be forced to 50dp and vertically stretched by taller launcher cells",
 );
 assert.equal(
   Number(smallInfo.match(/android:minResizeHeight="(\d+)dp"/)?.[1]),

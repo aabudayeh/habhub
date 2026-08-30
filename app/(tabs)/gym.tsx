@@ -1423,8 +1423,8 @@ function GymScreen() {
   const workoutEditorTitle = selectedSessionLogged
     ? "Logged exercises"
     : completedSets > 0
-      ? "Workout in progress"
-      : "Exercises to complete";
+      ? "In progress"
+      : "To complete";
   const volume = trainingVolumeKg(exercises);
   const exerciseDerivedDuration =
     inferredGymSessionDurationMinutes(exercises);
@@ -4749,6 +4749,18 @@ function GymScreen() {
                     />
                   </Card>
                 ) : null}
+                <TutorialTarget id="workout-save">
+                  <View style={styles.bottomActions}>
+                    <View style={styles.primaryActionCell}>
+                      <Button
+                        label={selectedSession ? "Update workout" : "Save workout"}
+                        icon="checkmark"
+                        size="small"
+                        onPress={saveDay}
+                      />
+                    </View>
+                  </View>
+                </TutorialTarget>
                 <View
                   style={[
                     styles.workoutPhotoEditor,
@@ -4808,18 +4820,6 @@ function GymScreen() {
                     </Pressable>
                   ) : null}
                 </View>
-                <TutorialTarget id="workout-save">
-                <View style={styles.bottomActions}>
-                  <View style={styles.primaryActionCell}>
-                    <Button
-                      label={selectedSession ? "Update workout" : "Save workout"}
-                      icon="checkmark"
-                      size="small"
-                      onPress={saveDay}
-                    />
-                  </View>
-                </View>
-                </TutorialTarget>
                 <View
                   style={[
                     styles.templateMenu,
