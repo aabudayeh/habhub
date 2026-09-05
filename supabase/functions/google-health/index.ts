@@ -28,6 +28,7 @@ type Action =
   | "connect"
   | "complete"
   | "sync"
+  | "setHistory"
   | "refresh"
   | "disconnect"
   | "delete"
@@ -37,6 +38,13 @@ type Action =
 
 const AUTHORIZATION_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const FOREGROUND_REFRESH_MIN_AGE_MS = 30 * 60 * 1000;
+type GoogleHealthHistoryDays = 0 | 30 | 90 | 365 | 730;
+
+function historyDays(value: unknown): GoogleHealthHistoryDays | null {
+  return typeof value === "number" && [0, 30, 90, 365, 730].includes(value)
+    ? value as GoogleHealthHistoryDays
+    : null;
+}
 
 function adminClient() {
   const url = Deno.env.get("SUPABASE_URL");
@@ -253,7 +261,12 @@ async function callback(request: Request) {
   }
 }
 
-async function startConnection(admin: AdminClient, userId: string, requestedReturnTo: unknown) {
+async function startConnection(
+  admin: AdminClient,
+  userId: string,
+  requestedReturnTo: unknown,
+  selectedHistoryDays: GoogleHealthHistoryDays,
+) {
   const config = googleHealthConfig();
   const returnTo = safeReturnTo(requestedReturnTo, config);
   const rawState = randomBase64Url(32);
@@ -274,6 +287,14 @@ async function startConnection(admin: AdminClient, userId: string, requestedRetu
     p_expires_at: expiresAt,
   });
   if (created.error) throw created.error;
+  const savedHistory = await admin.from("google_health_connections")
+    .update({ history_days: selectedHistoryDays })
+    .eq("user_id", userId)
+    .eq("status", "pending")
+    .select("user_id")
+    .maybeSingle();
+  if (savedHistory.error || !savedHistory.data)
+    throw savedHistory.error ?? new Error("google_health_history_not_saved");
   const authorizationUrl = new URL(AUTHORIZATION_URL);
   authorizationUrl.search = new URLSearchParams({
     client_id: config.clientId,
@@ -433,6 +454,7 @@ async function handleAction(request: Request) {
     entryId?: unknown;
     metricId?: unknown;
     visibility?: unknown;
+    historyDays?: unknown;
     patch?: unknown;
   };
   try {
@@ -449,7 +471,7 @@ async function handleAction(request: Request) {
   }
   const action = body.action;
   if (!action || ![
-    "status", "connect", "complete", "sync", "refresh", "disconnect", "delete",
+    "status", "connect", "complete", "sync", "setHistory", "refresh", "disconnect", "delete",
     "updateEntry", "dismissEntry", "updateMetricVisibility",
   ].includes(action))
     return jsonResponse(request, { error: "invalid_action" }, 400);
@@ -458,7 +480,17 @@ async function handleAction(request: Request) {
     if (action === "status")
       return jsonResponse(request, { connection: await connectionStatus(admin, user.id) });
     if (action === "connect") {
-      const authorizationUrl = await startConnection(admin, user.id, body.redirectUri);
+      const selectedHistoryDays = body.historyDays === undefined
+        ? 90
+        : historyDays(body.historyDays);
+      if (selectedHistoryDays === null)
+        return jsonResponse(request, { error: "invalid_history_days" }, 400);
+      const authorizationUrl = await startConnection(
+        admin,
+        user.id,
+        body.redirectUri,
+        selectedHistoryDays,
+      );
       return jsonResponse(request, {
         authorizationUrl,
         connection: await connectionStatus(admin, user.id),
@@ -473,6 +505,20 @@ async function handleAction(request: Request) {
       return jsonResponse(request, {
         connection: await connectionStatus(admin, user.id),
         sync,
+      });
+    }
+    if (action === "setHistory") {
+      const selectedHistoryDays = historyDays(body.historyDays);
+      if (selectedHistoryDays === null)
+        return jsonResponse(request, { error: "invalid_history_days" }, 400);
+      const updated = await admin.rpc("set_google_health_history_days", {
+        p_user_id: user.id,
+        p_history_days: selectedHistoryDays,
+      });
+      if (updated.error || updated.data !== true)
+        throw updated.error ?? new Error("google_health_history_not_saved");
+      return jsonResponse(request, {
+        connection: await connectionStatus(admin, user.id),
       });
     }
     if (action === "refresh")
@@ -538,6 +584,8 @@ async function handleAction(request: Request) {
     if (/authorization_in_progress|already_connected/i.test(raw))
       return jsonResponse(request, { error: raw.includes("already") ? "already_connected" : "authorization_in_progress" }, 409);
     if (/sync_busy/i.test(raw)) return jsonResponse(request, { error: "sync_busy" }, 409);
+    if (/connection_required/i.test(raw))
+      return jsonResponse(request, { error: "connection_required" }, 409);
     if (/rate_limited/i.test(raw)) return jsonResponse(request, { error: "rate_limited" }, 429);
     if (/google_health_(?:entry|metric)_not_found/i.test(raw))
       return jsonResponse(request, { error: /metric/i.test(raw) ? "metric_not_found" : "entry_not_found" }, 404);

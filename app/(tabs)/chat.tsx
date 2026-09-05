@@ -31,9 +31,14 @@ import {
 import { CheerIcon } from "@/src/components/CheerIcon";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { TAB_SCENE_SAFE_AREA_EDGES } from "@/src/domain/webSafeArea";
-import { translateUiText, useLocale } from "@/src/i18n";
+import {
+  LocalizedAlert as Alert,
+  translateUiText,
+  useLocale,
+} from "@/src/i18n";
 
 import { ExpandableImage } from "@/src/components/ExpandableImage";
+import { SafetyReportSheet } from "@/src/components/SafetyReportSheet";
 import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import { Avatar } from "@/src/components/ui";
 import { memberDisplayName } from "@/src/domain/members";
@@ -55,6 +60,18 @@ import { usePageSwipeGesture } from "@/src/components/usePageSwipeGesture";
 import { useSoftwareKeyboardVisibility } from "@/src/components/useSoftwareKeyboardVisibility";
 import { useTodoItemVisibility } from "@/src/components/useTodoItemVisibility";
 import { stagedChatShareImage } from "@/src/storage/chatShareImageStaging";
+import { moderateChatContent } from "@/src/safety/contentFilter";
+import {
+  SafetyReportReason,
+  useUserSafety,
+} from "@/src/safety/userSafety";
+
+type ChatSafetyTarget = {
+  type: "message" | "user";
+  userId: string;
+  displayName: string;
+  messageId?: string;
+};
 
 function ChatScreen() {
   const tutorialSandbox = useTutorialSandboxActive();
@@ -101,6 +118,8 @@ function ChatScreen() {
   const requestedMetricLogTitle = routeParam(params.metricLogTitle);
   const requestedMetricLogShareAt = routeParam(params.metricLogShareAt);
   const { state, sendMessage, updateSettings } = useApp();
+  const safety = useUserSafety(state.currentUserId, tutorialSandbox);
+  const blockedUserIds = safety.blockedUserIds;
   const accent = useGroupAccent();
   const colors = useAppColors();
   const locale = useLocale();
@@ -118,6 +137,10 @@ function ChatScreen() {
     useState<ChatShareAttachment>();
   const [todoPickerOpen, setTodoPickerOpen] = useState(false);
   const [recipientId, setRecipientId] = useState<string | null>(null);
+  const [safetyTarget, setSafetyTarget] = useState<ChatSafetyTarget>();
+  const [safetyBusy, setSafetyBusy] = useState(false);
+  const [sending, setSending] = useState(false);
+  const sendingRef = useRef(false);
   const appliedRequestedRecipient = useRef<string | null>(null);
   useEffect(() => {
     if (
@@ -259,6 +282,13 @@ function ChatScreen() {
   const recipient = recipientId
     ? state.group.members.find((member) => member.id === recipientId)
     : undefined;
+  const recipientBlocked = Boolean(
+    recipient && blockedUserIds.has(recipient.id),
+  );
+  const cloudTermsRequired =
+    safety.mode === "cloud" && !safety.termsAccepted;
+  const composerLocked =
+    !safety.hydrated || cloudTermsRequired || recipientBlocked;
   const groupTodosVisible =
     state.settings.showGroupTodosByGroup?.[state.group.id] === true;
   const groupTodosAvailable =
@@ -320,16 +350,25 @@ function ChatScreen() {
   );
   const conversationUnread = useCallback(
     (id: string) =>
+      safety.hydrated &&
       state.messages.some(
         (message) =>
           message.kind !== "achievement" &&
           (!message.groupId || message.groupId === state.group.id) &&
           (message.conversationId ?? "group") === id &&
           message.senderId !== state.currentUserId &&
+          !blockedUserIds.has(message.senderId) &&
           message.createdAt >
             (readAt[`${state.group.id}:${id}`] ?? readAt[id] ?? ""),
       ),
-    [readAt, state.currentUserId, state.group.id, state.messages],
+    [
+      blockedUserIds,
+      readAt,
+      safety.hydrated,
+      state.currentUserId,
+      state.group.id,
+      state.messages,
+    ],
   );
   const muted = recipientId
     ? (notifications.mutedConversationIds ?? []).includes(conversationId)
@@ -360,12 +399,14 @@ function ChatScreen() {
     });
   }
   const messages = useMemo(
-    () =>
-      state.messages
+    () => {
+      if (!safety.hydrated) return [];
+      return state.messages
         .filter((message) => {
           // Goal/badge celebrations belong in the notification and badge feeds,
           // not as synthetic messages mixed into a human conversation.
           if (message.kind === "achievement") return false;
+          if (blockedUserIds.has(message.senderId)) return false;
           const id = message.conversationId ?? "group";
           if (message.groupId && message.groupId !== state.group.id) return false;
           if (
@@ -381,11 +422,14 @@ function ChatScreen() {
         .sort(
           (a, b) =>
             a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
-        ),
+        );
+    },
     [
+      blockedUserIds,
       conversationId,
       groupConversationId,
       recipientId,
+      safety.hydrated,
       state.group.id,
       state.messages,
     ],
@@ -657,35 +701,222 @@ function ChatScreen() {
     state.currentUserId,
     updateSettings,
   ]);
-  function submit() {
-    if (!draft.trim() && !imageUri && !attachedTodo && !shareAttachment) return;
-    followOutgoingMessageLayout.current = true;
-    userScrolledAwayFromBottom.current = false;
-    userDragInProgress.current = false;
-    userDragStartDistanceFromBottom.current = null;
-    sendMessage(
-      shareAttachment
-        ? buildChatShareMessage(shareAttachment, draft)
-        : draft,
-      conversationId,
-      recipientId ?? undefined,
-      imageUri ?? undefined,
-      attachedTodo
-        ? {
-            groupTodoId: attachedTodo.id,
-            groupId: attachedTodo.groupId,
-            title: attachedTodo.title,
-            completionMode: attachedTodo.completionMode,
-          }
-        : undefined,
+  function confirmMemberBlock(
+    member: (typeof state.group.members)[number],
+  ) {
+    const displayName = memberDisplayName(state, member);
+    const blocked = blockedUserIds.has(member.id);
+    Alert.alert(
+      `${blocked ? "Unblock" : "Block"} ${displayName}?`,
+      blocked
+        ? "Their group messages can appear again. Direct messaging is available only when neither person has blocked the other."
+        : "Their messages will disappear from your device immediately. Neither person can send direct messages or receive chat push alerts across this block.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: blocked ? "Unblock" : "Block",
+          style: blocked ? "default" : "destructive",
+          onPress: () => {
+            setSafetyBusy(true);
+            const action = blocked
+              ? safety.unblockUser(member.id)
+              : safety.blockUser(state.group.id, member.id, displayName);
+            void action
+              .then((result) => {
+                const demo = safety.mode === "demo";
+                Alert.alert(
+                  blocked ? "Member unblocked" : "Member blocked",
+                  demo
+                    ? "This demo safety change stays on this device."
+                    : result.cloudSynced
+                      ? blocked
+                        ? "Your cloud block list was updated."
+                        : "Their messages are hidden and direct contact is disabled."
+                  : "The change is active on this device. Cloud sync will retry when available.",
+                );
+              })
+              .catch((error) =>
+                Alert.alert(
+                  "Safety change not saved",
+                  error instanceof Error
+                    ? error.message
+                    : "The change is active for this session. Try again when storage is available.",
+                ),
+              )
+              .finally(() => setSafetyBusy(false));
+          },
+        },
+      ],
     );
-    setDraft("");
-    setImageUri(null);
-    setAttachedTodoId(undefined);
-    setShareAttachment(undefined);
-    setTodoPickerOpen(false);
-    scrollToNewest(false);
-    scrollToNewestAfterLayout(96, true);
+  }
+
+  function openThreadSafety() {
+    if (!recipient) {
+      router.push("/safety" as never);
+      return;
+    }
+    const displayName = memberDisplayName(state, recipient);
+    Alert.alert(`Safety options · ${displayName}`, undefined, [
+      {
+        text: "Report member",
+        onPress: () =>
+          setSafetyTarget({
+            type: "user",
+            userId: recipient.id,
+            displayName,
+          }),
+      },
+      {
+        text: recipientBlocked ? "Unblock member" : "Block member",
+        style: recipientBlocked ? "default" : "destructive",
+        onPress: () => confirmMemberBlock(recipient),
+      },
+      { text: "Cancel", style: "cancel" },
+    ]);
+  }
+
+  function openMessageSafety(
+    message: (typeof state.messages)[number],
+    displayName: string,
+  ) {
+    if (message.senderId === "system" || message.senderId === state.currentUserId)
+      return;
+    const sender = state.group.members.find(
+      (member) => member.id === message.senderId,
+    );
+    Alert.alert("Message safety", `From ${displayName}`, [
+      {
+        text: "Report message",
+        onPress: () =>
+          setSafetyTarget({
+            type: "message",
+            userId: message.senderId,
+            displayName,
+            messageId: message.id,
+          }),
+      },
+      ...(sender
+        ? [
+            {
+              text: "Block member",
+              style: "destructive" as const,
+              onPress: () => confirmMemberBlock(sender),
+            },
+          ]
+        : []),
+      { text: "Cancel", style: "cancel" },
+    ]);
+  }
+
+  async function submitSafetyReport(
+    reason: SafetyReportReason,
+    details: string,
+  ) {
+    if (!safetyTarget || safetyBusy) return;
+    setSafetyBusy(true);
+    try {
+      const result =
+        safetyTarget.type === "message" && safetyTarget.messageId
+          ? await safety.reportMessage({
+              groupId: state.group.id,
+              messageId: safetyTarget.messageId,
+              senderId: safetyTarget.userId,
+              reportedDisplayName: safetyTarget.displayName,
+              reason,
+              details,
+            })
+          : await safety.reportUser({
+              groupId: state.group.id,
+              userId: safetyTarget.userId,
+              reportedDisplayName: safetyTarget.displayName,
+              reason,
+              details,
+            });
+      setSafetyTarget(undefined);
+      Alert.alert(
+        result.cloudSynced ? "Report submitted" : "Demo report saved locally",
+        result.cloudSynced
+          ? "Your report is in HabHub's protected operator queue. An eligible group moderator may also review it, but the reported person cannot review their own report."
+          : "Demo mode does not send reports to HabHub or group admins.",
+      );
+    } catch (error) {
+      Alert.alert(
+        "Report not submitted",
+        error instanceof Error
+          ? error.message
+          : "Reconnect and try again so the report can be stored securely.",
+      );
+    } finally {
+      setSafetyBusy(false);
+    }
+  }
+
+  async function submit() {
+    if (!draft.trim() && !imageUri && !attachedTodo && !shareAttachment) return;
+    if (composerLocked || sendingRef.current) return;
+    const outgoingText = shareAttachment
+      ? buildChatShareMessage(shareAttachment, draft)
+      : draft;
+    const moderation = moderateChatContent(outgoingText);
+    if (!moderation.allowed) {
+      Alert.alert("Message not sent", moderation.message);
+      return;
+    }
+    sendingRef.current = true;
+    setSending(true);
+    try {
+      if (recipientId) {
+        try {
+          const allowed = await safety.canDirectMessage(
+            state.group.id,
+            recipientId,
+          );
+          if (!allowed) {
+            Alert.alert(
+              "Direct messaging unavailable",
+              "This conversation is unavailable because of a safety setting or membership change.",
+            );
+            return;
+          }
+        } catch (error) {
+          Alert.alert(
+            "Could not verify message safety",
+            error instanceof Error
+              ? error.message
+              : "Reconnect and try again.",
+          );
+          return;
+        }
+      }
+      followOutgoingMessageLayout.current = true;
+      userScrolledAwayFromBottom.current = false;
+      userDragInProgress.current = false;
+      userDragStartDistanceFromBottom.current = null;
+      sendMessage(
+        outgoingText,
+        conversationId,
+        recipientId ?? undefined,
+        imageUri ?? undefined,
+        attachedTodo
+          ? {
+              groupTodoId: attachedTodo.id,
+              groupId: attachedTodo.groupId,
+              title: attachedTodo.title,
+              completionMode: attachedTodo.completionMode,
+            }
+          : undefined,
+      );
+      setDraft("");
+      setImageUri(null);
+      setAttachedTodoId(undefined);
+      setShareAttachment(undefined);
+      setTodoPickerOpen(false);
+      scrollToNewest(false);
+      scrollToNewestAfterLayout(96, true);
+    } finally {
+      sendingRef.current = false;
+      setSending(false);
+    }
   }
   function suggest(kind: MessageCategory) {
     setDraft(
@@ -851,6 +1082,21 @@ function ChatScreen() {
                 color={accent}
               />
             </Pressable>
+            <Pressable
+              accessibilityLabel={
+                recipient ? "Report or block this member" : "Open Safety Center"
+              }
+              disabled={safetyBusy}
+              onPress={openThreadSafety}
+              hitSlop={6}
+              style={styles.profileButton}
+            >
+              <Ionicons
+                name={recipientBlocked ? "shield" : "shield-outline"}
+                size={18}
+                color={recipientBlocked ? palette.red : accent}
+              />
+            </Pressable>
             {recipient ? (
               <Pressable
                 accessibilityLabel="View friend profile"
@@ -1005,19 +1251,45 @@ function ChatScreen() {
                       ) : null}
                       <View style={styles.messageBlock}>
                         {!mine ? (
-                          <Pressable
-                            disabled={!sender}
-                            onPress={() =>
-                              sender &&
-                              router.push(`/member-profile/${sender.id}` as never)
-                            }
-                          >
-                            <Text translate={false} style={styles.sender}>
-                              {sender
-                                ? memberDisplayName(state, sender)
-                                : "Member"}
-                            </Text>
-                          </Pressable>
+                          <View style={styles.senderRow}>
+                            <Pressable
+                              disabled={!sender}
+                              onPress={() =>
+                                sender &&
+                                router.push(`/member-profile/${sender.id}` as never)
+                              }
+                            >
+                              <Text translate={false} style={styles.sender}>
+                                {sender
+                                  ? memberDisplayName(state, sender)
+                                  : "Member"}
+                              </Text>
+                            </Pressable>
+                            <Pressable
+                              accessibilityLabel={`Safety options for message from ${
+                                sender
+                                  ? memberDisplayName(state, sender)
+                                  : "member"
+                              }`}
+                              disabled={safetyBusy}
+                              onPress={() =>
+                                openMessageSafety(
+                                  message,
+                                  sender
+                                    ? memberDisplayName(state, sender)
+                                    : "Member",
+                                )
+                              }
+                              hitSlop={8}
+                              style={styles.messageSafetyButton}
+                            >
+                              <Ionicons
+                                name="ellipsis-horizontal-circle-outline"
+                                size={14}
+                                color={colors.faint}
+                              />
+                            </Pressable>
+                          </View>
                         ) : null}
                         <View
                           style={[
@@ -1403,6 +1675,90 @@ function ChatScreen() {
                 </ScrollView>
               </View>
             ) : null}
+            {composerLocked ? (
+              <View
+                style={[
+                  styles.chatGate,
+                  { backgroundColor: colors.card, borderColor: colors.border },
+                ]}
+              >
+                <Ionicons
+                  name={
+                    !safety.hydrated
+                      ? "hourglass-outline"
+                      : recipientBlocked
+                        ? "shield"
+                        : "document-text-outline"
+                  }
+                  size={21}
+                  color={recipientBlocked ? palette.red : accent}
+                />
+                <View style={styles.grow}>
+                  <Text style={[styles.chatGateTitle, { color: colors.ink }]}>
+                    {!safety.hydrated
+                      ? "Preparing secure chat"
+                      : recipientBlocked
+                        ? "This member is blocked"
+                        : "Accept the community Terms to chat"}
+                  </Text>
+                  <Text style={[styles.chatGateCopy, { color: colors.muted }]}>
+                    {!safety.hydrated
+                      ? "Loading your account safety settings…"
+                      : recipientBlocked
+                        ? "Their messages are hidden. Use safety options to unblock them."
+                        : "Review the current Terms, then explicitly agree before sending cloud messages or attachments."}
+                  </Text>
+                </View>
+                {recipientBlocked ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Review block options"
+                    onPress={openThreadSafety}
+                    style={[styles.chatGateAction, { borderColor: accent }]}
+                  >
+                    <Text style={[styles.chatGateActionText, { color: accent }]}>Review</Text>
+                  </Pressable>
+                ) : cloudTermsRequired ? (
+                  <View style={styles.chatGateActions}>
+                    <Pressable
+                      accessibilityRole="link"
+                      onPress={() => router.push("/terms" as never)}
+                    >
+                      <Text style={[styles.chatGateLink, { color: accent }]}>Read Terms</Text>
+                    </Pressable>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityState={{ busy: safetyBusy }}
+                      disabled={safetyBusy}
+                      onPress={() => {
+                        setSafetyBusy(true);
+                        void safety
+                          .acceptTerms()
+                          .then(() =>
+                            Alert.alert(
+                              "Terms accepted",
+                              "Cloud chat is now enabled for this account.",
+                            ),
+                          )
+                          .catch((error) =>
+                            Alert.alert(
+                              "Could not accept Terms",
+                              error instanceof Error
+                                ? error.message
+                                : "Try again.",
+                            ),
+                          )
+                          .finally(() => setSafetyBusy(false));
+                      }}
+                      style={[styles.chatGateAction, { borderColor: accent }]}
+                    >
+                      <Text style={[styles.chatGateActionText, { color: accent }]}>Agree</Text>
+                    </Pressable>
+                  </View>
+                ) : null}
+              </View>
+            ) : (
+              <>
             <View style={styles.quickRow}>
               <Quick
                 label="Cheer"
@@ -1475,19 +1831,21 @@ function ChatScreen() {
               />
               <Pressable
                 disabled={
-                  !draft.trim() &&
-                  !imageUri &&
-                  !attachedTodo &&
-                  !shareAttachment
+                  sending ||
+                  (!draft.trim() &&
+                    !imageUri &&
+                    !attachedTodo &&
+                    !shareAttachment)
                 }
                 onPress={submit}
                 style={({ pressed }) => [
                   styles.send,
                   { backgroundColor: accent },
-                  !draft.trim() &&
-                    !imageUri &&
-                    !attachedTodo &&
-                    !shareAttachment &&
+                  (sending ||
+                    (!draft.trim() &&
+                      !imageUri &&
+                      !attachedTodo &&
+                      !shareAttachment)) &&
                     styles.sendDisabled,
                   pressed && styles.pressed,
                 ]}
@@ -1496,10 +1854,21 @@ function ChatScreen() {
               </Pressable>
             </View>
             </TutorialTarget>
+              </>
+            )}
           </View>
         </View>
       </KeyboardAvoidingView>
       </GestureDetector>
+      <SafetyReportSheet
+        visible={Boolean(safetyTarget)}
+        title={safetyTarget?.type === "message" ? "Report message" : "Report member"}
+        subject={safetyTarget?.displayName ?? "Member"}
+        demoMode={safety.mode === "demo"}
+        busy={safetyBusy}
+        onClose={() => setSafetyTarget(undefined)}
+        onSubmit={(reason, details) => void submitSafetyReport(reason, details)}
+      />
     </SafeAreaView>
   );
 }
@@ -1734,6 +2103,13 @@ const styles = StyleSheet.create({
   },
   messageRowMine: { alignSelf: "flex-end" },
   messageBlock: { flexShrink: 1 },
+  senderRow: {
+    minHeight: 18,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
   sender: {
     color: palette.muted,
     fontSize: 8,
@@ -1770,6 +2146,12 @@ const styles = StyleSheet.create({
     aspectRatio: 1.3,
     borderRadius: 10,
     marginBottom: 3,
+  },
+  messageSafetyButton: {
+    minWidth: 32,
+    minHeight: 28,
+    alignItems: "center",
+    justifyContent: "center",
   },
   sharedAttachmentThumbnail: {
     width: 38,
@@ -1853,6 +2235,30 @@ const styles = StyleSheet.create({
   todoPickerRowText: { flex: 1, fontSize: 8, fontWeight: "800" },
   todoPickerEmpty: { fontSize: 8, paddingHorizontal: 10, paddingBottom: 10 },
   composerDock: { flexShrink: 0 },
+  grow: { flex: 1, minWidth: 0 },
+  chatGate: {
+    minHeight: 66,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    borderWidth: 1,
+    borderRadius: 16,
+    marginHorizontal: 14,
+    marginBottom: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  chatGateTitle: { fontSize: 10, lineHeight: 14, fontWeight: "900" },
+  chatGateCopy: { fontSize: 8, lineHeight: 12, marginTop: 2 },
+  chatGateActions: { alignItems: "flex-end", gap: 7 },
+  chatGateLink: { fontSize: 8, fontWeight: "900" },
+  chatGateAction: {
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+  },
+  chatGateActionText: { fontSize: 8, fontWeight: "900" },
   previewImage: { width: 76, height: 76, borderRadius: 12 },
   removeImage: {
     position: "absolute",

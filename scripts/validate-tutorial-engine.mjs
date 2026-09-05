@@ -38,6 +38,7 @@ const rootLayoutSource = fs.readFileSync("app/_layout.tsx", "utf8");
 const guideSource = fs.readFileSync("src/tutorial/guides.ts", "utf8");
 const basicGuideSource = fs.readFileSync("src/tutorial/basicGuide.ts", "utf8");
 const todaySource = fs.readFileSync("app/(tabs)/index.tsx", "utf8");
+const metricDetailSource = fs.readFileSync("app/metric-detail.tsx", "utf8");
 const menuSource = fs.readFileSync("app/menu.tsx", "utf8");
 const customizeSource = fs.readFileSync("app/customize.tsx", "utf8");
 
@@ -61,7 +62,7 @@ assert.equal(
 assert.equal(BASIC_TUTORIAL_GUIDE.steps[0].id, "essential.navigation");
 assert.equal(
   BASIC_TUTORIAL_GUIDE.version,
-  5,
+  6,
   "Anchor and route-flow changes must invalidate stale persisted basic-guide sessions.",
 );
 assert.equal(BASIC_TUTORIAL_GUIDE.steps[0].target, "tab-bar");
@@ -72,16 +73,14 @@ assert.match(
   "The first guide step must measure the complete rendered navigation bar.",
 );
 for (const actionId of [
+  "tutorial.today.open-tracker",
+  "tutorial.metric-detail.open-week",
   "tutorial.navigation.open-menu",
-  "tutorial.navigation.open-customize",
-  "tutorial.navigation.close-customize",
-  "tutorial.today.open-filter-sheet",
-  "tutorial.today.open-filter-manager",
   "tutorial.navigation.open-display",
 ]) {
   assert.match(basicGuideSource, new RegExp(actionId.replaceAll(".", "\\.")));
   assert.match(
-    `${todaySource}\n${menuSource}\n${customizeSource}\n${uiSource}`,
+    `${todaySource}\n${metricDetailSource}\n${menuSource}\n${customizeSource}\n${uiSource}`,
     new RegExp(actionId.replaceAll(".", "\\.")),
     `${actionId} must be reported by a real, isolated control.`,
   );

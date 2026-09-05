@@ -1397,8 +1397,12 @@ export default function TrackerDetail() {
               const selectedOverall =
                 selectedPeriod && item.id === "overall";
               return (
-                <Pressable
+                <OptionalTutorialTarget
                   key={item.id}
+                  enabled={item.id === "week"}
+                  id="metric-detail-week"
+                >
+                <Pressable
                   accessibilityRole="button"
                   accessibilityLabel={
                     showDateToggle
@@ -1416,6 +1420,11 @@ export default function TrackerDetail() {
                   onPress={() => {
                     if (showDateToggle) toggleDateNavigator();
                     else chooseDetailPeriod(item.id);
+                    if (item.id === "week")
+                      tutorial.reportEvent({
+                        actionId: "tutorial.metric-detail.open-week",
+                        scope: "isolated-preview",
+                      });
                   }}
                   style={[
                     styles.periodChoice,
@@ -1452,6 +1461,7 @@ export default function TrackerDetail() {
                     />
                   ) : null}
                 </Pressable>
+                </OptionalTutorialTarget>
               );
             })}
           </View>
@@ -2146,27 +2156,29 @@ export default function TrackerDetail() {
           tracker.submetricDisplay?.mainValueEnabled !== false ||
           progressSubmetrics.length === 0) &&
         !isPhoto ? (
-          <Trend
-            values={trendValues}
-            dates={dates}
-            axisRange={
-              period === "year"
-                ? "year"
-                : period === "month"
-                  ? "month"
-                  : undefined
-            }
-            tracker={tracker}
-            target={chartTarget}
-            colors={colors}
-            secondaryValues={trendDiastolicValues}
-            secondaryColor={diastolicTracker?.color}
-            secondaryTarget={diastolicTracker?.goal.target}
-            primaryRange={tracker.goalRange}
-            secondaryRange={diastolicTracker?.goalRange}
-            dense={period === "year" || period === "overall"}
-            chartStyle={visualization.detailRange}
-          />
+          <TutorialTarget id="metric-detail-chart">
+            <Trend
+              values={trendValues}
+              dates={dates}
+              axisRange={
+                period === "year"
+                  ? "year"
+                  : period === "month"
+                    ? "month"
+                    : undefined
+              }
+              tracker={tracker}
+              target={chartTarget}
+              colors={colors}
+              secondaryValues={trendDiastolicValues}
+              secondaryColor={diastolicTracker?.color}
+              secondaryTarget={diastolicTracker?.goal.target}
+              primaryRange={tracker.goalRange}
+              secondaryRange={diastolicTracker?.goalRange}
+              dense={period === "year" || period === "overall"}
+              chartStyle={visualization.detailRange}
+            />
+          </TutorialTarget>
         ) : null}
         {dates.length > 1 && !isBloodPressure && !isPhoto
           ? submetricTrendSeries.map(({ submetric, definition, values }) =>

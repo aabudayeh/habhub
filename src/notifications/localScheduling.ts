@@ -75,6 +75,7 @@ export function dateLocalNotificationPlan({
 async function reconcileLocalNotificationsNow(
   storageKey: string,
   desired: readonly LocalNotificationPlan[],
+  ownerId: string,
 ) {
   const previousIds = parsedIds(await AsyncStorage.getItem(storageKey));
   const deliveryMode = await getExactAlarmStatus().catch(() => "unsupported");
@@ -82,6 +83,7 @@ async function reconcileLocalNotificationsNow(
     const scheduleKey = localNotificationScheduleKey([
       plan.scheduleKey,
       deliveryMode,
+      ownerId,
     ]);
     return {
       ...plan,
@@ -90,6 +92,7 @@ async function reconcileLocalNotificationsNow(
         ...plan.content,
         data: {
           ...(plan.content.data ?? {}),
+          accountId: ownerId,
           [SCHEDULE_KEY_DATA]: scheduleKey,
         },
       },
@@ -200,7 +203,7 @@ export function reconcileLocalNotifications(
   ownerId: string,
 ) {
   return managedLocalNotificationGate.run(ownerId, () =>
-    reconcileLocalNotificationsNow(storageKey, desired),
+    reconcileLocalNotificationsNow(storageKey, desired, ownerId),
   );
 }
 
@@ -215,7 +218,13 @@ export function scheduleManagedLocalNotification(
   ownerId: string,
 ) {
   return managedLocalNotificationGate.run(ownerId, () =>
-    Notifications.scheduleNotificationAsync(request),
+    Notifications.scheduleNotificationAsync({
+      ...request,
+      content: {
+        ...request.content,
+        data: { ...(request.content.data ?? {}), accountId: ownerId },
+      },
+    }),
   );
 }
 

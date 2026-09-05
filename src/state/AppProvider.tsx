@@ -24,6 +24,7 @@ import {
 import { createInitialState, DEFAULT_METRICS } from "@/src/data/seed";
 import { entriesForMetric } from "@/src/domain/dataIndex";
 import { accountOwnedCollections } from "@/src/domain/accountCollections";
+import { refreshDefaultDemoFixtures } from "@/src/domain/demoFixtures";
 import {
   applyInheritedTrackerVisibility,
   purgeGoogleHealthAccountData,
@@ -3729,6 +3730,34 @@ export function AppProvider({
           const restoredVersion = Number(restored.version ?? 1);
           const isDefaultDemo =
             (restored.group?.id ?? defaults.group.id) === defaults.group.id;
+          const restoredDemoStatusKeys = new Set(
+            (restored.dailyMetricStatuses ?? []).map((status) =>
+              [status.groupId, status.metricId, status.userId, status.localDate].join(
+                "|",
+              ),
+            ),
+          );
+          const isMissingDefaultDemoStatus =
+            isDefaultDemo &&
+            (defaults.dailyMetricStatuses ?? []).some(
+              (status) =>
+                !restoredDemoStatusKeys.has(
+                  [
+                    status.groupId,
+                    status.metricId,
+                    status.userId,
+                    status.localDate,
+                  ].join("|"),
+                ),
+            );
+          const refreshDefaultDemo =
+            isDefaultDemo &&
+            (Number(restored.settings?.demoContentVersion ?? 0) <
+              Number(defaults.settings.demoContentVersion ?? 0) ||
+              isMissingDefaultDemoStatus);
+          const refreshedDemoFixtures = refreshDefaultDemo
+            ? refreshDefaultDemoFixtures(restored, defaults)
+            : null;
           let restoredMetrics =
             restoredVersion < 3
               ? [
@@ -3847,6 +3876,10 @@ export function AppProvider({
             settings: {
               ...defaults.settings,
               ...restored.settings,
+              demoContentVersion: refreshDefaultDemo
+                ? defaults.settings.demoContentVersion
+                : (restored.settings?.demoContentVersion ??
+                  defaults.settings.demoContentVersion),
               streakRestDaysPerWeek: Math.max(
                 0,
                 Math.min(4, restored.settings?.streakRestDaysPerWeek ?? 1),
@@ -3900,7 +3933,9 @@ export function AppProvider({
             },
             trackedGoalPeriods: migratedTrackedGoals,
             entries:
-              restoredVersion < 9 && isDefaultDemo
+              refreshedDemoFixtures
+                ? refreshedDemoFixtures.entries
+                : restoredVersion < 9 && isDefaultDemo
                 ? [
                     ...(restored.entries ?? []).filter(
                       (entry) => !defaultEntryIds.has(entry.id),
@@ -3909,7 +3944,9 @@ export function AppProvider({
                   ]
                 : (restored.entries ?? defaults.entries),
             photos:
-              restoredVersion < 9 && isDefaultDemo
+              refreshedDemoFixtures
+                ? refreshedDemoFixtures.photos
+                : restoredVersion < 9 && isDefaultDemo
                 ? [
                     ...(restored.photos ?? []).filter(
                       (photo) => !defaultPhotoIds.has(photo.id),
@@ -3917,6 +3954,24 @@ export function AppProvider({
                     ...defaults.photos,
                   ]
                 : (restored.photos ?? defaults.photos),
+            todos: refreshedDemoFixtures
+              ? refreshedDemoFixtures.todos
+              : (restored.todos ?? defaults.todos),
+            journalNotes: refreshedDemoFixtures
+              ? refreshedDemoFixtures.journalNotes
+              : (restored.journalNotes ?? defaults.journalNotes),
+            calendarReminders: refreshedDemoFixtures
+              ? refreshedDemoFixtures.calendarReminders
+              : (restored.calendarReminders ?? defaults.calendarReminders),
+            gymPlans: refreshedDemoFixtures
+              ? refreshedDemoFixtures.gymPlans
+              : (restored.gymPlans ?? defaults.gymPlans),
+            gymSessions: refreshedDemoFixtures
+              ? refreshedDemoFixtures.gymSessions
+              : (restored.gymSessions ?? defaults.gymSessions),
+            gymExerciseGoals: refreshedDemoFixtures
+              ? refreshedDemoFixtures.gymExerciseGoals
+              : (restored.gymExerciseGoals ?? defaults.gymExerciseGoals),
             metrics: restoredMetrics.map((metric) => {
               const preset = defaults.metrics.find(
                 (candidate) => candidate.id === metric.id,
@@ -4078,19 +4133,27 @@ export function AppProvider({
                   : (group.metricConfiguration ?? restoredMetrics),
             })),
             energyProfiles: Object.fromEntries(
-              Object.entries({
-                ...defaults.energyProfiles,
-                ...restored.energyProfiles,
-                [restored.currentUserId ?? defaults.currentUserId]: {
-                  ...defaults.settings.energyProfile,
-                  ...restored.settings?.energyProfile,
-                },
-              }).map(([userId, profile]) => [
+              Object.entries(
+                refreshedDemoFixtures
+                  ? refreshedDemoFixtures.energyProfiles
+                  : {
+                      ...defaults.energyProfiles,
+                      ...restored.energyProfiles,
+                      [restored.currentUserId ?? defaults.currentUserId]: {
+                        ...defaults.settings.energyProfile,
+                        ...restored.settings?.energyProfile,
+                      },
+                    },
+              ).map(([userId, profile]) => [
                 userId,
                 normalizeEnergyProfile(profile),
               ]),
             ),
-            messages: (restored.messages ?? defaults.messages).map((message) => {
+            messages: (
+              refreshedDemoFixtures
+                ? refreshedDemoFixtures.messages
+                : (restored.messages ?? defaults.messages)
+            ).map((message) => {
               const restoredGroupId =
                 message.groupId ??
                 (message.conversationId?.startsWith("group:")
@@ -4105,7 +4168,9 @@ export function AppProvider({
                     : message.conversationId,
               };
             }),
-            dailyMetricStatuses: restored.dailyMetricStatuses ?? [],
+            dailyMetricStatuses: refreshedDemoFixtures
+              ? refreshedDemoFixtures.dailyMetricStatuses
+              : (restored.dailyMetricStatuses ?? []),
           };
           // Health authorization belongs to this installation, not the cloud
           // snapshot. Restore it before the first hydrated render so a quick

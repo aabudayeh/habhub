@@ -28,7 +28,9 @@ import { isCloudGroupId } from "@/src/cloud/groupCloud";
 import { useBadgeChallengeInputs } from "@/src/cloud/useBadgeChallengeInputs";
 import { useAccountNotificationEvents } from "@/src/cloud/useAccountNotificationEvents";
 import { useApp } from "@/src/state/AppProvider";
+import { useUserSafety } from "@/src/safety/userSafety";
 import { useAppColors, useGroupAccent } from "@/src/theme";
+import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 
 type Filter = "all" | AlertCategory | "badges";
 
@@ -45,6 +47,8 @@ function badgeSetSignature(ids: readonly string[]) {
 export default function Alerts() {
   const { scope } = useLocalSearchParams<{ scope?: string }>();
   const { state, updateSettings } = useApp();
+  const tutorialSandbox = useTutorialSandboxActive();
+  const safety = useUserSafety(state.currentUserId, tutorialSandbox);
   const colors = useAppColors();
   const accent = useGroupAccent();
   const locale = useLocale();
@@ -81,17 +85,20 @@ export default function Alerts() {
   );
   const allAlerts = useMemo(
     () =>
-      buildAlerts(state, groupFeedEvents).filter((alert) =>
-        alertScope === "group"
+      buildAlerts(state, groupFeedEvents, safety.blockedUserIds).filter((alert) =>
+        (safety.hydrated || alert.category !== "message") &&
+        (alertScope === "group"
           ? alert.scope === "group"
           : alert.scope === "personal" ||
             alert.category === "challenge" ||
-            hasGroup,
+            hasGroup),
       ),
     [
       alertScope,
       groupFeedEvents,
       hasGroup,
+      safety.blockedUserIds,
+      safety.hydrated,
       state,
     ],
   );

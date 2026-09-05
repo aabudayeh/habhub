@@ -1,13 +1,24 @@
 import {
   AppState,
+  CalendarReminder,
+  DailyMetricStatus,
+  GymPlan,
+  GymSession,
+  JournalNote,
   MetricDefinition,
   MetricEntry,
   PhotoUpdate,
+  TodoItem,
 } from "@/src/types";
 import { dateKey, dateKeyWithOffset } from "@/src/domain/date";
 import { FOOD_NUTRIENTS } from "@/src/domain/food";
 import { DEFAULT_WORKOUT_QUALIFICATION } from "@/src/domain/workoutQualification";
-import { DEMO_PROGRESS_URIS } from "./demoAssets";
+import {
+  DEMO_MEAL_URI,
+  DEMO_PROGRESS_URIS,
+  DEMO_WORKOUT_SHARE_URI,
+} from "./demoAssets";
+import { DEFAULT_DEMO_GROUP_ID } from "./demoChallenges";
 
 const BASE_METRICS: MetricDefinition[] = [
   {
@@ -1698,6 +1709,45 @@ function demoEntries(): MetricEntry[] {
     [`${today}-daniel-steps`]: 9201,
     [`${today}-maya-steps`]: 12342,
   };
+  const coherentBodyHistory = [
+    { offset: -168, weight: 100.2, bodyFat: 31.4, leanMass: 68.7 },
+    { offset: -126, weight: 96.5, bodyFat: 29.3, leanMass: 68.2 },
+    { offset: -84, weight: 93.1, bodyFat: 27.2, leanMass: 67.8 },
+    { offset: -42, weight: 90.2, bodyFat: 25.6, leanMass: 67.1 },
+    { offset: 0, weight: 88.1, bodyFat: 24.1, leanMass: 66.9 },
+  ];
+  coherentBodyHistory.forEach(({ offset, weight, bodyFat, leanMass }) => {
+    const localDate = dateKeyWithOffset(offset);
+    if (offset < -29)
+      result.push(
+        entry(
+          `${localDate}-ahmad-weight`,
+          "weight",
+          "ahmad",
+          weight,
+          localDate,
+          "private",
+        ),
+      );
+    result.push(
+      entry(
+        `${localDate}-ahmad-body-fat`,
+        "body_fat",
+        "ahmad",
+        bodyFat,
+        localDate,
+        "private",
+      ),
+      entry(
+        `${localDate}-ahmad-lean-mass`,
+        "lean_body_mass",
+        "ahmad",
+        leanMass,
+        localDate,
+        "private",
+      ),
+    );
+  });
   return result.map((item) => {
     const replaced =
       item.id in replacements
@@ -1706,9 +1756,9 @@ function demoEntries(): MetricEntry[] {
     if (item.id === `${today}-ahmad-food`)
       return {
         ...replaced,
-        label: "Chicken rice bowl",
-        note: "Lunch plus a yoghurt snack",
-        imageUri: DEMO_PROGRESS_URIS[1],
+        label: "Berry oat breakfast",
+        note: "Oats, yoghurt, berries, banana, and chia seeds",
+        imageUri: DEMO_MEAL_URI,
       };
     if (item.id === `${today}-sarah-steps`)
       return { ...replaced, note: "Walked home after work" };
@@ -1717,29 +1767,334 @@ function demoEntries(): MetricEntry[] {
 }
 
 function demoPhotos(): PhotoUpdate[] {
-  return members.flatMap((member, memberIndex) =>
-    [-28, -14, 0].map((offset, photoIndex) => {
+  return [-168, -126, -84, -42, 0].map((offset, photoIndex) => {
       const localDate = dateKeyWithOffset(offset);
       return {
-        id: `demo-photo-${member.id}-${localDate}`,
-        userId: member.id,
-        uri: DEMO_PROGRESS_URIS[
-          (memberIndex + photoIndex) % DEMO_PROGRESS_URIS.length
-        ],
-        caption: photoIndex === 2 ? "Monthly check-in" : "Progress check-in",
+        id: `demo-photo-ahmad-${localDate}`,
+        userId: "ahmad",
+        uri: DEMO_PROGRESS_URIS[photoIndex],
+        caption: [
+          "Starting point",
+          "Building momentum",
+          "Halfway check-in",
+          "A stronger routine",
+          "Current check-in — steady progress",
+        ][photoIndex],
         localDate,
         createdAt: `${localDate}T08:00:00.000Z`,
         capturedAt: `${localDate}T08:00:00.000Z`,
-        visibility: "group" as const,
+        visibility:
+          photoIndex === DEMO_PROGRESS_URIS.length - 1
+            ? ("private" as const)
+            : ("group" as const),
       };
-    }),
-  );
+    });
+}
+
+function demoSharedStatuses(entries: MetricEntry[]): DailyMetricStatus[] {
+  const sharedMetricIds = new Set(["steps", "exercise", "water", "workout"]);
+  const metricsById = new Map(DEFAULT_METRICS.map((metric) => [metric.id, metric]));
+
+  return entries.flatMap((item) => {
+    if (item.userId === "ahmad" || !sharedMetricIds.has(item.metricId)) return [];
+    const metric = metricsById.get(item.metricId);
+    if (!metric) return [];
+    const value =
+      typeof item.value === "boolean" ? (item.value ? 1 : 0) : Number(item.value);
+    if (!Number.isFinite(value)) return [];
+    const target = Number(metric.goal.target);
+    const progress =
+      metric.goal.kind === "at_most"
+        ? value <= target
+          ? 1
+          : target / Math.max(value, 1)
+        : target > 0
+          ? value / target
+          : value > 0
+            ? 1
+            : 0;
+    const boundedProgress = Math.max(0, Math.min(1, progress));
+    const goalReached =
+      metric.goal.kind === "at_most"
+        ? value <= target
+        : metric.goal.kind === "exact"
+          ? value === target
+          : value >= target;
+    return [
+      {
+        groupId: DEFAULT_DEMO_GROUP_ID,
+        metricId: metric.id,
+        userId: item.userId,
+        localDate: item.localDate,
+        goalReached,
+        scoreContribution:
+          Math.round(boundedProgress * Number(metric.scoreWeight ?? 0) * 100) /
+          100,
+        goalProgress: boundedProgress,
+        goalKind: metric.goal.kind,
+        goalTarget: target,
+        visibility: "group" as const,
+        goalEligible: true,
+        ...(typeof item.value === "number" ? { exactValue: item.value } : {}),
+        privacyProjectionVersion: 2,
+        hasData: true,
+        syncedAt: `${item.localDate}T19:00:00.000Z`,
+        sourceRevision: 2,
+      },
+    ];
+  });
+}
+
+function demoInstant(offset: number, time: string) {
+  return `${dateKeyWithOffset(offset)}T${time}:00.000Z`;
+}
+
+function demoTodos(): TodoItem[] {
+  return [
+    {
+      id: "demo-todo-morning-walk",
+      title: "Ten-minute morning walk",
+      description: "An easy win before the day gets busy.",
+      createdAt: demoInstant(-28, "07:30"),
+      scheduledStartAt: demoInstant(0, "08:20"),
+      scheduledEndAt: demoInstant(0, "08:30"),
+      priority: "normal",
+      recurrence: { mode: "selected_days", daysOfWeek: [1, 2, 3, 4, 5] },
+      reminders: [
+        {
+          id: "demo-todo-morning-walk-reminder",
+          time: "08:10",
+          schedule: { mode: "selected_days", daysOfWeek: [1, 2, 3, 4, 5] },
+        },
+      ],
+      completedDates: [dateKeyWithOffset(-2), dateKeyWithOffset(-1)],
+      order: 0,
+      pinnedAt: demoInstant(-7, "08:00"),
+      labels: ["movement"],
+    },
+    {
+      id: "demo-todo-meal-prep",
+      title: "Prep tomorrow's lunch",
+      description: "Rice bowl, roasted vegetables, and yoghurt dressing.",
+      createdAt: demoInstant(-3, "18:00"),
+      dueAt: demoInstant(0, "19:00"),
+      scheduledStartAt: demoInstant(0, "18:15"),
+      scheduledEndAt: demoInstant(0, "18:45"),
+      priority: "high",
+      reminders: [
+        { id: "demo-todo-meal-prep-reminder", daysBeforeDue: 0, time: "18:00" },
+      ],
+      completedDates: [],
+      order: 1,
+      labels: ["nutrition", "prep"],
+    },
+    {
+      id: "demo-todo-mobility",
+      title: "Five-minute mobility reset",
+      createdAt: demoInstant(-14, "10:00"),
+      scheduledStartAt: demoInstant(0, "13:00"),
+      scheduledEndAt: demoInstant(0, "13:05"),
+      priority: "normal",
+      recurrence: { mode: "daily" },
+      reminders: [],
+      completedDates: [dateKeyWithOffset(0)],
+      order: 2,
+      labels: ["recovery"],
+    },
+    {
+      id: "demo-todo-weekly-review",
+      title: "Review this week's progress",
+      description: "Check trends and choose one small adjustment.",
+      createdAt: demoInstant(-10, "18:00"),
+      dueAt: demoInstant(2, "20:00"),
+      priority: "low",
+      recurrence: { mode: "selected_days", daysOfWeek: [0] },
+      reminders: [
+        {
+          id: "demo-todo-weekly-review-reminder",
+          time: "19:30",
+          schedule: { mode: "selected_days", daysOfWeek: [0] },
+        },
+      ],
+      completedDates: [dateKeyWithOffset(-7)],
+      order: 3,
+      labels: ["review"],
+    },
+  ];
+}
+
+function demoJournalNotes(): JournalNote[] {
+  return [
+    {
+      id: "demo-journal-weekly-review",
+      userId: "ahmad",
+      title: "A week of small wins",
+      body: "# Weekly review\n**Win:** kept the morning walk simple enough to repeat.\n- [x] Three strength sessions\n- [x] Logged breakfast most days\n- [ ] Move bedtime 20 minutes earlier\n> Consistency is the goal; intensity can follow.",
+      createdAt: demoInstant(-1, "20:00"),
+      updatedAt: demoInstant(-1, "20:12"),
+      localDate: dateKeyWithOffset(-1),
+      metricIds: ["steps", "workout", "sleep"],
+      labels: ["weekly_review", "recovery"],
+    },
+    {
+      id: "demo-journal-breakfast",
+      userId: "ahmad",
+      title: "Reliable breakfast",
+      body: "## Berry oat bowl\nOats, yoghurt, berries, banana, chia seeds, and a glass of water. Easy to prepare and filling after a morning walk.",
+      createdAt: demoInstant(0, "08:20"),
+      updatedAt: demoInstant(0, "08:24"),
+      localDate: dateKeyWithOffset(0),
+      metricIds: ["food", "water"],
+      labels: ["recipe", "breakfast"],
+      imageUri: DEMO_MEAL_URI,
+    },
+  ];
+}
+
+function demoCalendarReminders(): CalendarReminder[] {
+  return [
+    {
+      id: "demo-reminder-water",
+      title: "Water check-in",
+      kind: "tracker",
+      metricId: "water",
+      time: "10:30",
+      durationMinutes: 5,
+      schedule: { mode: "daily" },
+      enabled: true,
+    },
+    {
+      id: "demo-reminder-workout",
+      title: "Full-body workout",
+      kind: "tracker",
+      metricId: "workout",
+      time: "17:30",
+      durationMinutes: 60,
+      schedule: { mode: "selected_days", daysOfWeek: [1, 3, 5] },
+      enabled: true,
+    },
+    {
+      id: "demo-reminder-reflect",
+      title: "Weekly reflection",
+      kind: "general",
+      time: "19:30",
+      durationMinutes: 20,
+      schedule: { mode: "selected_days", daysOfWeek: [0] },
+      enabled: true,
+    },
+  ];
+}
+
+function demoGymPlans(): GymPlan[] {
+  return [
+    {
+      id: "demo-plan-full-body",
+      userId: "ahmad",
+      name: "Full-body strength",
+      createdAt: demoInstant(-70, "09:00"),
+      updatedAt: demoInstant(-5, "18:00"),
+      exercises: [
+        {
+          id: "demo-plan-squat",
+          exerciseKey: "back_squat",
+          name: "Back squat",
+          muscleGroups: ["quadriceps", "glutes", "hamstrings"],
+          targetSets: 3,
+          targetReps: 8,
+          startingWeightKg: 70,
+          trackingMode: "load_reps",
+          notes: "Controlled descent",
+        },
+        {
+          id: "demo-plan-row",
+          exerciseKey: "barbell_row",
+          name: "Barbell row",
+          muscleGroups: ["back", "biceps"],
+          targetSets: 3,
+          targetReps: 10,
+          startingWeightKg: 42.5,
+          trackingMode: "load_reps",
+        },
+        {
+          id: "demo-plan-plank",
+          exerciseKey: "plank",
+          name: "Plank",
+          muscleGroups: ["abs"],
+          targetSets: 3,
+          targetReps: 1,
+          targetDurationMinutes: 1,
+          trackingMode: "duration",
+        },
+      ],
+    },
+  ];
+}
+
+function demoGymSessions(): GymSession[] {
+  return [-28, -21, -14, -7, 0].map((offset, index) => ({
+    id: `demo-session-${dateKeyWithOffset(offset)}`,
+    userId: "ahmad",
+    planId: "demo-plan-full-body",
+    name: "Full-body strength",
+    localDate: dateKeyWithOffset(offset),
+    recordedAt: demoInstant(offset, "18:45"),
+    startedAt: demoInstant(offset, "17:45"),
+    completedAt: demoInstant(offset, "18:42"),
+    pausedSeconds: 90,
+    setStartDelaySeconds: 3,
+    durationMinutes: 57,
+    calories: 390 + index * 10,
+    calorieCalculationMode: "set_aware",
+    caloriesManual: false,
+    intensity: "vigorous",
+    notes: index === 4 ? "Smooth reps; add 2.5 kg next week." : undefined,
+    visibility: "group",
+    exercises: [
+      {
+        id: `demo-session-${index}-squat`,
+        exerciseKey: "back_squat",
+        name: "Back squat",
+        muscleGroups: ["quadriceps", "glutes", "hamstrings"],
+        trackingMode: "load_reps",
+        completed: true,
+        restAfterSeconds: 90,
+        restTargetSeconds: 90,
+        sets: [0, 1, 2].map((setIndex) => ({
+          id: `demo-session-${index}-squat-${setIndex}`,
+          reps: 8,
+          weightKg: 65 + index * 1.25,
+          completed: true,
+          workSeconds: 38 + setIndex * 2,
+          restSeconds: 78 + setIndex * 5,
+          restTargetSeconds: 90,
+        })),
+      },
+      {
+        id: `demo-session-${index}-row`,
+        exerciseKey: "barbell_row",
+        name: "Barbell row",
+        muscleGroups: ["back", "biceps"],
+        trackingMode: "load_reps",
+        completed: true,
+        sets: [0, 1, 2].map((setIndex) => ({
+          id: `demo-session-${index}-row-${setIndex}`,
+          reps: 10,
+          weightKg: 37.5 + index * 1.25,
+          completed: true,
+          workSeconds: 34,
+          restSeconds: 60 + setIndex * 5,
+          restTargetSeconds: 75,
+        })),
+      },
+    ],
+  }));
 }
 
 export function createInitialState(): AppState {
   const now = new Date().toISOString();
+  const entries = demoEntries();
   const group = {
-    id: "weekend-warriors",
+    id: DEFAULT_DEMO_GROUP_ID,
     name: "Weekend Warriors",
     inviteCode: "PACE-7K2M",
     templateName: "Healthy Competition",
@@ -1758,7 +2113,10 @@ export function createInitialState(): AppState {
         age: 31,
         sex: "male",
         heightCm: 178,
-        weightKg: 88,
+        startingWeightKg: 100.2,
+        weightKg: 88.1,
+        bodyFatPercent: 24.1,
+        leanBodyMassKg: 66.9,
         targetWeightKg: 80,
         activityLevel: "light",
         desiredWeeklyLossKg: 0.5,
@@ -1792,7 +2150,7 @@ export function createInitialState(): AppState {
       },
     },
     metrics: DEFAULT_METRICS,
-    entries: demoEntries(),
+    entries,
     photos: demoPhotos(),
     messages: [
       {
@@ -1822,23 +2180,27 @@ export function createInitialState(): AppState {
       {
         id: "daniel-message",
         senderId: "daniel",
-        text: "That lead is temporary 😄",
+        text: "That lead is temporary 😄 Full-body session done.",
         createdAt: now,
         kind: "message",
         conversationId: "group",
+        imageUri: DEMO_WORKOUT_SHARE_URI,
       },
     ],
-    dailyMetricStatuses: [],
-    todos: [],
-    journalNotes: [],
-    calendarReminders: [],
+    dailyMetricStatuses: demoSharedStatuses(entries),
+    todos: demoTodos(),
+    journalNotes: demoJournalNotes(),
+    calendarReminders: demoCalendarReminders(),
     settings: {
       baselineCalories: 2250,
       energyProfile: {
         age: 31,
         sex: "male",
         heightCm: 178,
-        weightKg: 88,
+        startingWeightKg: 100.2,
+        weightKg: 88.1,
+        bodyFatPercent: 24.1,
+        leanBodyMassKg: 66.9,
         targetWeightKg: 80,
         activityLevel: "light",
         desiredWeeklyLossKg: 0.5,
@@ -1855,19 +2217,19 @@ export function createInitialState(): AppState {
           steps: true,
           active_energy: true,
           total_energy: true,
-          weight: true,
+          weight: false,
           nutrition: true,
           water: true,
           workouts: true,
-          body_fat: true,
-          lean_body_mass: true,
-          body_water_mass: true,
-          bone_mass: true,
-          blood_pressure: true,
-          heart_rate: true,
-          sleep: true,
-          blood_glucose: true,
-          menstruation: true,
+          body_fat: false,
+          lean_body_mass: false,
+          body_water_mass: false,
+          bone_mass: false,
+          blood_pressure: false,
+          heart_rate: false,
+          sleep: false,
+          blood_glucose: false,
+          menstruation: false,
         },
       },
       stepCoveragePreferences: {
@@ -1965,6 +2327,7 @@ export function createInitialState(): AppState {
       showAiAssistant: false,
       onboardingComplete: false,
       onboardingVersion: 3,
+      demoContentVersion: 5,
       tutorialComplete: false,
       advancedTutorialComplete: false,
       selectedGoals: [],
@@ -2016,9 +2379,12 @@ export function createInitialState(): AppState {
       },
       healthHistoryDays: 90,
     },
-    gymPlans: [],
-    gymSessions: [],
-    gymExerciseGoals: {},
+    gymPlans: demoGymPlans(),
+    gymSessions: demoGymSessions(),
+    gymExerciseGoals: {
+      back_squat: { targetOneRepMaxKg: 100, targetWeightKg: 82.5, targetReps: 8 },
+      barbell_row: { targetOneRepMaxKg: 68, targetWeightKg: 50, targetReps: 10 },
+    },
     trackedGoalPeriods: Object.fromEntries(
       DEFAULT_METRICS.map((metric) => [
         metric.id,

@@ -1,5 +1,9 @@
 import { DEFAULT_METRICS, createInitialState } from "@/src/data/seed";
-import { DEMO_PROGRESS_URIS } from "@/src/data/demoAssets";
+import {
+  DEMO_MEAL_URI,
+  DEMO_PROGRESS_URIS,
+  DEMO_WORKOUT_SHARE_URI,
+} from "@/src/data/demoAssets";
 import type {
   AppState,
   CalendarReminder,
@@ -12,7 +16,7 @@ import type {
   TodoItem,
 } from "@/src/types";
 
-export const TUTORIAL_DEMO_SCHEMA_VERSION = 1 as const;
+export const TUTORIAL_DEMO_SCHEMA_VERSION = 2 as const;
 export const TUTORIAL_DEMO_ANCHOR_DATE = "2026-08-12";
 export const TUTORIAL_DEMO_USER_ID = "tutorial-you";
 export const TUTORIAL_DEMO_GROUP_ID = "tutorial-group";
@@ -337,7 +341,7 @@ function tutorialEntries(anchorDate: string): MetricEntry[] {
             offset,
             member.id,
             "weight",
-            Number((82.4 + member.bias * 4.1 + offset * 0.018).toFixed(1)),
+            Number((82.4 + member.bias * 4.1 - offset * 0.075).toFixed(1)),
           ),
         );
       }
@@ -362,8 +366,8 @@ function tutorialEntries(anchorDate: string): MetricEntry[] {
     if (offset % 4 === 0) {
       entries.push(
         makeEntry(anchorDate, offset, TUTORIAL_DEMO_USER_ID, "sleep", 420 + focusSeed * 12, "private", { source: "imported" }),
-        makeEntry(anchorDate, offset, TUTORIAL_DEMO_USER_ID, "body_fat", Number((24.2 + offset * 0.012).toFixed(1)), "private", { source: "imported" }),
-        makeEntry(anchorDate, offset, TUTORIAL_DEMO_USER_ID, "lean_body_mass", Number((61.2 - offset * 0.006).toFixed(1)), "private", { source: "imported" }),
+        makeEntry(anchorDate, offset, TUTORIAL_DEMO_USER_ID, "body_fat", Number((24.2 - offset * 0.05).toFixed(1)), "private", { source: "imported" }),
+        makeEntry(anchorDate, offset, TUTORIAL_DEMO_USER_ID, "lean_body_mass", Number((61.2 + offset * 0.005).toFixed(1)), "private", { source: "imported" }),
       );
     }
   }
@@ -374,7 +378,7 @@ function tutorialEntries(anchorDate: string): MetricEntry[] {
       ...makeEntry(anchorDate, 0, TUTORIAL_DEMO_USER_ID, "food", 620, "private", {
         label: "Breakfast bowl",
         note: "Oats, yoghurt, berries and almonds",
-        imageUri: DEMO_PROGRESS_URIS[0],
+        imageUri: DEMO_MEAL_URI,
         nutrition: {
           mealType: "breakfast",
           proteinG: 31,
@@ -541,7 +545,7 @@ function tutorialJournal(anchorDate: string): JournalNote[] {
       localDate: shiftDate(anchorDate, 0),
       metricIds: ["food"],
       labels: ["recipe", "breakfast"],
-      imageUri: DEMO_PROGRESS_URIS[1],
+      imageUri: DEMO_MEAL_URI,
       drawing: {
         version: 1,
         strokes: [
@@ -878,7 +882,7 @@ export function createTutorialDemoState(anchorDate: string): TutorialDemoBundle 
         age: 32,
         sex: "unspecified",
         heightCm: 172,
-        startingWeightKg: 84,
+        startingWeightKg: 89.1,
         weightKg: 82.4,
         bodyFatPercent: 24.2,
         leanBodyMassKg: 61.2,
@@ -916,15 +920,22 @@ export function createTutorialDemoState(anchorDate: string): TutorialDemoBundle 
     },
     metrics,
     entries,
-    photos: [-56, -28, 0].map((offset, index) => ({
+    photos: [-84, -63, -42, -21, 0].map((offset, index) => ({
       id: `tutorial-photo-${shiftDate(anchorDate, offset)}`,
       userId: TUTORIAL_DEMO_USER_ID,
       uri: DEMO_PROGRESS_URIS[index % DEMO_PROGRESS_URIS.length],
-      caption: index === 2 ? "Current check-in" : "Progress check-in",
+      caption: [
+        "Starting point",
+        "Building momentum",
+        "Halfway check-in",
+        "A stronger routine",
+        "Current check-in — steady progress",
+      ][index],
       localDate: shiftDate(anchorDate, offset),
       createdAt: instant(anchorDate, offset, "08:00"),
       capturedAt: instant(anchorDate, offset, "08:00"),
-      visibility: index === 2 ? "private" : "group",
+      visibility:
+        index === DEMO_PROGRESS_URIS.length - 1 ? "private" : "group",
     })),
     messages: [
       {
@@ -963,7 +974,7 @@ export function createTutorialDemoState(anchorDate: string): TutorialDemoBundle 
         createdAt: instant(anchorDate, 0, "12:10"),
         kind: "message",
         conversationId: "direct:tutorial-jonah:tutorial-you",
-        imageUri: DEMO_PROGRESS_URIS[2],
+        imageUri: DEMO_WORKOUT_SHARE_URI,
       },
     ],
     dailyMetricStatuses: [

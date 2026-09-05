@@ -9,6 +9,24 @@ const corsHeaders = {
 
 type AdminClient = SupabaseClient<any, 'public', any>;
 
+const sharedPurgeCountKeys = [
+  'socialReactions',
+  'socialComments',
+  'safetyReportsFiled',
+  'safetyReportsFiledRetained',
+  'safetyReportsRedacted',
+  'messages',
+  'metricEntries',
+  'photoUpdates',
+  'groupTodos',
+  'groupChallenges',
+  'groupChallengeMembershipsScrubbed',
+  'groupChallengesInvalidated',
+  'templates',
+  'pushDispatchAcceptances',
+  'snapshotReferencesScrubbed',
+] as const;
+
 async function listFiles(
   admin: AdminClient,
   rootPrefix: string,
@@ -108,6 +126,28 @@ async function deleteGoogleHealthData(
   }
 }
 
+async function deleteUserAuthoredSharedContent(
+  admin: AdminClient,
+  userId: string,
+  attemptId: string,
+) {
+  // The RPC owns one database transaction and the same durable attempt lease
+  // as media/Google cleanup. Missing migrations, incomplete results, or any
+  // table failure abort account deletion before the auth identity is removed.
+  const purged = await admin.rpc('purge_account_authored_shared_content', {
+    p_user_id: userId,
+    p_attempt_id: attemptId,
+  });
+  if (purged.error) throw purged.error;
+  if (
+    !purged.data ||
+    typeof purged.data !== 'object' ||
+    !sharedPurgeCountKeys.every((key) =>
+      Number.isSafeInteger(purged.data[key]) && purged.data[key] >= 0
+    )
+  ) throw new Error('account_shared_content_cleanup_incomplete');
+}
+
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
   if (request.method !== 'POST') return new Response('Method not allowed', { status: 405, headers: corsHeaders });
@@ -140,6 +180,7 @@ Deno.serve(async (request) => {
     // database commits but the response is lost, the catch path can cancel
     // only this attempt and can never clear another concurrent deletion guard.
     await deleteGoogleHealthData(admin, data.user.id, attemptId);
+    await deleteUserAuthoredSharedContent(admin, data.user.id, attemptId);
     const heartbeat = () => assertDeletionLease(admin, data.user.id, attemptId);
     await deleteAllMedia(admin, data.user.id, heartbeat);
     const verified = await admin.rpc('verify_google_health_account_deletion', {

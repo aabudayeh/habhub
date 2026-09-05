@@ -58,6 +58,263 @@ import {
   HEALTH_STEPS_IMPORT_VERSION,
   healthPhysicalActivityMigrationKey,
 } from "../src/health/constants.ts";
+import { createHealthConnectInitializationGate } from "../src/health/healthConnectInitialization.ts";
+import {
+  parsePersistedHealthStatus,
+  rebaseForegroundHealthStatus,
+  reconcilePersistedHealthConnection,
+} from "../src/health/persistedStatus.ts";
+import {
+  backgroundHealthReconciliationWindow,
+  HEALTH_RECONCILIATION_CHUNK_INTERVAL_MS,
+} from "../src/domain/healthReconciliation.ts";
+import {
+  healthImportStart,
+  normalizeHealthHistoryDays,
+} from "../src/domain/healthHistory.ts";
+
+// Metro supplies `require()` for bundled demo assets. This validator needs the
+// real state upgrade path, so stable source strings are sufficient here.
+globalThis.require = (source) => source;
+const [{ createInitialState }, { upgradeStateV21 }] = await Promise.all([
+  import("../src/data/seed.ts"),
+  import("../src/domain/stateMigration.ts"),
+]);
+
+const liveStepDefaults = createInitialState();
+const preSelectorState = structuredClone(liveStepDefaults);
+delete preSelectorState.settings.healthSync.liveStepSources;
+delete preSelectorState.settings.healthSync.liveStepCombination;
+delete preSelectorState.settings.healthSync.liveStepStrategyVersion;
+const migratedPreSelectorState = upgradeStateV21(
+  preSelectorState,
+  liveStepDefaults,
+  24,
+);
+assert.deepEqual(
+  migratedPreSelectorState.settings.healthSync.liveStepSources,
+  DEFAULT_LIVE_STEP_SOURCES,
+  "a pre-selector state must gain Samsung Health with the Android fallback",
+);
+assert.equal(
+  migratedPreSelectorState.settings.healthSync.liveStepCombination,
+  "priority",
+  "a pre-selector state must use Samsung-first priority rather than the largest overlapping total",
+);
+
+const legacyAndroidOnlyState = structuredClone(liveStepDefaults);
+legacyAndroidOnlyState.settings.healthSync.liveStepSources = ["android_device"];
+delete legacyAndroidOnlyState.settings.healthSync.liveStepCombination;
+delete legacyAndroidOnlyState.settings.healthSync.liveStepStrategyVersion;
+const migratedAndroidOnlyState = upgradeStateV21(
+  legacyAndroidOnlyState,
+  liveStepDefaults,
+  24,
+);
+assert.deepEqual(
+  migratedAndroidOnlyState.settings.healthSync.liveStepSources,
+  DEFAULT_LIVE_STEP_SOURCES,
+  "the former Android-only default must gain the Samsung authority",
+);
+assert.equal(
+  migratedAndroidOnlyState.settings.healthSync.liveStepCombination,
+  "priority",
+);
+
+const explicitLegacyCombination = structuredClone(liveStepDefaults);
+delete explicitLegacyCombination.settings.healthSync.liveStepSources;
+delete explicitLegacyCombination.settings.healthSync.liveStepStrategyVersion;
+explicitLegacyCombination.settings.healthSync.liveStepCombination = "highest";
+const migratedExplicitCombination = upgradeStateV21(
+  explicitLegacyCombination,
+  liveStepDefaults,
+  24,
+);
+assert.deepEqual(
+  migratedExplicitCombination.settings.healthSync.liveStepSources,
+  DEFAULT_LIVE_STEP_SOURCES,
+);
+assert.equal(
+  migratedExplicitCombination.settings.healthSync.liveStepCombination,
+  "highest",
+  "an explicit valid live-Step combination remains a user preference",
+);
+
+const persistedTodayOnlyState = structuredClone(liveStepDefaults);
+persistedTodayOnlyState.settings.healthHistoryDays = 0;
+assert.equal(
+  upgradeStateV21(persistedTodayOnlyState, liveStepDefaults, 24).settings
+    .healthHistoryDays,
+  0,
+  "state migration must preserve an explicit Today-only access boundary",
+);
+const invalidHistoryState = structuredClone(liveStepDefaults);
+invalidHistoryState.settings.healthHistoryDays = 14;
+assert.equal(
+  upgradeStateV21(invalidHistoryState, liveStepDefaults, 24).settings
+    .healthHistoryDays,
+  90,
+  "state migration must normalize unsupported legacy history values",
+);
+
+assert.equal(normalizeHealthHistoryDays(0), 0);
+assert.equal(normalizeHealthHistoryDays(14), 90);
+const todayOnlyOptIn = new Date(2026, 8, 5, 14, 30);
+assert.deepEqual(
+  healthImportStart({
+    now: todayOnlyOptIn,
+    lastSyncedAt: null,
+    fullRefresh: true,
+    historyDays: 0,
+  }),
+  new Date(2026, 8, 5),
+  "Today-only first import must begin at local midnight today",
+);
+assert.deepEqual(
+  healthImportStart({
+    now: new Date(2026, 8, 10, 15),
+    lastSyncedAt: "2026-09-09T09:00:00.000Z",
+    historyDays: 0,
+  }),
+  new Date(2026, 8, 10),
+  "repeat foreground sync must not apply the ordinary overlap in Today-only mode",
+);
+assert.deepEqual(
+  healthImportStart({
+    now: new Date(2026, 8, 10, 15),
+    lastSyncedAt: null,
+    historyDays: 0,
+  }),
+  new Date(2026, 8, 10),
+  "a first or recovered background sync must also stay on the current day",
+);
+assert.deepEqual(
+  healthImportStart({
+    now: new Date(2026, 8, 12, 8),
+    lastSyncedAt: "2026-09-10T18:00:00.000Z",
+    historyDays: 0,
+  }),
+  new Date(2026, 8, 12),
+  "a repeat background sync must ignore its stale checkpoint and query only today",
+);
+assert.deepEqual(
+  healthImportStart({
+    now: new Date(2026, 8, 10, 15),
+    lastSyncedAt: "2026-09-09T09:00:00.000Z",
+    historyDays: 30,
+  }),
+  new Date(2026, 8, 2),
+  "positive history choices must retain the routine seven-day correction overlap",
+);
+
+const delayedHistoryNow = new Date(2026, 8, 4, 12);
+const delayedHistoryRecentFrom = new Date(2026, 7, 28);
+assert.equal(
+  backgroundHealthReconciliationWindow({
+    historyDays: 0,
+    now: delayedHistoryNow,
+    recentFrom: delayedHistoryRecentFrom,
+  }),
+  null,
+  "Today-only must disable deep historical correction sweeps",
+);
+const firstCorrectionWindow = backgroundHealthReconciliationWindow({
+  historyDays: 90,
+  now: delayedHistoryNow,
+  recentFrom: delayedHistoryRecentFrom,
+});
+assert.ok(firstCorrectionWindow);
+assert.deepEqual(
+  [
+    firstCorrectionWindow.to.getFullYear(),
+    firstCorrectionWindow.to.getMonth(),
+    firstCorrectionWindow.to.getDate(),
+    firstCorrectionWindow.to.getHours(),
+  ],
+  [2026, 7, 27, 23],
+);
+assert.deepEqual(
+  [
+    firstCorrectionWindow.from.getFullYear(),
+    firstCorrectionWindow.from.getMonth(),
+    firstCorrectionWindow.from.getDate(),
+    firstCorrectionWindow.from.getHours(),
+  ],
+  [2026, 6, 29, 0],
+);
+assert.equal(
+  backgroundHealthReconciliationWindow({
+    historyDays: 90,
+    now: new Date(delayedHistoryNow.getTime() + HEALTH_RECONCILIATION_CHUNK_INTERVAL_MS - 1),
+    recentFrom: delayedHistoryRecentFrom,
+    state: firstCorrectionWindow.nextState,
+  }),
+  null,
+  "deep Health Connect history must not be reread on every frequent background tick",
+);
+const secondCorrectionWindow = backgroundHealthReconciliationWindow({
+  historyDays: 90,
+  now: new Date(delayedHistoryNow.getTime() + HEALTH_RECONCILIATION_CHUNK_INTERVAL_MS),
+  recentFrom: delayedHistoryRecentFrom,
+  state: firstCorrectionWindow.nextState,
+});
+assert.ok(secondCorrectionWindow);
+assert.ok(secondCorrectionWindow.to < firstCorrectionWindow.from);
+
+const durableDeepCursor = {
+  cursorEnd: "2026-06-28T23:59:59.999Z",
+  lastChunkAt: "2026-09-04T12:00:00.000Z",
+  lastCompletedAt: null,
+};
+assert.deepEqual(
+  rebaseForegroundHealthStatus(
+    {
+      lastSyncedAt: "2026-09-04T12:00:00.000Z",
+      backgroundReconciliation: durableDeepCursor,
+    },
+    {
+      lastSyncedAt: "2026-09-04T12:01:00.000Z",
+      error: null,
+    },
+  ),
+  {
+    lastSyncedAt: "2026-09-04T12:01:00.000Z",
+    error: null,
+    backgroundReconciliation: durableDeepCursor,
+  },
+  "a foreground status save must not erase a headless deep-history cursor",
+);
+assert.deepEqual(
+  parsePersistedHealthStatus(
+    JSON.stringify({
+      lastSyncedAt: "2026-09-04T12:00:00.000Z",
+      backgroundReconciliation: durableDeepCursor,
+    }),
+  )?.backgroundReconciliation,
+  durableDeepCursor,
+  "the deep-history cursor must survive its AsyncStorage JSON round trip",
+);
+assert.deepEqual(
+  reconcilePersistedHealthConnection(
+    {
+      lastSyncedAt: "2026-09-04T12:02:00.000Z",
+      connectionEnabled: true,
+      backgroundAccess: true,
+      backgroundReconciliation: durableDeepCursor,
+    },
+    { connected: false, backgroundAccess: false },
+  ),
+  {
+    status: {
+      lastSyncedAt: "2026-09-04T12:02:00.000Z",
+      connectionEnabled: false,
+      backgroundAccess: false,
+      backgroundReconciliation: durableDeepCursor,
+    },
+    disconnectRevokedGrant: true,
+  },
+  "startup permission reconciliation must apply to the latest durable row without rewinding its cursor",
+);
 
 const record = (overrides = {}) => ({
   id: "record",
@@ -99,6 +356,45 @@ assert.equal(
   HEALTH_STEPS_IMPORT_VERSION,
   6,
   "Samsung daily totals and workout-uncovered Step fallbacks must trigger a one-time historical repair",
+);
+
+const coldHeadlessOrder = [];
+let coldHeadlessInitializationCount = 0;
+const ensureColdHeadlessHealthConnect = createHealthConnectInitializationGate(
+  async () => {
+    coldHeadlessInitializationCount += 1;
+    coldHeadlessOrder.push("initialize");
+    return true;
+  },
+);
+const coldHeadlessRead = async () => {
+  await ensureColdHeadlessHealthConnect();
+  coldHeadlessOrder.push("read");
+};
+await Promise.all([coldHeadlessRead(), coldHeadlessRead()]);
+assert.equal(
+  coldHeadlessInitializationCount,
+  1,
+  "concurrent cold headless reads must share one Health Connect initialization",
+);
+assert.deepEqual(
+  coldHeadlessOrder,
+  ["initialize", "read", "read"],
+  "a cold headless read must initialize Health Connect before touching records",
+);
+let initializationAttempts = 0;
+const ensureRetryableHealthConnect = createHealthConnectInitializationGate(
+  async () => {
+    initializationAttempts += 1;
+    return initializationAttempts > 1;
+  },
+);
+await assert.rejects(ensureRetryableHealthConnect(), /could not be initialized/i);
+await ensureRetryableHealthConnect();
+assert.equal(
+  initializationAttempts,
+  2,
+  "a failed native initialization must be retryable on the next task run",
 );
 
 const platformPriorityAggregate = [
@@ -2884,6 +3180,15 @@ const repairNow = new Date(2026, 7, 13, 12);
 assert.equal(
   historicalStepRepairStart(
     repairNow,
+    0,
+    ["2025-08-20", "2026-08-10"],
+  ).getTime(),
+  new Date(2026, 7, 13).getTime(),
+  "Today-only must not reopen older imported Step rows for repair",
+);
+assert.equal(
+  historicalStepRepairStart(
+    repairNow,
     90,
     ["2025-08-20", "2026-08-10"],
   ).getTime(),
@@ -3060,6 +3365,26 @@ assert.deepEqual(
 const androidHealthSource = fs.readFileSync(
   path.join(root, "src", "health", "healthConnect.android.ts"),
   "utf8",
+);
+assert.match(
+  androidHealthSource,
+  /availability: async \(\) => \{[\s\S]{0,180}await ensureHealthConnectInitialized\(\)/,
+  "foreground availability must use the shared Health Connect initialization gate",
+);
+assert.match(
+  androidHealthSource,
+  /grantedConnectionState: async \(dataTypes\) => \{\s*await ensureHealthConnectInitialized\(\)/,
+  "cold permission restoration must initialize Health Connect before reading grants",
+);
+assert.match(
+  androidHealthSource,
+  /requestPermissions: async \(dataTypes, backgroundAccess\) => \{\s*await ensureHealthConnectInitialized\(\)/,
+  "permission requests must initialize Health Connect independently of UI availability",
+);
+assert.match(
+  androidHealthSource,
+  /read: async \(\{[\s\S]{0,220}\}\) => \{\s*await ensureHealthConnectInitialized\(\)/,
+  "a cold headless background read must initialize Health Connect before native queries",
 );
 assert.match(
   androidHealthSource,
@@ -3310,6 +3635,36 @@ const backgroundHealthSource = fs.readFileSync(
   path.join(root, "src", "health", "background.native.ts"),
   "utf8",
 );
+assert.match(
+  healthProviderSource,
+  /function syncStart\([\s\S]{0,320}healthImportStart\(/,
+  "foreground health sync must use the audited history-window calculator",
+);
+assert.match(
+  healthProviderSource,
+  /const historySelectionIsCurrent[\s\S]{0,260}healthHistorySelectionKey/,
+  "foreground reads must be discarded if the user changes the history choice mid-read",
+);
+assert.match(
+  healthProviderSource,
+  /const setHealthHistoryDays[\s\S]{0,2600}resetPersistedHistoryWork\(\)/,
+  "changing the native preference must clear pending historical work",
+);
+assert.match(
+  backgroundHealthSource,
+  /function startDate\([\s\S]{0,320}healthImportStart\(/,
+  "background health sync must share the same Today-only range calculator",
+);
+assert.match(
+  backgroundHealthSource,
+  /normalizeHealthHistoryDays\([\s\S]{0,250}startDate\([\s\S]{0,120}historyDays/,
+  "background sync must use the stored normalized preference on every run",
+);
+assert.match(
+  backgroundHealthSource,
+  /normalizeHealthHistoryDays\(latest\.settings\.healthHistoryDays\)[\s\S]{0,100}requestedHistorySelection/,
+  "background reads must be discarded if the stored preference changes mid-read",
+);
 const stateMigrationSource = fs.readFileSync(
   path.join(root, "src", "domain", "stateMigration.ts"),
   "utf8",
@@ -3457,7 +3812,7 @@ assert.match(
 );
 assert.match(
   healthProviderSource,
-  /granted\?\.connected === false[\s\S]{0,700}nativeHealthAdapter\.disconnect\?\.\(\)/,
+  /reconcilePersistedHealthConnection\([\s\S]{0,900}disconnectRevokedGrant[\s\S]{0,500}nativeHealthAdapter\.disconnect\?\.\(\)/,
   "revoking Health Connect access must also end local phone recording",
 );
 assert.match(
@@ -3504,7 +3859,7 @@ assert.match(
 );
 assert.match(
   stateMigrationSource,
-  /const normalizedLiveStepSources = normalizeLiveStepSources[\s\S]{0,1000}migrateLiveStepStrategy[\s\S]{0,900}liveStepSources:[\s\S]{0,400}DEFAULT_LIVE_STEP_SOURCES[\s\S]{0,400}liveStepCombination[\s\S]{0,180}liveStepStrategyVersion/,
+  /const normalizedLiveStepSources = normalizeLiveStepSources[\s\S]{0,1000}migrateLiveStepStrategy[\s\S]{0,1500}liveStepSources:[\s\S]{0,400}DEFAULT_LIVE_STEP_SOURCES[\s\S]{0,400}liveStepCombination[\s\S]{0,180}liveStepStrategyVersion/,
   "older Step strategies must migrate to the current candidate defaults without replacing a valid current override",
 );
 assert.match(
@@ -3639,7 +3994,7 @@ assert.match(
 );
 assert.match(
   healthProviderSource,
-  /restored\.connectionEnabled !== false[\s\S]{0,500}restored\.connectionEnabled === true[\s\S]{0,120}granted\?\.connected === false[\s\S]{0,260}connectionEnabled: false/,
+  /restored\.connectionEnabled !== false[\s\S]{0,1600}reconcilePersistedHealthConnection\([\s\S]{0,200}granted/,
   "startup must clear a cached Health connection after native permission revocation",
 );
 assert.match(
@@ -3790,6 +4145,21 @@ assert.match(
   healthDedupSource,
   /isDailyStepReplacementCandidate[\s\S]{0,900}sourceRecordId\?\.startsWith\("step-fallback:"\)/,
   "the shared replacement predicate must recognize calculated step fallback identity",
+);
+assert.match(
+  appleHealthSource,
+  /HKQuantityTypeIdentifierBloodPressureSystolic[\s\S]{0,180}measurementField: 'systolic'/,
+  "Apple Health must request and map systolic blood pressure",
+);
+assert.match(
+  appleHealthSource,
+  /HKQuantityTypeIdentifierBloodPressureDiastolic[\s\S]{0,180}measurementField: 'diastolic'/,
+  "Apple Health must request and map diastolic blood pressure",
+);
+assert.match(
+  appleHealthSource,
+  /measurements: config\.measurementField[\s\S]{0,160}\[config\.measurementField\]: value/,
+  "Apple blood-pressure samples must reach the compound tracker fields",
 );
 
 const phoneOnly = deduplicateHealthImportRecords(

@@ -9,6 +9,7 @@ import { AppText as Text } from "@/src/components/AppText";
 import { memberDisplayName } from "@/src/domain/members";
 import { chatSharePreview } from "@/src/domain/social";
 import { useApp } from "@/src/state/AppProvider";
+import { useUserSafety } from "@/src/safety/userSafety";
 import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 import { useAppColors, useGroupAccent } from "@/src/theme";
 
@@ -25,6 +26,7 @@ const RECENT_MESSAGE_MS = 2 * 60 * 1000;
 export function InAppChatBanner() {
   const { state, hydrated } = useApp();
   const tutorialSandbox = useTutorialSandboxActive();
+  const safety = useUserSafety(state.currentUserId, tutorialSandbox);
   const colors = useAppColors();
   const accent = useGroupAccent();
   const insets = useSafeAreaInsets();
@@ -65,7 +67,7 @@ export function InAppChatBanner() {
   );
 
   useEffect(() => {
-    if (!hydrated) return;
+    if (!hydrated || !safety.hydrated) return;
     const scope = `${state.currentUserId}:${state.group.id}`;
     if (initializedForRef.current !== scope) {
       initializedForRef.current = scope;
@@ -79,6 +81,7 @@ export function InAppChatBanner() {
         return (
           message.kind === "message" &&
           message.senderId !== state.currentUserId &&
+          !safety.blockedUserIds.has(message.senderId) &&
           !seenRef.current.has(message.id) &&
           Number.isFinite(createdAt) &&
           now - createdAt <= RECENT_MESSAGE_MS
@@ -114,7 +117,15 @@ export function InAppChatBanner() {
       senderId: message.senderId,
       direct: Boolean(message.recipientId),
     });
-  }, [hydrated, show, state.currentUserId, state.group, state.messages]);
+  }, [
+    hydrated,
+    safety.blockedUserIds,
+    safety.hydrated,
+    show,
+    state.currentUserId,
+    state.group,
+    state.messages,
+  ]);
 
   useEffect(() => {
     if (tutorialSandbox || Platform.OS === "web") return;
@@ -123,6 +134,10 @@ export function InAppChatBanner() {
         const content = notification.request.content;
         const data = content.data;
         if (data?.route !== "/chat") return;
+        if (!safety.hydrated) return;
+        const senderId =
+          typeof data.senderId === "string" ? data.senderId : undefined;
+        if (senderId && safety.blockedUserIds.has(senderId)) return;
         show({
           id:
             typeof data.messageId === "string"
@@ -130,14 +145,18 @@ export function InAppChatBanner() {
               : notification.request.identifier,
           title: content.title ?? "New message",
           body: content.body ?? "Open chat to read it.",
-          senderId:
-            typeof data.senderId === "string" ? data.senderId : undefined,
+          senderId,
           direct: String(content.title ?? "").startsWith("Direct message"),
         });
       },
     );
     return () => subscription.remove();
-  }, [show, tutorialSandbox]);
+  }, [safety.blockedUserIds, safety.hydrated, show, tutorialSandbox]);
+
+  useEffect(() => {
+    if (banner?.senderId && safety.blockedUserIds.has(banner.senderId))
+      setBanner(null);
+  }, [banner?.senderId, safety.blockedUserIds]);
 
   useEffect(
     () => () => {

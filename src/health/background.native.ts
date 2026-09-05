@@ -5,6 +5,12 @@ import * as TaskManager from 'expo-task-manager';
 import { isCloudGroupId, pushCloudRecentActivity } from '@/src/cloud/groupCloud';
 import { publishJoinedPublicChallengeTotals } from '@/src/cloud/publicChallengeProjection';
 import { dateKey } from '@/src/domain/date';
+import {
+  healthHistorySelectionKey,
+  healthImportStart,
+  normalizeHealthHistoryDays,
+} from '@/src/domain/healthHistory';
+import { backgroundHealthReconciliationWindow } from '@/src/domain/healthReconciliation';
 import { applyImportedFoodFastBreaks } from '@/src/domain/fasting';
 import { enabledHealthDataTypes, healthFallbackContextForRead, healthVisibilityByMetric, mapHealthRecordsToEntries, mergeHealthEntries, metricIdsForHealthDataTypes } from '@/src/domain/health';
 import {
@@ -16,13 +22,18 @@ import {
   preserveCurrentDayStepReplacementFloor,
 } from '@/src/domain/healthDedup';
 import { nativeHealthAdapter } from '@/src/health/adapter';
-import { HEALTH_INITIAL_DAYS, HEALTH_STATUS_STORAGE_KEY } from '@/src/health/constants';
+import {
+  HEALTH_INITIAL_DAYS,
+  HEALTH_ROUTINE_OVERLAP_DAYS,
+  HEALTH_STATUS_STORAGE_KEY,
+} from '@/src/health/constants';
 import {
   BackgroundHealthSyncRegistration,
   healthSyncMinimumIntervalMs,
   healthSyncSchedule,
 } from '@/src/health/schedule';
 import { HealthImportRecord, PersistedHealthStatus } from '@/src/health/types';
+import { parsePersistedHealthStatus } from '@/src/health/persistedStatus';
 import { supabase } from '@/src/lib/supabase';
 import {
   APP_STORAGE_KEY,
@@ -33,19 +44,23 @@ import {
   multiSetAppStateStorage,
 } from '@/src/storage/appStateStorage';
 import { runAppStateStorageMutation } from '@/src/storage/appStateMutation';
-import { AppState, HealthDataType, HealthSyncSettings, SyncMode } from '@/src/types';
+import { AppState, HealthDataType, HealthHistoryDays, HealthSyncSettings, SyncMode } from '@/src/types';
 
 const TASK_NAME = 'paceboard-health-background-sync';
 const CLOUD_SYNC_CHECKPOINT_KEY_PREFIX = 'habhub-cloud-checkpoint-v1:';
 
-function startDate(lastSyncedAt: string | null) {
-  let date = lastSyncedAt ? new Date(lastSyncedAt) : new Date();
-  if (Number.isNaN(date.getTime())) date = new Date();
-  date.setHours(0, 0, 0, 0);
-  date.setDate(
-    date.getDate() - (lastSyncedAt ? 2 : HEALTH_INITIAL_DAYS),
-  );
-  return date;
+function startDate(
+  lastSyncedAt: string | null,
+  historyDays: HealthHistoryDays,
+  now: Date,
+) {
+  return healthImportStart({
+    now,
+    lastSyncedAt,
+    historyDays,
+    initialDays: HEALTH_INITIAL_DAYS,
+    routineOverlapDays: HEALTH_ROUTINE_OVERLAP_DAYS,
+  });
 }
 
 function parseAppState(raw: string | null) {
@@ -84,7 +99,7 @@ function applyBackgroundHealthRecords(
     : [];
   const stepMetricSet = new Set(stepMetricIds);
   const replacementThrough = aggregateRangeThroughLocalDate(to);
-  const currentLocalDate = dateKey(to);
+  const currentLocalDate = dateKey();
   const existingById = new Map(
     state.entries.map((entry) => [`${entry.userId}:${entry.id}`, entry]),
   );
@@ -170,6 +185,7 @@ function applyBackgroundHealthRecords(
         provider,
         metricIdsForHealthDataTypes(dataTypes, state.metrics),
         dateKey(from),
+        dateKey(to),
       ),
       lastSavedAt: new Date().toISOString(),
     },
@@ -220,8 +236,18 @@ TaskManager.defineTask(TASK_NAME, async () => {
       return BackgroundTask.BackgroundTaskResult.Success;
     const dataTypes = enabledHealthDataTypes(state.settings.healthSync.dataTypes);
     if (!dataTypes.length) return BackgroundTask.BackgroundTaskResult.Success;
-    const from = startDate(status.lastSyncedAt);
     const to = new Date();
+    const historyDays = normalizeHealthHistoryDays(
+      state.settings.healthHistoryDays,
+    );
+    const requestedHistorySelection = healthHistorySelectionKey(
+      historyDays,
+    );
+    const from = startDate(
+      status.lastSyncedAt,
+      historyDays,
+      to,
+    );
     const records = await nativeHealthAdapter.read({
       from,
       to,
@@ -230,11 +256,34 @@ TaskManager.defineTask(TASK_NAME, async () => {
       liveStepSources: state.settings.healthSync.liveStepSources,
       liveStepCombination: state.settings.healthSync.liveStepCombination,
     });
+    const reconciliation =
+      provider === 'health_connect'
+        ? backgroundHealthReconciliationWindow({
+            historyDays,
+            now: to,
+            recentFrom: from,
+            state: status.backgroundReconciliation,
+          })
+        : null;
+    const reconciliationRecords = reconciliation
+      ? await nativeHealthAdapter.read({
+          from: reconciliation.from,
+          to: reconciliation.to,
+          dataTypes,
+          sourcePreferences: state.settings.healthSync.sourcePreferences,
+          liveStepSources: state.settings.healthSync.liveStepSources,
+          liveStepCombination: state.settings.healthSync.liveStepCombination,
+        })
+      : [];
     // Health Connect may take seconds while another headless notification task
     // or the foreground provider commits state. Re-read and transform the
     // newest account snapshot inside the shared write gate; network publishing
     // remains below and never holds this local durability lock.
     const applied = await runAppStateStorageMutation(async () => {
+      const statusKey = `${HEALTH_STATUS_STORAGE_KEY}:${state.currentUserId}`;
+      const latestStatus =
+        parsePersistedHealthStatus(await AsyncStorage.getItem(statusKey)) ??
+        status;
       const accountKey = appAccountStorageKey(state.currentUserId);
       const legacySnapshot = await getAppStateStorageItem(APP_STORAGE_KEY);
       const activeState = parseAppState(legacySnapshot);
@@ -253,6 +302,12 @@ TaskManager.defineTask(TASK_NAME, async () => {
         !latestSchedule.requestsBackground
       )
         return null;
+      if (
+        healthHistorySelectionKey(
+          normalizeHealthHistoryDays(latest.settings.healthHistoryDays),
+        ) !== requestedHistorySelection
+      )
+        return null;
       const latestEnabledTypes = new Set(
         enabledHealthDataTypes(latest.settings.healthSync.dataTypes),
       );
@@ -263,7 +318,7 @@ TaskManager.defineTask(TASK_NAME, async () => {
       const currentRecords = records.filter((record) =>
         currentDataTypes.includes(record.type),
       );
-      const result = applyBackgroundHealthRecords(
+      const recentResult = applyBackgroundHealthRecords(
         latest,
         currentRecords,
         currentDataTypes,
@@ -271,9 +326,30 @@ TaskManager.defineTask(TASK_NAME, async () => {
         to,
         provider,
       );
+      const reconciliationResult = reconciliation
+        ? applyBackgroundHealthRecords(
+            recentResult.nextState,
+            reconciliationRecords.filter((record) =>
+              currentDataTypes.includes(record.type),
+            ),
+            currentDataTypes,
+            reconciliation.from,
+            reconciliation.to,
+            provider,
+          )
+        : null;
+      const result = reconciliationResult ?? recentResult;
+      const allImportedEntries = [
+        ...recentResult.entries,
+        ...(reconciliationResult?.entries ?? []),
+      ];
+      const allRevisionSafeEntries = [
+        ...recentResult.revisionSafeEntriesWithFloors,
+        ...(reconciliationResult?.revisionSafeEntriesWithFloors ?? []),
+      ];
       const syncedAt = new Date().toISOString();
       const nextStatus: PersistedHealthStatus = {
-        ...status,
+        ...latestStatus,
         connectionEnabled: true,
         backgroundAccess: result.nextState.settings.healthSync.backgroundAccess,
         lastSyncedAt: syncedAt,
@@ -282,7 +358,10 @@ TaskManager.defineTask(TASK_NAME, async () => {
           : status.lastStepSyncedAt,
         lastReason: 'background',
         lastImportFromDate: dateKey(from),
-        importedCount: result.entries.length,
+        importedCount: allImportedEntries.length,
+        backgroundReconciliation: reconciliation
+          ? reconciliation.nextState
+          : latestStatus.backgroundReconciliation,
         error: null,
       };
       const serializedState = JSON.stringify(result.nextState);
@@ -295,10 +374,14 @@ TaskManager.defineTask(TASK_NAME, async () => {
       // same JS mutation gate so that writer can rebase instead of restoring a
       // stale set of native rows.
       await AsyncStorage.setItem(
-        `${HEALTH_STATUS_STORAGE_KEY}:${state.currentUserId}`,
+        statusKey,
         JSON.stringify(nextStatus),
       );
-      return { ...result, dataTypes: currentDataTypes };
+      return {
+        ...result,
+        dataTypes: currentDataTypes,
+        revisionSafeEntriesWithFloors: allRevisionSafeEntries,
+      };
     });
     if (!applied) return BackgroundTask.BackgroundTaskResult.Success;
     const { nextState, revisionSafeEntriesWithFloors } = applied;
@@ -340,26 +423,33 @@ TaskManager.defineTask(TASK_NAME, async () => {
     }
     return BackgroundTask.BackgroundTaskResult.Success;
   } catch (error) {
-    const retryAttempt = Math.min(
-      8,
-      (previousStatus.retryAttempt ?? 0) + 1,
-    );
-    const retryDelay = Math.min(
-      6 * 60 * 60 * 1000,
-      5 * 60 * 1000 * 2 ** (retryAttempt - 1),
-    );
-    const failed: PersistedHealthStatus = {
-      ...previousStatus,
-      lastReason: 'background',
-      importedCount: previousStatus.importedCount ?? 0,
-      error: error instanceof Error ? error.message : 'Background health sync failed.',
-      retryAttempt,
-      nextRetryAt: new Date(Date.now() + retryDelay).toISOString(),
-    };
-    await AsyncStorage.setItem(
-      `${HEALTH_STATUS_STORAGE_KEY}:${statusUserId}`,
-      JSON.stringify(failed),
-    ).catch(() => undefined);
+    if (statusUserId !== 'unknown')
+      await runAppStateStorageMutation(async () => {
+        const statusKey = `${HEALTH_STATUS_STORAGE_KEY}:${statusUserId}`;
+        const latestStatus =
+          parsePersistedHealthStatus(await AsyncStorage.getItem(statusKey)) ??
+          previousStatus;
+        const retryAttempt = Math.min(
+          8,
+          (latestStatus.retryAttempt ?? 0) + 1,
+        );
+        const retryDelay = Math.min(
+          6 * 60 * 60 * 1000,
+          5 * 60 * 1000 * 2 ** (retryAttempt - 1),
+        );
+        const failed: PersistedHealthStatus = {
+          ...latestStatus,
+          lastReason: 'background',
+          importedCount: latestStatus.importedCount ?? 0,
+          error:
+            error instanceof Error
+              ? error.message
+              : 'Background health sync failed.',
+          retryAttempt,
+          nextRetryAt: new Date(Date.now() + retryDelay).toISOString(),
+        };
+        await AsyncStorage.setItem(statusKey, JSON.stringify(failed));
+      }).catch(() => undefined);
     return BackgroundTask.BackgroundTaskResult.Failed;
   }
 });

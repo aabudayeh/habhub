@@ -1,4 +1,5 @@
 import { HealthDataType, HealthProvider, HealthSourcePreference, LiveStepCombination, LiveStepSource, NutritionDetails } from '@/src/types';
+import type { BackgroundHealthReconciliationState } from '@/src/domain/healthReconciliation';
 
 export type LiveStepDiagnostics = {
   /** Candidates are complete midnight-to-now totals, not additive intervals. */
@@ -92,6 +93,8 @@ export type PersistedHealthStatus = {
   lastReason?: 'connect' | 'open' | 'pull' | 'manual' | 'history' | 'backfill' | 'background';
   /** Inclusive device date replaced by the most recent background import. */
   lastImportFromDate?: string;
+  /** Resumable, low-frequency correction sweep for delayed provider history. */
+  backgroundReconciliation?: BackgroundHealthReconciliationState | null;
   importedCount?: number;
   error?: string | null;
   /**

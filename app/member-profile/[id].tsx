@@ -1,10 +1,11 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
-import React, { useMemo } from "react";
+import React, { useMemo, useState } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 
 import { AppText as Text } from "@/src/components/AppText";
 import { BadgeMedallion } from "@/src/components/BadgeMedallion";
+import { SafetyReportSheet } from "@/src/components/SafetyReportSheet";
 import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import { useGroupChallenges } from "@/src/cloud/useGroupChallenges";
 import { useSettledChallengeResults } from "@/src/cloud/useSettledChallengeResults";
@@ -20,19 +21,28 @@ import {
 import { badgeLevelSummary, buildBadges } from "@/src/domain/badges";
 import { dateKey, friendlyDate, relativeTime } from "@/src/domain/date";
 import { memberDisplayName, memberRoleLabel } from "@/src/domain/members";
-import { useLocalization } from "@/src/i18n";
+import { LocalizedAlert as Alert, useLocalization } from "@/src/i18n";
+import {
+  SafetyReportReason,
+  useUserSafety,
+} from "@/src/safety/userSafety";
 import { useApp } from "@/src/state/AppProvider";
-import { useAppColors } from "@/src/theme";
+import { palette, useAppColors } from "@/src/theme";
+import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 
 export default function GroupMemberProfile() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { state } = useApp();
+  const tutorialSandbox = useTutorialSandboxActive();
+  const safety = useUserSafety(state.currentUserId, tutorialSandbox);
   const colors = useAppColors();
   const { locale, t } = useLocalization();
   const challengeCloud = useGroupChallenges(state.group.id);
   const settledChallengeResults = useSettledChallengeResults(state.group.id);
   const settledChallengeOccurrenceKeys =
     settledChallengeResults.occurrenceKeys;
+  const [reportOpen, setReportOpen] = useState(false);
+  const [safetyBusy, setSafetyBusy] = useState(false);
   const member = state.group.members.find((candidate) => candidate.id === id);
   const allBadges = useMemo(
     () => {
@@ -139,7 +149,84 @@ export default function GroupMemberProfile() {
     );
   }
 
-  const isSelf = member.id === state.currentUserId;
+  const activeMember = member;
+  const isSelf = activeMember.id === state.currentUserId;
+  const blocked = safety.isBlocked(activeMember.id);
+  function confirmBlockChange() {
+    Alert.alert(
+      `${blocked ? "Unblock" : "Block"} ${memberDisplayName(state, activeMember)}?`,
+      blocked
+        ? "Their group messages can appear again. Direct messaging is available only when neither person has blocked the other."
+        : "Their cached and future messages will be hidden immediately. Direct messages and chat push alerts stop across the block.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: blocked ? "Unblock" : "Block",
+          style: blocked ? "default" : "destructive",
+          onPress: () => {
+            setSafetyBusy(true);
+            const action = blocked
+              ? safety.unblockUser(activeMember.id)
+              : safety.blockUser(
+                  state.group.id,
+                  activeMember.id,
+                  memberDisplayName(state, activeMember),
+                );
+            void action
+              .then((result) =>
+                Alert.alert(
+                  blocked ? "Member unblocked" : "Member blocked",
+                  safety.mode === "demo"
+                    ? "This demo safety change stays on this device."
+                    : result.cloudSynced
+                      ? blocked
+                        ? "Your cloud block list was updated."
+                        : "Their messages are hidden and direct contact is disabled."
+                  : "The change is active on this device. Cloud sync will retry when available.",
+                ),
+              )
+              .catch((error) =>
+                Alert.alert(
+                  "Safety change not saved",
+                  error instanceof Error
+                    ? error.message
+                    : "The change is active for this session. Try again when storage is available.",
+                ),
+              )
+              .finally(() => setSafetyBusy(false));
+          },
+        },
+      ],
+    );
+  }
+  async function submitReport(reason: SafetyReportReason, details: string) {
+    setSafetyBusy(true);
+    try {
+      const result = await safety.reportUser({
+        groupId: state.group.id,
+        userId: activeMember.id,
+        reportedDisplayName: memberDisplayName(state, activeMember),
+        reason,
+        details,
+      });
+      setReportOpen(false);
+      Alert.alert(
+        result.cloudSynced ? "Report submitted" : "Demo report saved locally",
+        result.cloudSynced
+          ? "Your report is in HabHub's protected operator queue. An eligible group moderator may also review it, but the reported person cannot review their own report."
+          : "Demo mode does not send reports to HabHub or group admins.",
+      );
+    } catch (error) {
+      Alert.alert(
+        "Report not submitted",
+        error instanceof Error
+          ? error.message
+          : "Reconnect and try again so the report can be stored securely.",
+      );
+    } finally {
+      setSafetyBusy(false);
+    }
+  }
   const joinedGroupDate = t(
     member.joinedGroupAt
       ? friendlyDate(member.joinedGroupAt.slice(0, 10), locale)
@@ -194,6 +281,71 @@ export default function GroupMemberProfile() {
           ) : null}
         </View>
       </Card>
+
+      {!isSelf ? (
+        <Card style={styles.safetyCard}>
+          <View style={styles.safetyHeading}>
+            <View
+              style={[
+                styles.safetyIcon,
+                { backgroundColor: colors.primarySoft },
+              ]}
+            >
+              <Ionicons
+                name={blocked ? "shield" : "shield-outline"}
+                size={20}
+                color={blocked ? palette.red : colors.primary}
+              />
+            </View>
+            <View style={styles.heroCopy}>
+              <Text style={[styles.levelTitle, { color: colors.ink }]}>Community safety</Text>
+              <Text style={[styles.badgeDetail, { color: colors.muted }]}>
+                {blocked
+                  ? "Blocked · this member's messages are hidden on your device."
+                  : "Report a concern or block contact without leaving this profile."}
+              </Text>
+            </View>
+          </View>
+          <View style={styles.safetyActions}>
+            <Button
+              label="Message"
+              icon="chatbubble-outline"
+              size="small"
+              variant="secondary"
+              disabled={blocked}
+              onPress={() =>
+                router.navigate({
+                  pathname: "/chat",
+                  params: { recipient: member.id },
+                } as never)
+              }
+            />
+            <Button
+              label="Report member"
+              icon="flag-outline"
+              size="small"
+              variant="ghost"
+              disabled={safetyBusy}
+              onPress={() => setReportOpen(true)}
+            />
+            <Button
+              label={blocked ? "Unblock" : "Block"}
+              icon={blocked ? "person-add-outline" : "person-remove-outline"}
+              size="small"
+              variant={blocked ? "ghost" : "danger"}
+              loading={safetyBusy}
+              onPress={confirmBlockChange}
+            />
+            <Button
+              label="Safety Center"
+              icon="shield-checkmark-outline"
+              size="small"
+              variant="ghost"
+              onPress={() => router.push("/safety" as never)}
+            />
+          </View>
+        </Card>
+      ) : null}
 
       <Card style={styles.levelCard}>
         <View style={styles.levelHeading}>
@@ -302,6 +454,15 @@ export default function GroupMemberProfile() {
           </Card>
         </View>
       </TutorialTarget>
+      <SafetyReportSheet
+        visible={reportOpen}
+        title="Report member"
+        subject={memberDisplayName(state, member)}
+        demoMode={safety.mode === "demo"}
+        busy={safetyBusy}
+        onClose={() => setReportOpen(false)}
+        onSubmit={(reason, details) => void submitReport(reason, details)}
+      />
     </Screen>
   );
 }
@@ -322,6 +483,21 @@ const styles = StyleSheet.create({
   joinedMetaValue: { fontSize: 7.5, lineHeight: 11, fontWeight: "700" },
   joinedMetaSeparator: { flexShrink: 0, fontSize: 7.5, lineHeight: 11, fontWeight: "700" },
   sync: { fontSize: 9, marginTop: 6 },
+  safetyCard: { gap: 12, marginBottom: 12 },
+  safetyHeading: { flexDirection: "row", alignItems: "center", gap: 10 },
+  safetyIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 13,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  safetyActions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "flex-end",
+    gap: 7,
+  },
   levelCard: { gap: 10, padding: 15, marginBottom: 12 },
   levelHeading: { flexDirection: "row", alignItems: "center", gap: 10 },
   levelIcon: { width: 38, height: 38, borderRadius: 12, alignItems: "center", justifyContent: "center" },

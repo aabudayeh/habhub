@@ -2,9 +2,9 @@
   "expo": {
     "name": "HabHub",
     "slug": "metrally",
-    "version": "1.0.17",
+    "version": "1.0.18",
     "orientation": "portrait",
-    "icon": "./assets/images/habhub-icon.png",
+    "icon": "./assets/images/habhub-store-icon.png",
     "scheme": "paceboard",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
@@ -12,7 +12,7 @@
       "policy": "appVersion"
     },
     "ios": {
-      "supportsTablet": true,
+      "supportsTablet": false,
       "bundleIdentifier": "app.paceboard.mobile",
       "infoPlist": {
         "NSHealthShareUsageDescription": "HabHub reads only the health categories you choose so it can update your private goals and permitted group progress.",
@@ -34,7 +34,9 @@
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#081B49",
-        "foregroundImage": "./assets/images/habhub-icon.png"
+        "backgroundImage": "./assets/images/habhub-adaptive-background.png",
+        "foregroundImage": "./assets/images/habhub-adaptive-foreground.png",
+        "monochromeImage": "./assets/images/habhub-adaptive-monochrome.png"
       },
       "package": "app.paceboard.mobile",
       "googleServicesFile": "./google-services.json",
@@ -63,13 +65,17 @@
         "android.permission.SCHEDULE_EXACT_ALARM",
         "android.permission.PACKAGE_USAGE_STATS"
       ],
-      "edgeToEdgeEnabled": false,
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.SYSTEM_ALERT_WINDOW"
+      ],
+      "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "softwareKeyboardLayoutMode": "resize"
     },
     "web": {
       "output": "static",
-      "favicon": "./assets/images/habhub-icon.png"
+      "favicon": "./assets/images/habhub-store-icon.png"
     },
     "locales": {
       "en": "./src/i18n/native/en.json",
@@ -82,8 +88,24 @@
       "fr": "./src/i18n/native/fr.json"
     },
     "plugins": [
-      "expo-router",
-      "expo-notifications",
+      [
+        "expo-router",
+        {
+          "asyncRoutes": {
+            "web": "production"
+          }
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/habhub-notification-icon.png",
+          "color": "#08BDB4",
+          "defaultChannel": "paceboard",
+          "mode": "production"
+        }
+      ],
+      "./plugins/withAndroidNotificationMetadataOverrides",
       "expo-secure-store",
       [
         "@kingstinct/react-native-healthkit",
@@ -93,7 +115,14 @@
           "background": true
         }
       ],
+      "expo-background-task",
       "react-native-health-connect",
+      [
+        "./plugins/withHealthConnectPrivacy",
+        {
+          "privacyUrl": "https://habhub.expo.app/privacy"
+        }
+      ],
       [
         "expo-build-properties",
         {
@@ -114,7 +143,7 @@
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/habhub-icon.png",
+          "image": "./assets/images/habhub-splash-mark.png",
           "imageWidth": 200,
           "resizeMode": "contain",
           "backgroundColor": "#081B49",

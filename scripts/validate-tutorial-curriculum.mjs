@@ -110,6 +110,44 @@ assert.deepEqual(
   "Focused modules must follow Basic and Full in the guide catalog.",
 );
 assert.equal(FULL_TUTORIAL_GUIDE.id, "full-app");
+assert.equal(
+  BASIC_TUTORIAL_GUIDE.steps.length,
+  10,
+  "The first-run guide must remain a genuinely short two-minute tour.",
+);
+assert.deepEqual(
+  BASIC_TUTORIAL_GUIDE.sections.map((section) => section.id),
+  ["today", "metric-detail", "menu", "display"],
+  "The basic guide should cover the core loop; deeper pages belong in modules.",
+);
+const basicOpenTracker = BASIC_TUTORIAL_GUIDE.steps.find(
+  (tutorialStep) => tutorialStep.id === "essential.today.open-tracker",
+);
+assert.equal(basicOpenTracker?.target, "today-steps-tracker");
+assert.equal(
+  basicOpenTracker?.interaction?.actionId,
+  "tutorial.today.open-tracker",
+);
+assert.equal(basicOpenTracker?.interaction?.completion, "observed-action");
+assert.equal(basicOpenTracker?.interaction?.autoAdvance, true);
+const basicWeek = BASIC_TUTORIAL_GUIDE.steps.find(
+  (tutorialStep) => tutorialStep.id === "essential.metric-detail.week",
+);
+assert.equal(basicWeek?.target, "metric-detail-week");
+assert.equal(
+  basicWeek?.interaction?.actionId,
+  "tutorial.metric-detail.open-week",
+);
+assert.equal(basicWeek?.interaction?.autoAdvance, true);
+assert.ok(
+  BASIC_TUTORIAL_GUIDE.steps.some(
+    (tutorialStep) =>
+      tutorialStep.target === "metric-detail-chart" &&
+      tutorialStep.navigation?.before ===
+        "/metric-detail?metric=steps&period=week",
+  ),
+  "The basic guide must reveal a real weekly tracker-history chart.",
+);
 assert.ok(
   FULL_TUTORIAL_GUIDE.steps.length >= 70,
   "The full guide must remain an exhaustive curriculum, not a short tour.",
@@ -550,9 +588,18 @@ assert.equal(
   3,
 );
 
-const imageAssets = new Set(
-  require(path.join(root, "src/data/demoAssets.ts")).DEMO_PROGRESS_URIS,
+const demoAssets = require(path.join(root, "src/data/demoAssets.ts"));
+const progressImageAssets = new Set(demoAssets.DEMO_PROGRESS_URIS);
+assert.equal(
+  progressImageAssets.size,
+  5,
+  "The guided demo needs five distinct progress images for a coherent timeline.",
 );
+const imageAssets = new Set([
+  ...progressImageAssets,
+  demoAssets.DEMO_MEAL_URI,
+  demoAssets.DEMO_WORKOUT_SHARE_URI,
+]);
 const usedImages = [
   ...first.appState.photos.map((photo) => photo.uri),
   ...first.appState.entries.flatMap((entry) => entry.imageUri ? [entry.imageUri] : []),
@@ -564,6 +611,37 @@ assert.ok(
   usedImages.every((image) => imageAssets.has(image)),
   "Every tutorial image must come from bundled demo assets.",
 );
+assert.ok(
+  first.appState.photos.every((photo) => progressImageAssets.has(photo.uri)),
+  "Only the coherent progress sequence may appear in the photo timeline.",
+);
+assert.ok(
+  first.appState.entries
+    .filter((entry) => entry.imageUri)
+    .every((entry) => entry.imageUri === demoAssets.DEMO_MEAL_URI),
+  "Food entries must use the dedicated meal image rather than a progress photo.",
+);
+assert.ok(
+  first.appState.messages
+    .filter((message) => message.imageUri)
+    .every((message) => message.imageUri === demoAssets.DEMO_WORKOUT_SHARE_URI),
+  "Chat attachments must use the dedicated workout image rather than a progress photo.",
+);
+
+const weightTrend = first.appState.entries
+  .filter(
+    (entry) =>
+      entry.userId === TUTORIAL_DEMO_USER_ID && entry.metricId === "weight",
+  )
+  .sort((left, right) => left.localDate.localeCompare(right.localDate));
+const bodyFatTrend = first.appState.entries
+  .filter(
+    (entry) =>
+      entry.userId === TUTORIAL_DEMO_USER_ID && entry.metricId === "body_fat",
+  )
+  .sort((left, right) => left.localDate.localeCompare(right.localDate));
+assert.ok(weightTrend.length >= 2 && Number(weightTrend[0].value) > Number(weightTrend.at(-1).value));
+assert.ok(bodyFatTrend.length >= 2 && Number(bodyFatTrend[0].value) > Number(bodyFatTrend.at(-1).value));
 
 const screenTimeTotal = first.screenTimeReport.apps.reduce(
   (sum, app) => sum + app.foregroundMs,

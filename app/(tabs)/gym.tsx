@@ -86,6 +86,11 @@ import {
   webWorkoutActionAckRetryDelay,
 } from "@/src/domain/workoutNotifications";
 import {
+  isActionableWorkoutNotificationResponse,
+  notificationResponseOwnerId,
+  workoutNotificationActionDisposition,
+} from "@/src/domain/notificationResponses";
+import {
   acknowledgeNativeWorkoutTimerAction,
   acknowledgeWebWorkoutTimerActions,
   configureWorkoutTimerNotification,
@@ -102,6 +107,7 @@ import {
   WorkoutNotificationStep,
 } from "@/src/notifications/workoutTimer";
 import { useFocusedCloudSyncPause } from "@/src/cloud/useFocusedCloudSyncPause";
+import { useAuth } from "@/src/auth/AuthProvider";
 import {
   setWorkoutTimerPresence,
   workoutDraftImageKey,
@@ -231,6 +237,21 @@ function queuedWorkoutTimerActionId(action: QueuedWorkoutTimerAction) {
   return action.webActionId
     ? `web:${action.webActionId}`
     : `${action.ownerId}:${action.generation}:${action.action}:${action.occurredAt}`;
+}
+
+function iosWorkoutNotificationResponseId(
+  response: Notifications.NotificationResponse,
+) {
+  const generation =
+    response.notification.request.content.data?.workoutGeneration;
+  return [
+    "ios",
+    response.notification.request.identifier,
+    typeof generation === "string" && generation
+      ? generation
+      : response.notification.date,
+    response.actionIdentifier,
+  ].join(":");
 }
 
 function timerPhaseElapsed(timer: WorkoutTimer, now: number) {
@@ -553,6 +574,7 @@ function GymDraggableExercise({
 }
 
 function GymScreen() {
+  const auth = useAuth();
   const {
     state,
     hydrated,
@@ -662,6 +684,14 @@ function GymScreen() {
     NativeAppState.currentState,
   );
   const handledTimerResponse = useRef<string | null>(null);
+  const [pendingIosTimerResponses, setPendingIosTimerResponses] = useState<
+    Notifications.NotificationResponse[]
+  >([]);
+  const [pendingIosTimerResponseAcks, setPendingIosTimerResponseAcks] =
+    useState<
+      { action: string; id: string; requiresPersistence: boolean }[]
+    >([]);
+  const [iosTimerResponseAckRetry, setIosTimerResponseAckRetry] = useState(0);
   const handledWebTimerAction = useRef<string | null>(null);
   const [queuedNativeTimerActions, setQueuedNativeTimerActions] = useState<
     QueuedWorkoutTimerAction[]
@@ -678,6 +708,7 @@ function GymScreen() {
   const handledBackgroundWorkoutCompletion = useRef<string | null>(null);
   const webTimerActionAckAttempt = useRef(0);
   const nativeTimerActionAckAttempt = useRef(0);
+  const iosTimerResponseAckAttempt = useRef(0);
   const workoutDraftPersistenceRef = useRef<Promise<void>>(Promise.resolve());
   const persistedWebWorkoutImage = useRef<{
     key: string;
@@ -698,6 +729,10 @@ function GymScreen() {
   const initializedDate = useRef<string | null>(null);
   const loadedSavedSessionId = useRef<string | null>(null);
   const [workoutDraftReady, setWorkoutDraftReady] = useState(false);
+  const notificationActionAccountReady =
+    auth.status === "demo" ||
+    (auth.status === "signedIn" &&
+      auth.user?.id === state.currentUserId);
   useEffect(() => {
     if (!workoutDraftReady) return;
     setWorkoutTimerPresence(
@@ -1983,8 +2018,8 @@ function GymScreen() {
   useEffect(() => {
     if (tutorialSandbox || Platform.OS === "web") return;
     const handle = (response: Notifications.NotificationResponse) => {
-      if (response.notification.request.content.data?.workoutTimer !== true)
-        return;
+      const data = response.notification.request.content.data;
+      if (data?.workoutTimer !== true) return;
       // Android notification actions are committed by the native receiver;
       // consume that single persisted queue instead of applying the response
       // object separately and advancing twice.
@@ -2005,19 +2040,38 @@ function GymScreen() {
         void Notifications.clearLastNotificationResponseAsync();
         return;
       }
-      const responseKey = `${response.notification.request.identifier}:${response.actionIdentifier}`;
+      const responseKey = iosWorkoutNotificationResponseId(response);
       if (handledTimerResponse.current === responseKey) return;
-      handledTimerResponse.current = responseKey;
-      timerActionRef.current(response.actionIdentifier);
-      void Notifications.clearLastNotificationResponseAsync();
+      if (
+        Platform.OS !== "ios" ||
+        !isActionableWorkoutNotificationResponse(data, response.actionIdentifier)
+      )
+        return;
+      if (!notificationActionAccountReady) return;
+      if (notificationResponseOwnerId(data) !== state.currentUserId) return;
+      setPendingIosTimerResponses((current) =>
+        current.some(
+          (item) =>
+            iosWorkoutNotificationResponseId(item) === responseKey,
+        )
+          ? current
+          : [...current, response].slice(-8),
+      );
     };
     const subscription =
       Notifications.addNotificationResponseReceivedListener(handle);
-    void Notifications.getLastNotificationResponseAsync().then((response) => {
-      if (response) handle(response);
-    });
+    void Notifications.getLastNotificationResponseAsync()
+      .then((response) => {
+        if (response) handle(response);
+      })
+      .catch(() => undefined);
     return () => subscription.remove();
-  }, [enqueueNativeTimerActions, state.currentUserId, tutorialSandbox]);
+  }, [
+    enqueueNativeTimerActions,
+    notificationActionAccountReady,
+    state.currentUserId,
+    tutorialSandbox,
+  ]);
 
   function updateSet(exerciseId: string, setId: string, changes: Partial<GymSet>) {
     setExercises((current) =>
@@ -3067,6 +3121,104 @@ function GymScreen() {
     else if (action === WORKOUT_TIMER_FINISH)
       finishTimedWorkout(occurredAt ?? Date.now());
   };
+
+  useEffect(() => {
+    const response = pendingIosTimerResponses[0];
+    if (!response || pendingIosTimerResponseAcks.length) return;
+    const data = response.notification.request.content.data;
+    const disposition = workoutNotificationActionDisposition({
+      accountAuthorityReady: notificationActionAccountReady,
+      draftReady: workoutDraftReady,
+      hydrated,
+      responseOwnerId: notificationResponseOwnerId(data),
+      stateUserId: state.currentUserId,
+      timerActive: Boolean(workoutTimer),
+    });
+    if (disposition === "wait") return;
+
+    const responseKey = iosWorkoutNotificationResponseId(response);
+    const alreadyApplied = processedNativeTimerActionIds.current.has(responseKey);
+    if (disposition === "apply" && !alreadyApplied) {
+      processedNativeTimerActionIds.current.add(responseKey);
+      processedNativeTimerActionOrder.current.push(responseKey);
+      if (processedNativeTimerActionOrder.current.length > 60) {
+        const expired = processedNativeTimerActionOrder.current.shift();
+        if (expired) processedNativeTimerActionIds.current.delete(expired);
+      }
+      timerActionRef.current(response.actionIdentifier);
+    }
+    handledTimerResponse.current = responseKey;
+    setPendingIosTimerResponses((current) =>
+      current.filter(
+        (item) => iosWorkoutNotificationResponseId(item) !== responseKey,
+      ),
+    );
+    setPendingIosTimerResponseAcks([
+      {
+        action: response.actionIdentifier,
+        id: responseKey,
+        requiresPersistence: disposition === "apply" && !alreadyApplied,
+      },
+    ]);
+  }, [
+    hydrated,
+    notificationActionAccountReady,
+    pendingIosTimerResponses,
+    pendingIosTimerResponseAcks.length,
+    state.currentUserId,
+    workoutDraftReady,
+    workoutTimer,
+  ]);
+
+  useEffect(() => {
+    const acknowledgement = pendingIosTimerResponseAcks[0];
+    if (!acknowledgement) return;
+    let active = true;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    const draftDurability = acknowledgement.requiresPersistence
+      ? workoutDraftPersistenceRef.current
+      : Promise.resolve();
+    const durability =
+      acknowledgement.requiresPersistence &&
+      acknowledgement.action === WORKOUT_TIMER_FINISH
+        ? Promise.all([draftDurability, flushLocalPersistence()]).then(
+            () => undefined,
+          )
+        : draftDurability;
+    void acknowledgeWorkoutActionsAfterPersistence(durability, async () => {
+      // If another response arrived, its in-memory queue now owns Expo's last
+      // response. Keep the cache until that later transition is durable too.
+      if (!pendingIosTimerResponses.length)
+        await Notifications.clearLastNotificationResponseAsync();
+    })
+      .then(() => {
+        if (!active) return;
+        iosTimerResponseAckAttempt.current = 0;
+        setPendingIosTimerResponseAcks((current) =>
+          current.filter((item) => item.id !== acknowledgement.id),
+        );
+      })
+      .catch(() => {
+        if (!active) return;
+        const delay = webWorkoutActionAckRetryDelay(
+          iosTimerResponseAckAttempt.current,
+        );
+        iosTimerResponseAckAttempt.current += 1;
+        retryTimer = setTimeout(
+          () => setIosTimerResponseAckRetry((value) => value + 1),
+          delay,
+        );
+      });
+    return () => {
+      active = false;
+      if (retryTimer) clearTimeout(retryTimer);
+    };
+  }, [
+    flushLocalPersistence,
+    iosTimerResponseAckRetry,
+    pendingIosTimerResponseAcks,
+    pendingIosTimerResponses.length,
+  ]);
 
   useEffect(() => {
     if (Platform.OS !== "web" || !webNotificationAction) return;

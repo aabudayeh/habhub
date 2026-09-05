@@ -22,6 +22,15 @@ import {
   workoutActionMatchesActiveGeneration,
 } from "../src/domain/notificationScheduling.ts";
 import { createLatestAsyncDrain } from "../src/domain/latestAsyncDrain.ts";
+import { isAllowedWebPushEndpoint } from "../supabase/functions/_shared/web-push-endpoint.ts";
+import {
+  createNotificationResponseClaimGate,
+  notificationResponseDisposition,
+  notificationResponseOwnerId,
+  scheduleGuardedDefaultLanding,
+  shouldDeferWorkoutNotificationResponseClear,
+  workoutNotificationActionDisposition,
+} from "../src/domain/notificationResponses.ts";
 import {
   acknowledgeWorkoutActionsAfterPersistence,
   formatWorkoutNotificationElapsed,
@@ -53,6 +62,243 @@ assert.notEqual(
   goalReminderNotificationId({ ...base, localDate: "2026-08-12" }),
 );
 assert.match(first, /^habhub-goal-v2:/);
+
+const claimNotificationResponse = createNotificationResponseClaimGate(2);
+const notificationTap = {
+  actionIdentifier: "expo.modules.notifications.actions.DEFAULT",
+  notificationDate: Date.parse("2026-08-11T18:30:00.000Z"),
+  notificationIdentifier: "notification-a",
+};
+assert.equal(claimNotificationResponse(notificationTap), true);
+assert.equal(
+  claimNotificationResponse(notificationTap),
+  false,
+  "a listener/getter race must navigate for the same response only once",
+);
+assert.equal(notificationResponseOwnerId({ accountId: "user-a" }), "user-a");
+assert.equal(
+  notificationResponseOwnerId({ workoutOwnerId: "legacy-user" }),
+  "legacy-user",
+);
+const responseReady = {
+  authConfigured: true,
+  authStatus: "signedIn",
+  authUserId: "user-a",
+  hydrated: true,
+  onboardingComplete: true,
+  responseOwnerId: "user-a",
+  stateUserId: "user-a",
+  tutorialActive: false,
+};
+assert.equal(notificationResponseDisposition(responseReady), "open");
+assert.equal(
+  notificationResponseDisposition({ ...responseReady, hydrated: false }),
+  "wait",
+);
+assert.equal(
+  notificationResponseDisposition({ ...responseReady, onboardingComplete: false }),
+  "wait",
+);
+assert.equal(
+  notificationResponseDisposition({ ...responseReady, authStatus: "signedOut", authUserId: undefined }),
+  "wait",
+);
+assert.equal(
+  notificationResponseDisposition({ ...responseReady, responseOwnerId: "user-b" }),
+  "discard",
+);
+assert.equal(
+  notificationResponseDisposition({ ...responseReady, responseOwnerId: undefined }),
+  "discard",
+  "legacy unscoped responses must not cross an account switch",
+);
+assert.equal(
+  notificationResponseDisposition({
+    ...responseReady,
+    authConfigured: false,
+    authStatus: "demo",
+    authUserId: undefined,
+    responseOwnerId: "demo:user-a",
+  }),
+  "open",
+);
+assert.equal(
+  notificationResponseDisposition({
+    ...responseReady,
+    authConfigured: true,
+    authStatus: "demo",
+    authUserId: undefined,
+    responseOwnerId: "demo:user-a",
+  }),
+  "open",
+  "a configured release build must open an exact demo-scoped response",
+);
+assert.equal(
+  notificationResponseDisposition({
+    ...responseReady,
+    authConfigured: true,
+    authStatus: "demo",
+    authUserId: undefined,
+    responseOwnerId: "user-a",
+  }),
+  "open",
+  "local demo notifications scoped to the current state user remain valid",
+);
+for (const responseOwnerId of [undefined, "user-b", "demo:user-b"]) {
+  assert.equal(
+    notificationResponseDisposition({
+      ...responseReady,
+      authConfigured: true,
+      authStatus: "demo",
+      authUserId: undefined,
+      responseOwnerId,
+    }),
+    "discard",
+    "demo mode must discard unscoped and cross-account responses",
+  );
+}
+
+const terminatedIosWorkoutResponse = {
+  actionIdentifier: "workout-next",
+  data: { accountId: "user-a", route: "/gym", workoutTimer: true },
+  disposition: "open",
+  platform: "ios",
+};
+assert.equal(
+  shouldDeferWorkoutNotificationResponseClear(terminatedIosWorkoutResponse),
+  true,
+  "root must retain a terminated-iOS workout action for Gym",
+);
+assert.equal(
+  shouldDeferWorkoutNotificationResponseClear({
+    ...terminatedIosWorkoutResponse,
+    platform: "android",
+  }),
+  false,
+  "Android keeps its existing native-receiver ownership",
+);
+assert.equal(
+  workoutNotificationActionDisposition({
+    accountAuthorityReady: true,
+    hydrated: true,
+    draftReady: false,
+    responseOwnerId: "user-a",
+    stateUserId: "user-a",
+    timerActive: false,
+  }),
+  "wait",
+  "Gym must not consume the cached action before its durable draft restores",
+);
+assert.equal(
+  workoutNotificationActionDisposition({
+    accountAuthorityReady: true,
+    hydrated: true,
+    draftReady: true,
+    responseOwnerId: "user-a",
+    stateUserId: "user-a",
+    timerActive: true,
+  }),
+  "apply",
+  "the restored owner-scoped timer applies the retained action",
+);
+assert.equal(
+  workoutNotificationActionDisposition({
+    accountAuthorityReady: true,
+    hydrated: true,
+    draftReady: true,
+    responseOwnerId: "user-b",
+    stateUserId: "user-a",
+    timerActive: true,
+  }),
+  "discard",
+  "a cached workout response must never cross accounts",
+);
+
+let scheduledLandingCallback;
+const cancelledLandingHandles = [];
+let defaultLandingOwner = 1;
+let defaultLandingNavigations = 0;
+const cancelScheduledLanding = scheduleGuardedDefaultLanding({
+  isStillPending: () => defaultLandingOwner === 1,
+  navigate: () => {
+    defaultLandingNavigations += 1;
+  },
+  schedule: (callback) => {
+    scheduledLandingCallback = callback;
+    return 41;
+  },
+  cancel: (handle) => cancelledLandingHandles.push(handle),
+});
+defaultLandingOwner = 2;
+scheduledLandingCallback();
+defaultLandingOwner = 1;
+scheduledLandingCallback();
+assert.equal(
+  defaultLandingNavigations,
+  0,
+  "a timer that lost navigation ownership must stay inert even if invoked again",
+);
+cancelScheduledLanding();
+assert.deepEqual(
+  cancelledLandingHandles,
+  [],
+  "an already-fired timer does not need a redundant native cancellation",
+);
+
+let unmountedLandingCallback;
+let unmountedLandingNavigations = 0;
+const cancelUnmountedLanding = scheduleGuardedDefaultLanding({
+  isStillPending: () => true,
+  navigate: () => {
+    unmountedLandingNavigations += 1;
+  },
+  schedule: (callback) => {
+    unmountedLandingCallback = callback;
+    return 42;
+  },
+  cancel: (handle) => cancelledLandingHandles.push(handle),
+});
+cancelUnmountedLanding();
+unmountedLandingCallback();
+assert.equal(
+  unmountedLandingNavigations,
+  0,
+  "effect cleanup must make an already-queued landing callback inert",
+);
+assert.deepEqual(cancelledLandingHandles, [42]);
+
+let readyLandingCallback;
+let readyLandingNavigations = 0;
+scheduleGuardedDefaultLanding({
+  isStillPending: () => true,
+  navigate: () => {
+    readyLandingNavigations += 1;
+  },
+  schedule: (callback) => {
+    readyLandingCallback = callback;
+    return 43;
+  },
+});
+readyLandingCallback();
+readyLandingCallback();
+assert.equal(
+  readyLandingNavigations,
+  1,
+  "a valid scheduled landing navigates exactly once",
+);
+assert.equal(
+  claimNotificationResponse({ ...notificationTap, actionIdentifier: "reply" }),
+  true,
+  "a distinct action on the same delivered notification remains actionable",
+);
+assert.equal(
+  claimNotificationResponse({
+    ...notificationTap,
+    notificationDate: notificationTap.notificationDate + 1,
+  }),
+  true,
+  "a later delivery may reuse an identifier without being suppressed",
+);
 
 const semanticBase = {
   userId: "user-a",
@@ -625,6 +871,14 @@ const webScheduleWorker = fs.readFileSync(
   "supabase/functions/web-personal-notifications/index.ts",
   "utf8",
 );
+const trustedWebPushMigration = fs.readFileSync(
+  "supabase/migrations/202609040004_trusted_web_push_endpoints.sql",
+  "utf8",
+);
+const trustedWebPushHelper = fs.readFileSync(
+  "supabase/functions/_shared/web-push-endpoint.ts",
+  "utf8",
+);
 const groupSettingsSource = fs.readFileSync("app/group-settings.tsx", "utf8");
 const useGroupNotificationEventsSource = fs.readFileSync(
   "src/cloud/useGroupNotificationEvents.ts",
@@ -810,7 +1064,7 @@ assert.match(workoutTimerSource, /timestamp: phaseTimestamp/);
 assert.match(workoutTimerSource, /action: WORKOUT_TIMER_NEXT/);
 assert.match(
   workoutTimerSource,
-  /const hasNext = !flow\.paused && flow\.index < flow\.steps\.length - 1[\s\S]{0,900}categoryIdentifier: hasNext[\s\S]{0,100}WORKOUT_TIMER_CATEGORY/,
+  /const hasNext = !flow\.paused && flow\.index < flow\.steps\.length - 1[\s\S]{0,1100}categoryIdentifier: hasNext[\s\S]{0,100}WORKOUT_TIMER_CATEGORY/,
   "native category selection must retain the proven pre-regression paused and final action layout",
 );
 assert.match(workoutTimerSource, /export const WORKOUT_TIMER_RESUME = "workout-resume"/);
@@ -983,7 +1237,7 @@ const healthMutationGate = healthBackgroundSource.slice(
 );
 assert.match(
   healthMutationGate,
-  /multiSetAppStateStorage[\s\S]{0,700}HEALTH_STATUS_STORAGE_KEY/,
+  /multiSetAppStateStorage[\s\S]{0,1600}AsyncStorage\.setItem\(\s*statusKey/,
   "background health state and its replacement checkpoint must complete in the same local mutation gate",
 );
 assert.match(
@@ -1542,6 +1796,56 @@ assert.doesNotMatch(settingsSource, /title="Goal recovery nudges"/);
 assert.match(settingsSource, /title="Logged tracker streaks"/);
 assert.match(settingsSource, /title="Leaderboard winners"/);
 assert.match(layoutSource, /syncWebReminderSchedule\(cycleStateRef\.current\)/);
+assert.match(layoutSource, /createNotificationResponseClaimGate\(\)/);
+assert.match(
+  layoutSource,
+  /if \(!active\) return;[\s\S]{0,320}!claimNotificationResponse\(/,
+  "unmounted and duplicate notification responses must be ignored before routing",
+);
+assert.match(
+  layoutSource,
+  /notificationResponseDisposition\([\s\S]{0,2400}router\.push[\s\S]{0,1200}clearLastNotificationResponseAsync/,
+  "a native response must wait for account readiness and clear only after routing",
+);
+assert.match(
+  layoutSource,
+  /shouldDeferWorkoutNotificationResponseClear\([\s\S]{0,2400}router\.push[\s\S]{0,1400}if \(deferClearToGym\) return;[\s\S]{0,500}clearLastNotificationResponseAsync/,
+  "root must route but retain an actionable iOS workout response for Gym",
+);
+assert.match(
+  gymSource,
+  /Platform\.OS !== "ios"[\s\S]{0,500}setPendingIosTimerResponses/,
+  "Gym must queue an actionable iOS response instead of applying it during cold mount",
+);
+assert.match(
+  gymSource,
+  /workoutNotificationActionDisposition\([\s\S]{0,500}disposition === "wait"[\s\S]{0,900}timerActionRef\.current/,
+  "Gym must wait for its restored draft before applying the iOS action",
+);
+assert.match(
+  gymSource,
+  /pendingIosTimerResponseAcks[\s\S]{0,9000}workoutDraftPersistenceRef\.current[\s\S]{0,800}flushLocalPersistence\(\)[\s\S]{0,900}clearLastNotificationResponseAsync/,
+  "Gym must durably persist the applied action before clearing Expo's handoff",
+);
+assert.match(
+  layoutSource,
+  /landingApplied\.current = true;[\s\S]{0,260}cancelDefaultLanding\.current\?\.\(\);[\s\S]{0,500}router\.push/,
+  "a notification tap must revoke a queued default landing before routing",
+);
+assert.match(
+  layoutSource,
+  /scheduleGuardedDefaultLanding\(\{[\s\S]{0,300}landingDecisionVersion\.current === decisionVersion/,
+  "the delayed landing callback must retain the current navigation decision",
+);
+assert.match(layoutSource, /setPendingNotificationResponse\(response\)/);
+assert.match(adapterSource, /accountId: ownerId/);
+assert.match(workoutTimerSource, /accountId: flow\.ownerId/);
+assert.match(liveTimerSource, /accountId: ownerId/);
+assert.match(
+  layoutSource,
+  /getLastNotificationResponseAsync\(\)[\s\S]{0,180}\.catch\(\(\) => undefined\)/,
+  "cold-start response lookup failures must not become unhandled rejections",
+);
 assert.match(layoutSource, /webReminderScheduleKey/);
 assert.match(layoutSource, /auth\.session\?\.user\.id !== auth\.user\.id/);
 assert.match(layoutSource, /Math\.min\(5 \* 60_000, 3_000 \* 2 \*\* attempt\)/);
@@ -1698,6 +2002,46 @@ assert.match(webScheduleWorker, /No active Web Push subscription is registered/)
 assert.match(webScheduleWorker, /gatewayAccepted === 0/);
 assert.match(webScheduleWorker, /status === 404 \|\| status === 410/);
 assert.match(webScheduleWorker, /preferenceAllowed/);
+for (const endpoint of [
+  "https://fcm.googleapis.com/fcm/send/example",
+  "https://updates.push.services.mozilla.com/wpush/v2/example",
+  "https://web.push.apple.com/example",
+  "https://wns2-db5p.notify.windows.com/w/?token=example",
+]) {
+  assert.equal(
+    isAllowedWebPushEndpoint(endpoint),
+    true,
+    `supported browser push endpoint was rejected: ${endpoint}`,
+  );
+}
+for (const endpoint of [
+  "http://fcm.googleapis.com/fcm/send/example",
+  "https://fcm.googleapis.com.evil.example/fcm/send/example",
+  "https://evilpush.apple.com/example",
+  "https://user@fcm.googleapis.com/fcm/send/example",
+  "https://fcm.googleapis.com:8443/fcm/send/example",
+  "https://127.0.0.1/push",
+  "https://[::1]/push",
+  "https://updates.push.services.mozilla.com/wpush#fragment",
+]) {
+  assert.equal(
+    isAllowedWebPushEndpoint(endpoint),
+    false,
+    `untrusted browser push endpoint was accepted: ${endpoint}`,
+  );
+}
+assert.match(trustedWebPushHelper, /hostnameInSuffix/);
+assert.match(trustedWebPushMigration, /web_push_subscriptions_trusted_endpoint_check/);
+assert.match(trustedWebPushMigration, /delete_exact_stale_web_push_subscriptions/);
+assert.match(trustedWebPushMigration, /registration_updated_at timestamptz/);
+assert.match(webScheduleWorker, /isAllowedWebPushEndpoint/);
+assert.match(webScheduleWorker, /registration_updated_at/);
+assert.match(webScheduleWorker, /delete_exact_stale_web_push_subscriptions/);
+assert.doesNotMatch(
+  webScheduleWorker,
+  /from\("web_push_subscriptions"\)[\s\S]{0,180}\.delete\(\)[\s\S]{0,120}\.in\("endpoint"/,
+  "personal reminder cleanup must never broadly delete a refreshed or reassigned endpoint",
+);
 assert.match(groupSettingsSource, /Personal alerts for this group/);
 assert.match(groupSettingsSource, /groupPreferencesByGroup/);
 assert.match(groupSettingsSource, /challengeCadence/);

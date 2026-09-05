@@ -55,7 +55,7 @@ type AuthContextValue = {
   signInWithPassword: (email: string, password: string) => Promise<void>;
   signUp: (email: string, password: string) => Promise<'confirmed' | 'verification-required'>;
   sendMagicLink: (email: string) => Promise<void>;
-  signInWithProvider: (provider: 'apple' | 'google') => Promise<void>;
+  signInWithProvider: (provider: 'google') => Promise<void>;
   requestPasswordReset: (email: string) => Promise<void>;
   updatePassword: (password: string) => Promise<void>;
   updateDisplayName: (name: string) => Promise<void>;
@@ -434,9 +434,15 @@ export function AuthProvider({ children }: PropsWithChildren) {
       if (error) throw error;
     },
     signInWithProvider: (provider) => {
+      if (Platform.OS === 'ios') {
+        const message =
+          'Third-party sign-in is unavailable in this iOS release. Use email and password or a magic link.';
+        setAuthError(message);
+        return Promise.reject(new Error(message));
+      }
       if (oauthAttemptRef.current) return oauthAttemptRef.current;
       setAuthError(null);
-      const providerName = provider === 'google' ? 'Google' : 'Apple';
+      const providerName = 'Google';
       const rawAttempt = (async () => {
         const client = requireClient();
         const redirectTo = callbackUrl();

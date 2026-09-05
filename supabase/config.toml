@@ -55,6 +55,10 @@ verify_jwt = false
 # The function performs membership authorization with auth.getUser.
 verify_jwt = false
 
+[functions.push-receipts]
+# The cron worker validates the shared high-entropy internal worker secret.
+verify_jwt = false
+
 [functions.fatsecret-food-search]
 # The function validates the bearer token with auth.getUser itself and keeps
 # the FatSecret client secret exclusively in Supabase's server environment.

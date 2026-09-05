@@ -1015,6 +1015,7 @@ for (const action of [
   "connect",
   "complete",
   "sync",
+  "setHistory",
   "refresh",
   "disconnect",
   "delete",
@@ -1034,6 +1035,17 @@ assert.ok(client.includes("importedCount: number"));
 assert.ok(client.includes("importedCount: parseCount(input.importedCount)"));
 assert.ok(client.includes("syncing: boolean"));
 assert.ok(client.includes("syncing: input.syncing === true"));
+assert.ok(client.includes("historyDays: HealthHistoryDays"));
+assert.match(
+  client,
+  /typeof input\.historyDays === "number"[\s\S]{0,100}\[0, 30, 90, 365, 730\]\.includes\(input\.historyDays\)/,
+  "the web client must preserve a server-returned zero selection",
+);
+assert.match(
+  client,
+  /action === "connect" \|\| action === "setHistory"[\s\S]{0,260}body\.historyDays = options\.historyDays/,
+  "connect and preference changes must send the selected history boundary",
+);
 assert.ok(client.includes("!/^[a-z0-9_-]+$/i.test(dataType)"));
 assert.ok(client.includes("!/^[a-z0-9_-]+$/i.test(code)"));
 assert.ok(!/CLIENT_SECRET|GOOGLE_HEALTH_SECRET|EXPO_PUBLIC_GOOGLE/i.test(client));
@@ -1063,8 +1075,25 @@ assert.ok(!card.includes("test user"));
 assert.ok(!card.includes("adult Google account"));
 assert.ok(card.includes("same Google Account as in the Google Health phone app"));
 assert.ok(card.includes("supervised or managed accounts"));
-assert.ok(card.includes("First sync imports up to 90 days"));
-assert.ok(card.includes("heart-rate averages up to 14 days"));
+assert.ok(card.includes("Today only always reads the current local day"));
+assert.ok(card.includes("will not be imported by a later automatic sync"));
+assert.ok(card.includes('[0, "Today only"]'));
+assert.ok(card.includes('[30, "30 days"]'));
+assert.ok(card.includes('[90, "90 days"]'));
+assert.ok(card.includes('[365, "1 year"]'));
+assert.ok(card.includes('[730, "2 years"]'));
+assert.ok(card.includes('invokeGoogleHealth("connect",'));
+assert.ok(card.includes("historyDays: localHistoryDays"));
+assert.ok(card.includes('invokeGoogleHealth("setHistory",'));
+assert.ok(card.includes("historyDays: days"));
+assert.match(
+  card,
+  /connection\.state === "disconnected"[\s\S]{0,500}updateSettings\(\{ healthHistoryDays:/,
+  "a confirmed server history boundary must be mirrored locally for reconnects",
+);
+assert.ok(card.includes("Google Health currently provides at most 90 days per category"));
+assert.ok(card.includes("14 days for heart-rate averages"));
+assert.ok(card.includes("Existing imports remain until you delete them"));
 assert.ok(!card.includes("allowlist"));
 assert.ok(!card.includes("7 days"));
 assert.ok(card.includes("processes signed Google Health updates every minute"));
@@ -1397,7 +1426,7 @@ assert.ok(!privacy.includes("opaque deletion and dismissal identifiers"));
 assert.ok(privacy.includes("Disconnect Google Health stops future access"));
 assert.ok(privacy.includes("Delete imported data stops access"));
 assert.ok(privacy.includes("account-detached encrypted revocation job is queued and retried"));
-assert.ok(privacy.includes("removes active Google access first"));
+assert.match(privacy, /removes active Google\s+access first/);
 assert.ok(privacy.includes("reports failure so the remaining work can be retried"));
 assert.ok(!privacy.includes("atomically removes HabHub&apos;s active Google credential"));
 assert.match(

@@ -25,6 +25,7 @@ const targetSources = new Map([
   ["personal-theme", "app/display-settings.tsx"],
   ["display-layout", "app/display-settings.tsx"],
   ["metric-detail-summary", "app/metric-detail.tsx"],
+  ["metric-detail-week", "app/metric-detail.tsx"],
   ["metric-detail-chart", "app/metric-detail.tsx"],
   ["screen-time-breakdown", "src/screenTime/ScreenTimeBreakdownCard.tsx"],
   ["screen-time-app-list", "src/screenTime/ScreenTimeBreakdownCard.tsx"],
@@ -56,6 +57,16 @@ assert.match(detail, /else startFast\(tracker\.id\);/);
 assert.match(
   detail,
   /actionId:\s*"tutorial\.fasting\.toggle",\s*scope:\s*"isolated-preview"/s,
+);
+assert.match(detail, /enabled=\{item\.id === "week"\}\s+id="metric-detail-week"/);
+assert.match(
+  detail,
+  /actionId:\s*"tutorial\.metric-detail\.open-week",\s*scope:\s*"isolated-preview"/s,
+);
+assert.match(
+  detail,
+  /dates\.length > 1[\s\S]*?<TutorialTarget id="metric-detail-chart">[\s\S]*?<Trend/,
+  "A range chart must expose the same real metric-detail chart target as the daily view.",
 );
 
 const editor = read("app/metric-editor.tsx");
@@ -110,7 +121,12 @@ for (const actionId of [
     `${actionId} must remain declared by the curriculum`,
   );
 }
+assert.match(
+  read("src/tutorial/basicGuide.ts"),
+  /actionId:\s*"tutorial\.metric-detail\.open-week"/,
+  "The essential guide must require the real weekly-history control.",
+);
 
 console.log(
-  `Tutorial settings and metric anchors validated: ${targetSources.size} targets and 2 observed actions.`,
+  `Tutorial settings and metric anchors validated: ${targetSources.size} targets and 3 observed actions.`,
 );

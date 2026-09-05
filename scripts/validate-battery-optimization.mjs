@@ -13,6 +13,13 @@ const backgroundSource = read("src/health/background.native.ts");
 const exactBridgeSource = read("src/notifications/exactAlarm.ts");
 const appConfig = read("app.json");
 const pluginConfig = read("plugins/withHabHubAndroid.js");
+const workspaceConfig = read("pnpm-workspace.yaml");
+const installedAndroidBackgroundScheduler = read(
+  "node_modules/expo-background-task/android/src/main/java/expo/modules/backgroundtask/BackgroundTaskScheduler.kt",
+);
+const installedIosBackgroundScheduler = read(
+  "node_modules/expo-background-task/ios/BackgroundTaskScheduler.swift",
+);
 
 assert.match(nativeSource, /PowerManager/);
 assert.match(nativeSource, /isIgnoringBatteryOptimizations/);
@@ -82,6 +89,21 @@ assert.match(
   /await pushCloudRecentActivity\([\s\S]{0,180}changedDates/,
   "A successful signed-in background import must publish its compact group freshness update",
 );
+assert.match(
+  workspaceConfig,
+  /expo-background-task@1\.0\.10:\s+patches\/expo-background-task@1\.0\.10\.patch/,
+  "the offline health-import scheduler patch must stay pinned in pnpm",
+);
+assert.doesNotMatch(
+  installedAndroidBackgroundScheduler,
+  /setRequiredNetworkType\(NetworkType\.CONNECTED\)/,
+  "Android connectivity must not block a device-local Health Connect import",
+);
+assert.match(
+  installedIosBackgroundScheduler,
+  /requiresNetworkConnectivity = false/,
+  "iOS connectivity must not block a device-local HealthKit import",
+);
 
 const effectStart = settingsSource.indexOf(
   "useEffect(() => {",
@@ -105,7 +127,12 @@ assert.match(exactBridgeSource, /openExactAlarmSettings/);
 assert.match(appConfig, /android\.permission\.SCHEDULE_EXACT_ALARM/);
 assert.match(pluginConfig, /android\.permission\.SCHEDULE_EXACT_ALARM/);
 assert.match(settingsSource, /onPress=\{reviewExactAlarmTiming\}/);
+assert.match(
+  appConfig,
+  /"expo-background-task"/,
+  "the Expo background-task config plugin must add iOS processing mode and its permitted task identifier",
+);
 
 console.log(
-  "Android battery-optimization status and user-initiated settings route validated.",
+  "Android battery optimization, offline native health scheduling, and user-initiated settings routes validated.",
 );

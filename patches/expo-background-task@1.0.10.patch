@@ -1,0 +1,33 @@
+diff --git a/android/src/main/java/expo/modules/backgroundtask/BackgroundTaskScheduler.kt b/android/src/main/java/expo/modules/backgroundtask/BackgroundTaskScheduler.kt
+--- a/android/src/main/java/expo/modules/backgroundtask/BackgroundTaskScheduler.kt
++++ b/android/src/main/java/expo/modules/backgroundtask/BackgroundTaskScheduler.kt
+@@ -7,7 +7,6 @@ import androidx.work.Constraints
+ import androidx.work.Data
+ import androidx.work.ExistingPeriodicWorkPolicy
+ import androidx.work.ExistingWorkPolicy
+-import androidx.work.NetworkType
+ import androidx.work.OneTimeWorkRequestBuilder
+ import androidx.work.Operation
+ import androidx.work.PeriodicWorkRequestBuilder
+@@ -90,6 +89,7 @@ object BackgroundTaskScheduler {
+     val data = Data.Builder()
+       .putString("appScopeKey", appScopeKey)
+       .build()
+-    val constraints = Constraints.Builder()
+-      .setRequiredNetworkType(NetworkType.CONNECTED)
+-      .build()
++    // Task consumers may do device-local work that does not require internet.
++    // HabHub reads Health Connect first and treats cloud publication as a
++    // best-effort follow-up, so connectivity must not block the local import.
++    val constraints = Constraints.Builder().build()
+diff --git a/ios/BackgroundTaskScheduler.swift b/ios/BackgroundTaskScheduler.swift
+--- a/ios/BackgroundTaskScheduler.swift
++++ b/ios/BackgroundTaskScheduler.swift
+@@ -108,3 +108,5 @@ public class BackgroundTaskScheduler {
+-    // We'll require network but accept running on battery power.
+-    request.requiresNetworkConnectivity = true
++    // Task consumers may do device-local work that does not require internet.
++    // HabHub reads HealthKit first and treats cloud publication as a
++    // best-effort follow-up, so connectivity must not block the local import.
++    request.requiresNetworkConnectivity = false
+     request.requiresExternalPower = false

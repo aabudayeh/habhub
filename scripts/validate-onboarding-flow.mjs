@@ -1,9 +1,32 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 
-import { shouldWaitForOnboardingAuthority } from "../src/domain/onboarding.ts";
+import {
+  selectedOnboardingHealthDataTypes,
+  shouldWaitForOnboardingAuthority,
+  syncOnboardingProfileBestEffort,
+} from "../src/domain/onboarding.ts";
+
+assert.deepEqual(
+  selectedOnboardingHealthDataTypes(
+    [
+      { templateId: "steps", healthMapping: { dataType: "steps" } },
+      { templateId: "weight", healthMapping: { dataType: "weight" } },
+      {
+        templateId: "blood_pressure_systolic",
+        healthMapping: { dataType: "blood_pressure" },
+        submetrics: [{ healthMapping: { dataType: "heart_rate" } }],
+      },
+      { templateId: "deficit" },
+    ],
+    ["steps", "blood_pressure_systolic", "deficit"],
+  ),
+  ["steps", "blood_pressure", "heart_rate", "total_energy"],
+  "first-run health consent must include only selected tracker data and hidden formula dependencies",
+);
 
 const source = fs.readFileSync("app/onboarding.tsx", "utf8");
+const settingsSource = fs.readFileSync("app/settings.tsx", "utf8");
 const rootSource = fs.readFileSync("app/_layout.tsx", "utf8");
 const guideSource = fs.readFileSync("src/components/TutorialSpotlight.tsx", "utf8");
 const basicGuideSource = fs.readFileSync("src/tutorial/basicGuide.ts", "utf8");
@@ -21,7 +44,30 @@ const onboardingTranslationSource = fs.readFileSync(
   "utf8",
 );
 
+assert.match(
+  rootSource,
+  /\(auth\.status === "signedIn" \|\| auth\.status === "demo"\) &&[\s\S]{0,80}onboardingDone &&[\s\S]{0,80}rootSegment === "onboarding"/,
+  "Completed demo/no-cloud onboarding must leave /onboarding before the tutorial sandbox mounts.",
+);
+
 assert.match(source, /useState<0 \| 1 \| 2 \| 3 \| 4>\(0\)/);
+assert.match(source, /useState<OnboardingMode \| null>\([\s\S]{0,40}null/);
+assert.match(source, /WELCOME TO HABHUB/);
+assert.match(source, /title="Guided setup"/);
+assert.match(source, /title="Quick setup"/);
+assert.match(source, /badge="RECOMMENDED"/);
+assert.match(source, /chooseOnboardingMode\("guided"\)/);
+assert.match(source, /chooseOnboardingMode\("classic"\)/);
+assert.doesNotMatch(
+  source,
+  /if \(enabling\) \{\s*setLandingPage\("group"\)/,
+  "Choosing the friends goal must not silently replace Today as the default landing page.",
+);
+assert.match(
+  source,
+  /function chooseOnboardingMode\(mode: OnboardingMode\)[\s\S]{0,120}setStartShortTour\(mode === "guided"\)/,
+  "Guided setup must recommend the tutorial while classic setup keeps it optional.",
+);
 assert.match(source, /\{step \+ 1\}\/5/);
 assert.match(source, /ProgressBar progress=\{\(step \+ 1\) \/ 5\}/);
 for (const [step, title] of [
@@ -71,6 +117,28 @@ assert.match(connectionPage, /Apple Health/);
 assert.match(connectionPage, /Health Connect/);
 assert.match(connectionPage, /Health history/);
 assert.match(connectionPage, /healthHistoryDays === days/);
+assert.match(connectionPage, /\[0, "Today only"\]/);
+assert.match(
+  connectionPage,
+  /Today only always reads the current day[\s\S]{0,120}will not be imported later/,
+  "onboarding must disclose that zero history cannot catch up a missed prior day",
+);
+assert.match(
+  connectionPage,
+  /if \(days === 0\) setStartHealthGoalsFromHistory\(false\)/,
+  "Today-only must not offer to derive goal starts from nonexistent history",
+);
+assert.match(
+  source,
+  /if \(healthReady\)[\s\S]{0,100}health\.setHealthHistoryDays\(healthHistoryDays\)/,
+  "finishing onboarding must apply a selection changed after native connection",
+);
+assert.match(settingsSource, /\[0, "Today only"\]/);
+assert.match(
+  settingsSource,
+  /health\.setHealthHistoryDays\(days\)/,
+  "native Settings must use the provider's atomic history-preference transition",
+);
 assert.match(connectionPage, /startHealthGoalsFromHistory/);
 assert.match(connectionPage, /Open HabHub on/);
 assert.match(connectionPage, /Start in dark mode/);
@@ -131,10 +199,36 @@ assert.doesNotMatch(
 );
 assert.match(source, /darkMode: state\.settings\.darkMode/);
 assert.match(source, /updateSettings\(\{ darkMode: draft\.darkMode \}\)/);
+assert.match(source, /setOnboardingMode\(draft\.onboardingMode\)/);
+assert.match(source, /setShowGoalsToday\(draft\.showGoalsToday\)/);
+assert.match(source, /setShowTodosToday\(draft\.showTodosToday\)/);
+assert.match(source, /What should Today show\?/);
+assert.match(source, /value=\{showGoalsToday\}/);
+assert.match(source, /value=\{showTodosToday\}/);
+assert.match(
+  source,
+  /updateSettings\(\{[\s\S]*?showGoalsToday,[\s\S]*?showTodosToday,[\s\S]*?defaultLandingPage: landingPage/,
+  "Today visibility choices must be committed with the rest of onboarding settings.",
+);
 assert.match(source, /tutorialGuideId: shortTour \? "essential" : undefined/);
 assert.match(source, /tutorialComplete: !shortTour/);
 assert.match(source, /onboardingVersion: ONBOARDING_FLOW_VERSION/);
-assert.match(source, /await saveDisplayName\(\)/);
+assert.match(source, /const name = saveDisplayNameLocally\(\)/);
+assert.match(
+  source,
+  /await syncDisplayNameBestEffort\(name\)/,
+  "Auth metadata sync must be bounded and non-fatal after local onboarding persistence.",
+);
+assert.doesNotMatch(
+  source,
+  /await auth\.updateDisplayName/,
+  "A remote profile request must never directly gate onboarding completion.",
+);
+assert.match(
+  source,
+  /isAccountCurrent: \(\) =>[\s\S]{0,100}onboardingMountedRef\.current[\s\S]{0,100}currentAuthUserIdRef\.current === expectedUserId/,
+  "A best-effort retry must stop after unmount or an account boundary.",
+);
 assert.match(
   source,
   /function compactOnboardingName[\s\S]*?normalized === generatedAlias[\s\S]*?firstDisplayName\(normalized\)[\s\S]*?setDisplayName\([\s\S]*?compactOnboardingName\(draft\.displayName, generatedAccountAlias\)[\s\S]*?const name =[\s\S]*?compactOnboardingName\(displayName, generatedAccountAlias\)/,
@@ -146,6 +240,12 @@ assert.match(
   "Provider full names use the first name while generated friendly aliases keep both words",
 );
 assert.match(source, /startTrackedGoalsAtFirstData:[\s\S]*?startHealthGoalsFromHistory/);
+assert.match(source, /dataTypes: onboardingHealthDataTypes/);
+assert.match(
+  fs.readFileSync("src/health/HealthSyncProvider.tsx", "utf8"),
+  /options\?\.dataTypes[\s\S]{0,220}new Set\(options\.dataTypes\)[\s\S]{0,4000}dataTypes: options\?\.dataTypes[\s\S]{0,500}dataTypes\.includes\(type\)/,
+  "native permissions and the persisted sync scope must use the onboarding selection",
+);
 assert.match(
   source,
   /configurePersonalMetrics\([\s\S]*?startHealthGoalsFromHistory \? "history" : "today"/,
@@ -153,7 +253,7 @@ assert.match(
 );
 assert.match(
   source,
-  /id === "friends"[\s\S]*?if \(enabling\)[\s\S]*?setLandingPage\("group"\)[\s\S]*?landingPage === "group"[\s\S]*?setLandingPage\("index"\)/,
+  /id === "friends"[\s\S]*?!enabling && landingPage === "group"[\s\S]*?setLandingPage\("index"\)/,
   "Removing Friends must not preserve a hidden Leaderboard landing page",
 );
 
@@ -216,6 +316,7 @@ const markerIndex = source.indexOf("await markOnboardingCompleted(accountId);");
 const completionIndex = source.indexOf("updateSettings({ onboardingComplete: true });");
 const secondFlushIndex = source.indexOf("await flushLocalPersistence();", firstFlushIndex + 1);
 const clearDraftIndex = source.indexOf("await clearOnboardingDraft(accountId);");
+const profileSyncIndex = source.indexOf("await syncDisplayNameBestEffort(name);");
 const routeIndex = source.indexOf("setCompletionRoute(route);");
 assert.ok(
   firstFlushIndex >= 0 &&
@@ -223,14 +324,25 @@ assert.ok(
     markerIndex < completionIndex &&
     completionIndex < secondFlushIndex &&
     secondFlushIndex < clearDraftIndex &&
-    clearDraftIndex < routeIndex,
+    clearDraftIndex < profileSyncIndex &&
+    profileSyncIndex < routeIndex &&
+    routeIndex >= 0,
   "Configured data, completion marker, and cleared draft must be durable before navigation",
 );
 
-assert.match(storageSource, /ONBOARDING_FLOW_VERSION = 3/);
+assert.match(storageSource, /ONBOARDING_FLOW_VERSION = 4/);
 assert.match(storageSource, /DRAFT_PREFIX = "metric-rally-onboarding-draft-v3:"/);
+assert.match(storageSource, /export type OnboardingMode = "guided" \| "classic"/);
+assert.match(storageSource, /onboardingMode: OnboardingMode/);
+assert.match(storageSource, /showGoalsToday: boolean/);
+assert.match(storageSource, /showTodosToday: boolean/);
 assert.match(storageSource, /step: 0 \| 1 \| 2 \| 3 \| 4/);
 assert.match(storageSource, /draft\.version === ONBOARDING_FLOW_VERSION/);
+assert.match(
+  storageSource,
+  /draft\.version === 3[\s\S]*?onboardingMode: draft\.onboardingMode \?\? "classic"[\s\S]*?showGoalsToday: draft\.showGoalsToday \?\? true[\s\S]*?showTodosToday: draft\.showTodosToday \?\? true/,
+  "Existing version-3 drafts must migrate into the classic path without losing setup progress.",
+);
 assert.match(storageSource, /completedAt: new Date\(\)\.toISOString\(\)/);
 
 assert.match(rootSource, /const cloudAccountHydrating = shouldWaitForOnboardingAuthority/);
@@ -265,26 +377,86 @@ assert.equal(
   false,
 );
 
+let retryAttempts = 0;
+const retryResult = await syncOnboardingProfileBestEffort({
+  sync: async () => {
+    retryAttempts += 1;
+    if (retryAttempts === 1) throw new Error("temporary network failure");
+  },
+  isAccountCurrent: () => true,
+  attemptTimeoutMs: 100,
+  retryDelayMs: 0,
+});
+assert.deepEqual(retryResult, { status: "synced", attempts: 2 });
+
+let failedAttempts = 0;
+const failedResult = await syncOnboardingProfileBestEffort({
+  sync: async () => {
+    failedAttempts += 1;
+    throw new Error("offline");
+  },
+  isAccountCurrent: () => true,
+  attemptTimeoutMs: 100,
+  retryDelayMs: 0,
+});
+assert.equal(failedResult.status, "deferred");
+assert.equal(failedResult.reason, "failed");
+assert.equal(failedResult.attempts, 2);
+assert.equal(failedAttempts, 2);
+
+let accountCurrent = true;
+const accountChangedResult = await syncOnboardingProfileBestEffort({
+  sync: async () => {
+    accountCurrent = false;
+    throw new Error("session changed");
+  },
+  isAccountCurrent: () => accountCurrent,
+  attemptTimeoutMs: 100,
+  retryDelayMs: 0,
+});
+assert.equal(accountChangedResult.status, "deferred");
+assert.equal(accountChangedResult.reason, "account_changed");
+assert.equal(accountChangedResult.attempts, 1);
+
+let timeoutAttempts = 0;
+const timeoutResult = await syncOnboardingProfileBestEffort({
+  sync: () => {
+    timeoutAttempts += 1;
+    return new Promise(() => undefined);
+  },
+  isAccountCurrent: () => true,
+  attemptTimeoutMs: 5,
+  retryDelayMs: 0,
+});
+assert.equal(timeoutResult.status, "deferred");
+assert.equal(timeoutResult.reason, "timed_out");
+assert.equal(timeoutResult.attempts, 1);
+assert.equal(timeoutAttempts, 1, "A timed-out in-flight update must not be duplicated.");
+
 assert.match(basicGuideSource, /export const BASIC_TUTORIAL_GUIDE/);
 const basicSteps = basicGuideSource.slice(
   basicGuideSource.indexOf("steps: ["),
   basicGuideSource.indexOf("export const DEFAULT_TUTORIAL_GUIDES"),
 );
 assert.ok(
-  [...basicSteps.matchAll(/\n      target: /g)].length >= 9,
-  "Onboarding must retain a basic walkthrough across the essential app pages",
+  [...basicSteps.matchAll(/\n      id: /g)].length === 10,
+  "Onboarding must keep the essential guide to ten focused steps",
 );
 for (const target of [
   "today-hero",
-  "log-header",
-  "progress-modes",
-  "leaderboard-cards",
-  "workout-modes",
-  "chat-header",
-  "menu-profile",
+  "today-tracker-list",
+  "today-steps-tracker",
+  "metric-detail-summary",
+  "metric-detail-week",
+  "metric-detail-chart",
+  "menu-button",
+  "menu-display",
   "display-layout",
 ])
   assert.match(basicSteps, new RegExp(`target: "${target}"`));
+assert.match(basicSteps, /actionId: "tutorial\.today\.open-tracker"/);
+assert.match(basicSteps, /actionId: "tutorial\.metric-detail\.open-week"/);
+assert.match(basicSteps, /\/metric-detail\?metric=steps&period=week/);
 assert.match(tutorialContextSource, /tutorialComplete:/);
 assert.match(
   tutorialContextSource,
@@ -323,5 +495,5 @@ assert.ok(
 );
 
 console.log(
-  "Five-page durable onboarding and the single non-mutating basic guide validated.",
+  "Guided/classic durable onboarding and the ten-step non-mutating basic guide validated.",
 );

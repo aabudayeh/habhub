@@ -63,7 +63,11 @@ function AtlasCell({
   return (
     <Image
       fadeDuration={0}
-      resizeMode="stretch"
+      // The sprite is a 2x normalized source at the largest runtime size.
+      // Decode it at full resolution before the uniform downscale on Android
+      // so fine contour and shading detail are not discarded up front.
+      resizeMethod="scale"
+      resizeMode="contain"
       source={spriteSource(blend.variant, sample)}
       style={[
         styles.atlasImage,

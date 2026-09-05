@@ -14,6 +14,7 @@ import {
   photoWeightLabel,
   PHOTO_VIDEO_SPEEDS,
 } from "../src/domain/photoProgress.ts";
+import { refreshDefaultDemoFixtures } from "../src/domain/demoFixtures.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (relativePath) =>
@@ -79,6 +80,9 @@ assert.equal(photoVideoSpeedAtOffset(100, 100), 20);
 assert.equal(photoIndexAtOffset(50, 100, 5), 2);
 
 const seed = read("src/data/seed.ts");
+const demoAssets = read("src/data/demoAssets.ts");
+const demoFixtures = read("src/domain/demoFixtures.ts");
+const appProvider = read("src/state/AppProvider.tsx");
 const migration = read("src/domain/stateMigration.ts");
 const studio = read("src/components/PhotoComparisonStudio.tsx");
 const weightSlider = read("src/components/WeightQuickSlider.tsx");
@@ -89,6 +93,172 @@ const metricDetail = read("app/metric-detail.tsx");
 const logScreen = read("app/(tabs)/log.tsx");
 const memberComparison = read("app/member/[id].tsx");
 assert.match(seed, /id: "progress_photo",[\s\S]{0,80}name: "Photo progress"/);
+for (let index = 1; index <= 5; index += 1) {
+  const filename = `assets/demo/progress-${String(index).padStart(2, "0")}.jpg`;
+  const size = fs.statSync(path.join(root, filename)).size;
+  assert.ok(size > 50_000 && size < 500_000, `${filename} must be a production-sized bundled JPEG`);
+  assert.match(demoAssets, new RegExp(`progress-${String(index).padStart(2, "0")}\\.jpg`));
+}
+assert.doesNotMatch(demoAssets, /progress-[abc]\.jpg/);
+assert.match(demoAssets, /DEMO_MEAL_URI[\s\S]{0,100}meal-breakfast\.jpg/);
+assert.match(demoAssets, /DEMO_WORKOUT_SHARE_URI[\s\S]{0,100}workout-share\.jpg/);
+assert.match(
+  seed,
+  /imageUri: DEMO_MEAL_URI/,
+  "The demo food log must use dedicated meal media.",
+);
+assert.match(
+  seed,
+  /imageUri: DEMO_WORKOUT_SHARE_URI/,
+  "The demo chat must use dedicated workout-share media.",
+);
+assert.doesNotMatch(
+  seed,
+  /imageUri: DEMO_PROGRESS_URIS/,
+  "Progress photos must never be reused as food, journal, or chat attachments.",
+);
+assert.match(
+  seed,
+  /function demoPhotos\(\)[\s\S]{0,900}userId: "ahmad"/,
+  "The one-person demo photo sequence must belong only to the matching demo profile.",
+);
+assert.match(seed, /demoContentVersion: 5/);
+assert.match(
+  appProvider,
+  /const refreshDefaultDemo =[\s\S]{0,260}demoContentVersion/,
+  "Existing disposable demo snapshots must refresh to the production fixture without touching account groups.",
+);
+assert.match(
+  appProvider,
+  /isMissingDefaultDemoStatus[\s\S]{0,900}restoredDemoStatusKeys/,
+  "A partially upgraded demo snapshot must self-heal missing leaderboard projections.",
+);
+assert.match(
+  appProvider,
+  /const refreshedDemoFixtures = refreshDefaultDemo[\s\S]{0,120}refreshDefaultDemoFixtures\(restored, defaults\)/,
+);
+assert.match(appProvider, /entries:\s*refreshedDemoFixtures[\s\S]{0,80}refreshedDemoFixtures\.entries/);
+assert.match(appProvider, /photos:\s*refreshedDemoFixtures[\s\S]{0,80}refreshedDemoFixtures\.photos/);
+assert.match(
+  appProvider,
+  /dailyMetricStatuses:\s*refreshedDemoFixtures[\s\S]{0,100}refreshedDemoFixtures\.dailyMetricStatuses/,
+  "A demo fixture upgrade must install privacy-safe group projections for the showcase leaderboard.",
+);
+assert.match(demoFixtures, /function replaceDemoStatuses/);
+assert.match(
+  seed,
+  /function demoSharedStatuses[\s\S]{0,2400}privacyProjectionVersion: 2/,
+  "Shared demo values must use the same explicit privacy projection contract as cloud leaderboard data.",
+);
+assert.doesNotMatch(
+  appProvider,
+  /refreshDefaultDemo\s*\?\s*defaults\.(?:entries|photos|todos|journalNotes|calendarReminders|gymPlans|gymSessions|messages|energyProfiles)/,
+  "A demo-version bump must never replace an entire account-owned collection.",
+);
+assert.match(demoFixtures, /DEFAULT_DEMO_ENTRY_ID/);
+assert.match(demoFixtures, /DEFAULT_DEMO_PHOTO_ID/);
+
+const profile = (weightKg) => ({
+  age: 30,
+  sex: "male",
+  heightCm: 178,
+  weightKg,
+  targetWeightKg: 80,
+  activityLevel: "light",
+  desiredWeeklyLossKg: 0.5,
+});
+const personalRecords = {
+  entries: { id: "entry-1720000000000-personal" },
+  photos: { id: "photo-1720000000000-personal" },
+  todos: { id: "todo-1720000000000-personal" },
+  journalNotes: { id: "note-1720000000000-personal" },
+  calendarReminders: { id: "calendar-1720000000000-personal" },
+  gymPlans: { id: "plan-1720000000000-personal" },
+  gymSessions: { id: "session-1720000000000-personal" },
+  messages: { id: "message-1720000000000-personal" },
+};
+const currentFixtures = {
+  entries: { id: "2026-09-04-ahmad-steps", fixtureVersion: 2 },
+  photos: { id: "demo-photo-ahmad-2026-09-04", fixtureVersion: 2 },
+  todos: { id: "demo-todo-morning-walk", fixtureVersion: 2 },
+  journalNotes: { id: "demo-journal-weekly-review", fixtureVersion: 2 },
+  calendarReminders: { id: "demo-reminder-water", fixtureVersion: 2 },
+  gymPlans: { id: "demo-plan-full-body", fixtureVersion: 2 },
+  gymSessions: { id: "demo-session-2026-09-04", fixtureVersion: 2 },
+  messages: { id: "welcome", fixtureVersion: 2 },
+};
+const legacyFixtures = {
+  entries: { id: "2026-07-01-ahmad-steps", fixtureVersion: 1 },
+  photos: { id: "demo-photo-maya-2026-07-01", fixtureVersion: 1 },
+  todos: { id: "demo-todo-retired", fixtureVersion: 1 },
+  journalNotes: { id: "demo-journal-retired", fixtureVersion: 1 },
+  calendarReminders: { id: "demo-reminder-retired", fixtureVersion: 1 },
+  gymPlans: { id: "demo-plan-retired", fixtureVersion: 1 },
+  gymSessions: { id: "demo-session-2026-07-01", fixtureVersion: 1 },
+  messages: { id: "sarah-message", fixtureVersion: 1 },
+};
+const customizedProfile = profile(87.3);
+const customMemberProfile = profile(91.2);
+const customExerciseGoal = { targetWeightKg: 127.5, targetReps: 5 };
+const restoredDemoState = {
+  currentUserId: "ahmad",
+  settings: { energyProfile: customizedProfile },
+  energyProfiles: {
+    ahmad: profile(89.9),
+    "custom-member": customMemberProfile,
+  },
+  gymExerciseGoals: {
+    back_squat: customExerciseGoal,
+    custom_lift: { targetReps: 12 },
+  },
+  ...Object.fromEntries(
+    Object.keys(personalRecords).map((key) => [
+      key,
+      [legacyFixtures[key], currentFixtures[key], personalRecords[key]],
+    ]),
+  ),
+};
+const defaultDemoState = {
+  currentUserId: "ahmad",
+  settings: { energyProfile: profile(88.1) },
+  energyProfiles: { ahmad: profile(88.1), sarah: profile(68) },
+  gymExerciseGoals: {
+    back_squat: { targetWeightKg: 82.5, targetReps: 8 },
+  },
+  ...Object.fromEntries(
+    Object.keys(currentFixtures).map((key) => [key, [currentFixtures[key]]]),
+  ),
+};
+const refreshedFixtures = refreshDefaultDemoFixtures(
+  restoredDemoState,
+  defaultDemoState,
+);
+for (const [key, personalRecord] of Object.entries(personalRecords)) {
+  assert.strictEqual(
+    refreshedFixtures[key].find((item) => item.id === personalRecord.id),
+    personalRecord,
+    `${key} must preserve the exact user-created record during a demo refresh.`,
+  );
+  assert.deepEqual(
+    refreshedFixtures[key].filter((item) => item.fixtureVersion).map((item) => item.fixtureVersion),
+    [2],
+    `${key} must replace known current/legacy fixture ids with only the latest fixture.`,
+  );
+}
+assert.strictEqual(refreshedFixtures.energyProfiles.ahmad, customizedProfile);
+assert.strictEqual(
+  refreshedFixtures.energyProfiles["custom-member"],
+  customMemberProfile,
+);
+assert.ok(refreshedFixtures.energyProfiles.sarah);
+assert.strictEqual(
+  refreshedFixtures.gymExerciseGoals.back_squat,
+  customExerciseGoal,
+  "A user-edited goal on a seeded exercise must win over the new fixture.",
+);
+assert.deepEqual(refreshedFixtures.gymExerciseGoals.custom_lift, {
+  targetReps: 12,
+});
 assert.match(migration, /metric\.id === "progress_photo"[\s\S]{0,120}name: "Photo progress"/);
 assert.match(
   seed,

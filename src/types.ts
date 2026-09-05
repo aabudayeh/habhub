@@ -976,6 +976,9 @@ export type HealthSyncSettings = {
   initialHistoryImportPending?: boolean;
 };
 
+/** Connected-health history selection; zero always restricts reads to today. */
+export type HealthHistoryDays = 0 | 30 | 90 | 365 | 730;
+
 export type HealthSourcePreference = {
   /** Raw Health Connect package id or HealthKit source name. */
   origin: string;
@@ -1092,8 +1095,8 @@ export type UserSettings = {
   healthSync: HealthSyncSettings;
   /** Private account rules for workout-to-Step coverage; never group-published. */
   stepCoveragePreferences?: StepCoveragePreferences;
-  /** Explicit repair window; routine sync always uses a small overlap. */
-  healthHistoryDays?: 30 | 90 | 365 | 730;
+  /** Explicit repair window; zero reads only the current local day. */
+  healthHistoryDays?: HealthHistoryDays;
   banterTone: BanterTone;
   autoMessages: boolean;
   cheerMessage: string;
@@ -1238,6 +1241,8 @@ export type UserSettings = {
   onboardingComplete: boolean;
   /** Persisted schema marker for account-safe first-run setup. */
   onboardingVersion?: number;
+  /** Refreshes only the disposable built-in demo fixtures, never account data. */
+  demoContentVersion?: number;
   tutorialComplete: boolean;
   advancedTutorialComplete: boolean;
   /** Active basic-guide replay selected from Quick Guide. */

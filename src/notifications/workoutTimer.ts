@@ -930,6 +930,7 @@ async function presentFlow(flow: StoredWorkoutFlow) {
         : step.body,
       data: {
         route: "/gym",
+        accountId: flow.ownerId,
         workoutTimer: true,
         workoutOwnerId: flow.ownerId,
         workoutGeneration: flow.generation,

@@ -48,6 +48,7 @@ export type PaceAlert = {
 export function buildAlerts(
   state: AppState,
   groupNotificationEvents: GroupNotificationEvent[] = [],
+  blockedUserIds: ReadonlySet<string> = new Set(),
 ): PaceAlert[] {
   const today = dateKey();
   const yesterday = dateKeyWithOffset(-1);
@@ -208,6 +209,7 @@ export function buildAlerts(
     : [];
   const messages = state.messages
     .filter((message) => {
+      if (blockedUserIds.has(message.senderId)) return false;
       const conversation = message.conversationId ?? "group";
       return (
         conversation === `group:${state.group.id}` ||
@@ -316,8 +318,10 @@ export function buildAlerts(
       if (
         event.kind === "social_reaction" ||
         event.kind === "social_comment"
-      )
+      ) {
+        if (event.actorId && blockedUserIds.has(event.actorId)) return false;
         return socialReactionsEnabled;
+      }
       if (
         (event.kind === "challenge_invitation" ||
           event.kind === "challenge_accepted" ||

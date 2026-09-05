@@ -432,6 +432,10 @@ const hook = fs.readFileSync(
   path.join(root, "src", "cloud", "useGroupChallenges.ts"),
   "utf8",
 );
+const demoChallenges = fs.readFileSync(
+  path.join(root, "src", "data", "demoChallenges.ts"),
+  "utf8",
+);
 const cloud = fs.readFileSync(
   path.join(root, "src", "cloud", "groupChallenges.ts"),
   "utf8",
@@ -588,6 +592,16 @@ assert.match(
 );
 assert.match(hook, /sendGroupChallengeStartedPush\(saved\)/);
 assert.match(hook, /sendGroupChallengeAcceptedPush/);
+assert.match(
+  demoChallenges,
+  /demo-challenge-step-showdown[\s\S]*demo-challenge-hydration[\s\S]*demo-challenge-strong-start/,
+  "credential-free demo data must cover active, invited, and completed challenges",
+);
+assert.match(
+  hook,
+  /readDefaultDemoChallenges\(\)\.filter\([\s\S]{0,180}localDemoMetricIds\.has\(challenge\.metricId\)/,
+  "demo challenges must never render against a tracker hidden from the Leaderboard",
+);
 assert.match(
   hook,
   /subscribePrivateBroadcast\([\s\S]{0,100}`group:\$\{groupId\}:challenges`[\s\S]{0,80}"challenges_updated"/,

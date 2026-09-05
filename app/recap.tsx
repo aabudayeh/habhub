@@ -23,9 +23,13 @@ import { AppText as Text, AppTextInput as TextInput } from "@/src/components/App
 import { CheerIcon } from "@/src/components/CheerIcon";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import { DateRangeNavigator, PeriodChoiceBar } from "@/src/components/PeriodNavigator";
+import { SafetyReportSheet } from "@/src/components/SafetyReportSheet";
 import { useResponsiveRecapFeed } from "@/src/components/useResponsiveRecapFeed";
 import { Avatar, Card, Chip, IconButton, PageHeader, Screen } from "@/src/components/ui";
-import { GroupSocialReactionKind } from "@/src/cloud/groupSocial";
+import {
+  GroupSocialComment,
+  GroupSocialReactionKind,
+} from "@/src/cloud/groupSocial";
 import { useCloudSyncActions } from "@/src/cloud/CloudSyncProvider";
 import { useGroupChallenges } from "@/src/cloud/useGroupChallenges";
 import { useGroupSocialEngagement } from "@/src/cloud/useGroupSocialEngagement";
@@ -41,11 +45,13 @@ import {
   RecapScope,
 } from "@/src/domain/recaps";
 import type { GroupSocialTargetType } from "@/src/domain/groupSocialTarget";
-import { useLocale, useTranslation } from "@/src/i18n";
+import { LocalizedAlert as Alert, useLocale, useTranslation } from "@/src/i18n";
+import { useUserSafety } from "@/src/safety/userSafety";
 import { useApp } from "@/src/state/AppProvider";
 import { stageChatShareImage } from "@/src/storage/chatShareImageStaging";
 import type { Member } from "@/src/types";
 import { palette, shadow, useAppColors, useGroupAccent } from "@/src/theme";
+import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 
 type FeedFilter = "all" | "logs" | "wins" | "badges" | "challenges";
 const feedFilters: { id: FeedFilter; label: string }[] = [
@@ -282,6 +288,8 @@ export default function StoryRecapScreen() {
 export function GroupRecapFeedScreen() {
   const { state, updateSettings } = useApp();
   const cloud = useCloudSyncActions();
+  const tutorialSandbox = useTutorialSandboxActive();
+  const safety = useUserSafety(state.currentUserId, tutorialSandbox);
   const colors = useAppColors();
   const accent = useGroupAccent();
   const t = useTranslation();
@@ -301,6 +309,16 @@ export function GroupRecapFeedScreen() {
   const [renderLimit, setRenderLimit] = useState(FEED_PAGE_SIZE);
   const [highlightedItemId, setHighlightedItemId] = useState<string>();
   const [socialActionError, setSocialActionError] = useState(false);
+  const [commentReport, setCommentReport] = useState<{
+    comment: GroupSocialComment;
+    displayName: string;
+  }>();
+  const [commentReportBusy, setCommentReportBusy] = useState(false);
+  const [feedItemReport, setFeedItemReport] = useState<{
+    item: RecapFeedItem;
+    displayName: string;
+  }>();
+  const [feedItemReportBusy, setFeedItemReportBusy] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
   const feedY = useRef(0);
   const itemY = useRef(new Map<string, number>());
@@ -398,7 +416,14 @@ export function GroupRecapFeedScreen() {
     deriveFeed,
     feedAuthority,
   );
-  const visibleFeed = useMemo(() => filterFeed(feed, filter), [feed, filter]);
+  const visibleFeed = useMemo(
+    () =>
+      filterFeed(feed, filter).filter(
+        (item) =>
+          !item.memberId || !safety.blockedUserIds.has(item.memberId),
+      ),
+    [feed, filter, safety.blockedUserIds],
+  );
   const requestedHighlight = useMemo(
     () =>
       targetGroupReady
@@ -600,6 +625,21 @@ export function GroupRecapFeedScreen() {
                 .removeComment(commentId)
                 .catch(() => setSocialActionError(true));
             }}
+            onReportComment={(comment) =>
+              setCommentReport({
+                comment,
+                displayName:
+                  feedMembers.get(comment.userId)?.displayName ?? "Member",
+              })
+            }
+            onReportItem={() => {
+              if (!item.memberId || item.memberId === state.currentUserId) return;
+              setFeedItemReport({
+                item,
+                displayName:
+                  feedMembers.get(item.memberId)?.displayName ?? "Member",
+              });
+            }}
             onShare={() => {
               const attachment = {
                 kind: "recap" as const,
@@ -653,6 +693,92 @@ export function GroupRecapFeedScreen() {
         </Pressable>
       ) : null}
       {feedReady && !visibleFeed.length ? <Card style={styles.empty}><Ionicons name="sparkles-outline" size={26} color={accent} /><Text style={[styles.summaryTitle, { color: colors.ink }]}>Nothing meaningful to recap yet</Text><Text style={[styles.body, { color: colors.muted }]}>Shared meals, workouts, photos, badges, challenges, and daily leaders will appear here.</Text></Card> : null}
+      <SafetyReportSheet
+        visible={Boolean(commentReport)}
+        title="Report comment"
+        subject={commentReport?.displayName ?? "Member"}
+        demoMode={safety.mode === "demo"}
+        busy={commentReportBusy}
+        onClose={() => {
+          if (!commentReportBusy) setCommentReport(undefined);
+        }}
+        onSubmit={(reason, details) => {
+          const selected = commentReport;
+          if (!selected) return;
+          setCommentReportBusy(true);
+          void safety
+            .reportComment({
+              groupId: state.group.id,
+              commentId: selected.comment.id,
+              authorId: selected.comment.userId,
+              reportedDisplayName: selected.displayName,
+              reason,
+              details,
+            })
+            .then(() => {
+              setCommentReport(undefined);
+              Alert.alert(
+                safety.mode === "demo" ? "Demo report saved" : "Report submitted",
+                safety.mode === "demo"
+                  ? "This preview report stays on this device."
+                  : "Your report is in HabHub's protected operator queue. An eligible group moderator may also review it, but the reported person cannot review their own report.",
+              );
+            })
+            .catch((error) =>
+              Alert.alert(
+                "Report not submitted",
+                error instanceof Error ? error.message : "Try again.",
+              ),
+            )
+            .finally(() => setCommentReportBusy(false));
+        }}
+      />
+      <SafetyReportSheet
+        visible={Boolean(feedItemReport)}
+        title="Report shared update"
+        subject={feedItemReport?.displayName ?? "Member"}
+        demoMode={safety.mode === "demo"}
+        busy={feedItemReportBusy}
+        onClose={() => {
+          if (!feedItemReportBusy) setFeedItemReport(undefined);
+        }}
+        onSubmit={(reason, details) => {
+          const selected = feedItemReport;
+          const reportedUserId = selected?.item.memberId;
+          if (!selected || !reportedUserId) return;
+          const itemContext = [
+            `Shared ${selected.item.kind} update`,
+            selected.item.localDate,
+            `${selected.item.socialTarget.type}:${selected.item.socialTarget.id}`,
+          ].join(" · ");
+          const reportDetails = `${itemContext}. ${details.trim()}`.trim().slice(0, 500);
+          setFeedItemReportBusy(true);
+          void safety
+            .reportUser({
+              groupId: state.group.id,
+              userId: reportedUserId,
+              reportedDisplayName: selected.displayName,
+              reason,
+              details: reportDetails,
+            })
+            .then(() => {
+              setFeedItemReport(undefined);
+              Alert.alert(
+                safety.mode === "demo" ? "Demo report saved" : "Report submitted",
+                safety.mode === "demo"
+                  ? "This preview report stays on this device."
+                  : "Your report is in HabHub's protected operator queue. An eligible group moderator may also review it, but the reported person cannot review their own report.",
+              );
+            })
+            .catch((error) =>
+              Alert.alert(
+                "Report not submitted",
+                error instanceof Error ? error.message : "Try again.",
+              ),
+            )
+            .finally(() => setFeedItemReportBusy(false));
+        }}
+      />
     </Screen>
   );
 }
@@ -671,6 +797,8 @@ type FeedCardProps = {
   onReact: (reaction: GroupSocialReactionKind) => void;
   onComment: (content: string) => Promise<void>;
   onDeleteComment: (commentId: string) => Promise<void>;
+  onReportComment: (comment: GroupSocialComment) => void;
+  onReportItem: () => void;
   onShare: () => void;
 };
 
@@ -692,7 +820,7 @@ function commentDateTimeLabel(
   }).format(date);
 }
 
-function FeedCard({ item, currentUserId, members, timeFormat, highlighted, onLayout, reactions, comments, onReact, onComment, onDeleteComment, onShare }: FeedCardProps) {
+function FeedCard({ item, currentUserId, members, timeFormat, highlighted, onLayout, reactions, comments, onReact, onComment, onDeleteComment, onReportComment, onReportItem, onShare }: FeedCardProps) {
   const colors = useAppColors();
   const accent = useGroupAccent();
   const locale = useLocale();
@@ -707,6 +835,11 @@ function FeedCard({ item, currentUserId, members, timeFormat, highlighted, onLay
     { id: "Fat", value: item.nutrition.fatG ?? 0, color: "#4BA6DE" },
   ] : [];
   const macroTotal = macros.reduce((sum, macro) => sum + macro.value, 0);
+  const reportableItem =
+    item.memberId !== undefined &&
+    item.memberId !== currentUserId &&
+    (["log", "meal", "workout", "photo"].includes(item.kind) ||
+      (item.kind === "challenge" && item.eyebrow === "CHALLENGE STARTED"));
   return (
     <View onLayout={(event) => onLayout(event.nativeEvent.layout.y)} style={styles.feedItem}>
       <Card style={[styles.feedCard, { borderTopColor: item.color }, highlighted && { borderColor: "#E9873F", borderWidth: 2 }]}>
@@ -730,6 +863,7 @@ function FeedCard({ item, currentUserId, members, timeFormat, highlighted, onLay
           <ReactionButton icon="thumbs-up" count={counts("thumbs_up")} active={mine?.reaction === "thumbs_up"} color={accent} onPress={() => onReact("thumbs_up")} />
           <ReactionButton icon="thumbs-down" count={counts("thumbs_down")} active={mine?.reaction === "thumbs_down"} color="#D87C42" onPress={() => onReact("thumbs_down")} />
           <Pressable onPress={() => setCommentsOpen((value) => !value)} style={styles.actionButton}><Ionicons name="chatbubble-outline" size={15} color={colors.muted} /><Text style={[styles.actionText, { color: colors.muted }]}>{comments.length || "Comment"}</Text></Pressable>
+          {reportableItem ? <Pressable accessibilityRole="button" accessibilityLabel={`Report shared update from ${members.get(item.memberId ?? "")?.displayName ?? "member"}`} onPress={onReportItem} style={styles.actionButton}><Ionicons name="flag-outline" size={15} color={colors.muted} /></Pressable> : null}
           <Pressable onPress={onShare} style={styles.actionButton}><Ionicons name="paper-plane-outline" size={15} color={colors.muted} /><Text style={[styles.actionText, { color: colors.muted }]}>Share</Text></Pressable>
         </View>
         {commentsOpen ? <View style={[styles.comments, { borderTopColor: colors.border }]}>
@@ -768,7 +902,21 @@ function FeedCard({ item, currentUserId, members, timeFormat, highlighted, onLay
                   >
                     <Ionicons name="trash-outline" size={13} color={palette.red} />
                   </Pressable>
-                ) : null}
+                ) : (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Report comment from ${author?.displayName ?? "member"}`}
+                    hitSlop={8}
+                    onPress={() => onReportComment(comment)}
+                    style={({ pressed }) => [
+                      styles.commentDelete,
+                      { borderColor: colors.border },
+                      pressed && { opacity: 0.58 },
+                    ]}
+                  >
+                    <Ionicons name="flag-outline" size={13} color={colors.muted} />
+                  </Pressable>
+                )}
               </View>
             );
           })}

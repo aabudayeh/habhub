@@ -9,6 +9,7 @@ import {
 import { supabase } from "@/src/lib/supabase";
 import { useApp } from "@/src/state/AppProvider";
 import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
+import { DEFAULT_DEMO_GROUP_ID } from "@/src/data/demoChallenges";
 
 const cacheByUser = new Map<string, Map<string, ChallengeUserPreference>>();
 const listenersByUser = new Map<
@@ -31,6 +32,7 @@ export function useChallengePreferences() {
   const { state } = useApp();
   const tutorial = useTutorialSandboxActive();
   const userId = state.currentUserId;
+  const localDemo = state.group.id === DEFAULT_DEMO_GROUP_ID;
   const [preferences, setPreferences] = useState(
     () => new Map(cacheByUser.get(userId) ?? []),
   );
@@ -47,10 +49,10 @@ export function useChallengePreferences() {
   }, [userId]);
 
   const refresh = useCallback(async () => {
-    if (tutorial || !supabase) return;
+    if (tutorial || localDemo || !supabase) return;
     const rows = await loadChallengeUserPreferences();
     publish(userId, new Map(rows.map((row) => [row.challengeId, row])));
-  }, [tutorial, userId]);
+  }, [localDemo, tutorial, userId]);
 
   useEffect(() => {
     void refresh().catch(() => undefined);
@@ -67,7 +69,7 @@ export function useChallengePreferences() {
         pinned: changes.pinned ?? current?.pinned ?? false,
       };
       const saved =
-        tutorial || !supabase
+        tutorial || localDemo || !supabase
           ? {
               challengeId,
               userId,
@@ -81,14 +83,14 @@ export function useChallengePreferences() {
       publish(userId, next);
       return saved;
     },
-    [tutorial, userId],
+    [localDemo, tutorial, userId],
   );
 
   const withdraw = useCallback(
     async (challengeId: string) => {
       const current = cacheByUser.get(userId)?.get(challengeId);
       const saved =
-        tutorial || !supabase
+        tutorial || localDemo || !supabase
           ? {
               challengeId,
               userId,
@@ -103,7 +105,7 @@ export function useChallengePreferences() {
       publish(userId, next);
       return saved;
     },
-    [tutorial, userId],
+    [localDemo, tutorial, userId],
   );
 
   return useMemo(

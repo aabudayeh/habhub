@@ -88,8 +88,8 @@ export default function RootHtml({ children }: PropsWithChildren) {
         <meta property="og:locale" content="en_US" />
         <meta property="og:type" content="website" />
         <meta property="og:image" content={`${appOrigin}/habhub-icon.png`} />
-        <meta property="og:image:width" content="1254" />
-        <meta property="og:image:height" content="1254" />
+        <meta property="og:image:width" content="1024" />
+        <meta property="og:image:height" content="1024" />
         <meta property="og:image:alt" content="HabHub logo" />
         <meta name="twitter:card" content="summary" />
         <meta name="twitter:title" content="Join HabHub" />

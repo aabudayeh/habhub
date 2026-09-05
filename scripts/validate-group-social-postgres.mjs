@@ -8,6 +8,7 @@ const migrations = await Promise.all(
     "supabase/migrations/202608300002_group_feed_interaction_notifications.sql",
     "supabase/migrations/202608300003_social_notification_origin.sql",
     "supabase/migrations/202608300004_prompt_social_push_dispatch.sql",
+    "supabase/migrations/202609050001_fix_challenge_result_social_recipient.sql",
   ].map((path) => Deno.readTextFile(new URL(path, root))),
 );
 
@@ -506,6 +507,48 @@ for (const [type, id] of [
     throw new Error(`${type} feed target was rejected or rewritten unexpectedly.`);
 }
 
+await db.exec(`
+  insert into public.group_challenge_result_placements values
+    ('${challengeId}', date '2026-08-28', '${ownerId}', true);
+  insert into public.group_notification_events (
+    event_key, group_id, recipient_id, event_type, challenge_id,
+    occurrence_date, created_at
+  ) values (
+    'challenge-result-fixture', '${groupId}', '${ownerId}',
+    'challenge_result', '${challengeId}', date '2026-08-28', now()
+  );
+`);
+const challengeWinnerRecipient = await scalar(`
+    select recipient_id::text
+      from public.resolve_group_social_notification_target(
+        '${groupId}',
+        'group_challenge',
+        '${challengeId}:2026-08-28:result'
+      )
+  `);
+if (challengeWinnerRecipient !== ownerId)
+  throw new Error(
+    `An unambiguous challenge winner did not resolve to its canonical UUID (${JSON.stringify(challengeWinnerRecipient)}).`,
+  );
+
+await db.exec(`
+  insert into public.group_challenge_result_placements values
+    ('${challengeId}', date '2026-08-28', '${otherOwnerId}', true);
+`);
+if (
+  Number(
+    await scalar(`
+      select count(*)
+        from public.resolve_group_social_notification_target(
+          '${groupId}',
+          'group_challenge',
+          '${challengeId}:2026-08-28:result'
+        )
+    `),
+  ) !== 0
+)
+  throw new Error("A tied challenge result guessed a notification recipient.");
+
 // A badge target currently has no server-owned earned-badge row. Whether the
 // mutation is rejected or merely kept as non-notifying social state, its
 // client-supplied member UUID must never become a notification recipient.
@@ -631,5 +674,5 @@ if (
   throw new Error("An ambiguous legacy client id was guessed instead of rejected.");
 
 console.log(
-  "Group social PostgreSQL validation passed: canonical identities, prompt exact-event dispatch keys, origin-aware comment and reaction delivery, unchanged-reaction idempotency, forged-badge and tied-leader suppression, collision rejection, and privacy fences.",
+  "Group social PostgreSQL validation passed: canonical identities, challenge-result UUID resolution and tie suppression, prompt exact-event dispatch keys, origin-aware comment and reaction delivery, unchanged-reaction idempotency, forged-badge and tied-leader suppression, collision rejection, and privacy fences.",
 );

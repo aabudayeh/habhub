@@ -69,6 +69,13 @@ type DataTypeDefinition = {
 };
 
 export type GoogleHealthDateRange = { fromDate: string; throughDate: string };
+export type GoogleHealthHistoryDays = 0 | 30 | 90 | 365 | 730;
+
+function normalizeGoogleHealthHistoryDays(value: unknown): GoogleHealthHistoryDays {
+  return typeof value === "number" && [0, 30, 90, 365, 730].includes(value)
+    ? value as GoogleHealthHistoryDays
+    : 90;
+}
 
 const ACTIVITY_SCOPE = "https://www.googleapis.com/auth/googlehealth.activity_and_fitness.readonly";
 const HEALTH_SCOPE = "https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.readonly";
@@ -2021,6 +2028,7 @@ async function definitionRange(
   userId: string,
   definition: DataTypeDefinition,
   today: string,
+  historyDays: GoogleHealthHistoryDays,
 ) {
   const { data, error } = await admin
     .from("google_health_sync_cursors")
@@ -2030,10 +2038,30 @@ async function definitionRange(
     .maybeSingle();
   if (error) throw error;
   const last = data?.last_success_at ? new Date(data.last_success_at) : undefined;
-  const initialFrom = addDays(today, -(definition.maxInitialDays - 1));
+  const selectedDays = historyDays === 0
+    ? 1
+    : Math.min(historyDays, definition.maxInitialDays);
+  const initialFrom = addDays(today, -(selectedDays - 1));
   if (!last || !Number.isFinite(last.getTime())) return { fromDate: initialFrom, throughDate: today };
+  if (historyDays === 0) return { fromDate: today, throughDate: today };
   const overlap = addDays(dateKey(last), -2);
   return { fromDate: overlap < initialFrom ? initialFrom : overlap, throughDate: today };
+}
+
+function historyBoundedGoogleHealthRange(
+  range: GoogleHealthDateRange,
+  today: string,
+  historyDays: GoogleHealthHistoryDays,
+  providerMaximumDays: number,
+): GoogleHealthDateRange {
+  if (historyDays === 0) return { fromDate: today, throughDate: today };
+  const selectedDays = Math.min(historyDays, providerMaximumDays);
+  const earliest = addDays(today, -(selectedDays - 1));
+  const fromDate = range.fromDate < earliest ? earliest : range.fromDate;
+  const throughDate = range.throughDate > today ? today : range.throughDate;
+  return fromDate <= throughDate
+    ? { fromDate, throughDate }
+    : { fromDate: today, throughDate: today };
 }
 
 async function fetchDefinition(
@@ -2213,6 +2241,7 @@ async function performGoogleHealthSync(
 
   const now = new Date();
   const today = zonedDateKey(now, String(profile?.timezone ?? "UTC"));
+  const historyDays = normalizeGoogleHealthHistoryDays(connection.history_days);
   const definitions = DATA_TYPES.filter((definition) =>
     activeGrantedScopes.has(definition.requiredScope) &&
     (!onlyGoogleTypes?.size || onlyGoogleTypes.has(definition.googleType)));
@@ -2236,8 +2265,14 @@ async function performGoogleHealthSync(
     error?: unknown;
   }> = [];
   for (const definition of definitions) {
-    const range = options?.ranges?.get(definition.googleType) ??
-      await definitionRange(admin, userId, definition, today);
+    const requestedRange = options?.ranges?.get(definition.googleType) ??
+      await definitionRange(admin, userId, definition, today, historyDays);
+    const range = historyBoundedGoogleHealthRange(
+      requestedRange,
+      today,
+      historyDays,
+      definition.maxInitialDays,
+    );
     try {
       const result = await fetchDefinition(accessToken, definition, range, now, today);
       fetched.push({ definition, range, ...result });
@@ -2483,7 +2518,7 @@ export async function connectionStatus(admin: SupabaseClient, userId: string) {
     { count: importedCount, error: importedCountError },
   ] = await Promise.all([
     admin.from("google_health_connections")
-      .select("status,google_email,granted_scopes,last_synced_at,last_error_code,sync_lease_until")
+      .select("status,google_email,granted_scopes,last_synced_at,last_error_code,sync_lease_until,history_days")
       .eq("user_id", userId)
       .maybeSingle(),
     admin.from("google_health_import_records")
@@ -2499,6 +2534,7 @@ export async function connectionStatus(admin: SupabaseClient, userId: string) {
       scopes: [],
       importedCount: importedCount ?? 0,
       syncing: false,
+      historyDays: 90,
     };
   const syncLeaseUntil = typeof connection.sync_lease_until === "string"
     ? Date.parse(connection.sync_lease_until)
@@ -2512,6 +2548,7 @@ export async function connectionStatus(admin: SupabaseClient, userId: string) {
     lastError: connection.last_error_code ?? null,
     importedCount: importedCount ?? 0,
     syncing: Number.isFinite(syncLeaseUntil) && syncLeaseUntil > Date.now(),
+    historyDays: normalizeGoogleHealthHistoryDays(connection.history_days),
   };
 }
 
@@ -2539,4 +2576,6 @@ export const googleHealthSyncTestHooks = {
   preferNativeStepOwner,
   semanticallyMatchesNative,
   refreshReplacementDisposition,
+  historyBoundedGoogleHealthRange,
+  normalizeGoogleHealthHistoryDays,
 };

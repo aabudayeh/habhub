@@ -57,6 +57,7 @@ const curriculum = `${guides}\n${basicGuide}`;
 const targetFiles = {
   "today-hero": ["app/(tabs)/index.tsx"],
   "today-tracker-list": ["app/(tabs)/index.tsx"],
+  "today-steps-tracker": ["app/(tabs)/index.tsx"],
   "today-todo-list": ["app/(tabs)/index.tsx"],
   "today-edit": ["app/(tabs)/index.tsx"],
   "today-goal-flag": ["app/(tabs)/index.tsx"],
@@ -255,6 +256,18 @@ assert(
 );
 
 const todaySource = read("app/(tabs)/index.tsx");
+assert(
+  /item\.id === "steps" && tutorial\.activeSession[\s\S]{0,120}<TutorialTarget id="today-steps-tracker">/.test(
+    todaySource,
+  ),
+  "The essential tracker practice must spotlight the real Steps row only while a guide is active.",
+);
+assert(
+  /router\.navigate\(\{[\s\S]{0,180}pathname: "\/metric-detail"[\s\S]{0,260}actionId: "tutorial\.today\.open-tracker"[\s\S]{0,100}scope: "isolated-preview"/.test(
+    todaySource,
+  ),
+  "Opening the real Steps row must report the isolated practice action after navigating to tracker detail.",
+);
 assert(
   /<TutorialTarget id="today-edit">\s*<Pressable[\s\S]{0,220}onPress=\{\(\) => \{[\s\S]{0,100}beginEditing\(\)/.test(
     todaySource,

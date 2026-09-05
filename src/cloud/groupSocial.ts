@@ -1,4 +1,5 @@
 import { supabase } from "@/src/lib/supabase";
+import { moderateChatContent } from "@/src/safety/contentFilter";
 import type {
   GroupSocialTarget,
   GroupSocialTargetType,
@@ -386,6 +387,11 @@ export async function addGroupSocialComment(input: {
   if (!supabase) throw new Error("Sign in to comment on a shared item.");
   const content = input.content.trim();
   if (!content) throw new Error("Write a comment first.");
+  const moderation = moderateChatContent(content);
+  if (!moderation.allowed)
+    throw new Error(
+      moderation.message ?? "That comment cannot be posted as written.",
+    );
   const prompt = await supabase.rpc("add_group_social_comment_v2", {
     p_group_id: input.groupId,
     p_target_type: input.target.type,

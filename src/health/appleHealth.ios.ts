@@ -22,6 +22,7 @@ type QuantityConfig = {
   type: HealthDataType;
   unit: string;
   nutritionField?: keyof NutritionDetails;
+  measurementField?: 'systolic' | 'diastolic';
 };
 
 const QUANTITIES: QuantityConfig[] = [
@@ -69,6 +70,8 @@ const QUANTITIES: QuantityConfig[] = [
   { identifier: 'HKQuantityTypeIdentifierDietaryWater', type: 'water', unit: 'L' },
   { identifier: 'HKQuantityTypeIdentifierBodyFatPercentage', type: 'body_fat', unit: '%' },
   { identifier: 'HKQuantityTypeIdentifierLeanBodyMass', type: 'lean_body_mass', unit: 'kg' },
+  { identifier: 'HKQuantityTypeIdentifierBloodPressureSystolic', type: 'blood_pressure', unit: 'mmHg', measurementField: 'systolic' },
+  { identifier: 'HKQuantityTypeIdentifierBloodPressureDiastolic', type: 'blood_pressure', unit: 'mmHg', measurementField: 'diastolic' },
   { identifier: 'HKQuantityTypeIdentifierRestingHeartRate', type: 'heart_rate', unit: 'count/min' },
   { identifier: 'HKQuantityTypeIdentifierBloodGlucose', type: 'blood_glucose', unit: 'mg/dL' },
 ];
@@ -136,7 +139,7 @@ async function readQuantity(config: QuantityConfig, from: Date, to: Date, select
       }];
     });
   }
-  if (config.type === 'weight' || config.type === 'body_fat' || config.type === 'lean_body_mass' || config.type === 'heart_rate') {
+  if (config.type === 'weight' || config.type === 'body_fat' || config.type === 'lean_body_mass' || config.type === 'blood_pressure' || config.type === 'heart_rate') {
     const samples = await queryQuantitySamples(config.identifier, {
       limit: 0,
       ascending: true,
@@ -146,16 +149,20 @@ async function readQuantity(config: QuantityConfig, from: Date, to: Date, select
     return samples.map((sample) => {
       const start = asDate(sample.startDate, from);
       const end = asDate(sample.endDate, start);
+      const value = Number(sample.quantity ?? 0);
       return {
         id: String(sample.uuid ?? `${config.identifier}:${end.toISOString()}`),
         provider: 'apple_health' as const,
         type: config.type,
         startTime: start.toISOString(),
         endTime: end.toISOString(),
-        value: Number(sample.quantity ?? 0),
+        value,
         unit: config.unit,
         origin: sourceName(sample),
         sourceOrigins: sourceNames(sample),
+        measurements: config.measurementField
+          ? { [config.measurementField]: value }
+          : undefined,
       };
     });
   }

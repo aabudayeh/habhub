@@ -249,6 +249,7 @@ async function syncLiveActivityTimerNotificationsNow(
               body: timer.body,
               data: {
                 route: timer.route,
+                accountId: ownerId,
                 activityTimer: true,
                 timerId: timer.id,
               },

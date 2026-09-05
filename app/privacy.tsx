@@ -1,188 +1,199 @@
-import { Ionicons } from "@expo/vector-icons";
-import { router } from "expo-router";
-import { Linking, Pressable, StyleSheet, View } from "react-native";
-
-import { AppText as Text } from "@/src/components/AppText";
-import { Card, IconButton, PageHeader, Screen } from "@/src/components/ui";
-import { useTranslation } from "@/src/i18n";
-import { useAppColors, useGroupAccent } from "@/src/theme";
+import {
+  ExternalLegalLink as ExternalLink,
+  HABHUB_SUPPORT_EMAIL,
+  LegalDocumentScreen,
+  LegalRouteLink,
+  LegalSection,
+  supportMailto,
+} from "@/src/components/LegalDocument";
+import { CURRENT_PRIVACY_VERSION, policyVersionLabel } from "@/src/legal/policy";
 
 const GOOGLE_HEALTH_POLICY_URL =
   "https://developers.google.com/health/policies/health-api-developer-user-data-policy";
 const GOOGLE_HEALTH_LIMITED_USE_URL = `${GOOGLE_HEALTH_POLICY_URL}#limited-use`;
-
-function ExternalLink({ label, url }: { label: string; url: string }) {
-  const accent = useGroupAccent();
-  const t = useTranslation();
-  return (
-    <Pressable
-      accessibilityRole="link"
-      accessibilityLabel={label}
-      accessibilityHint={t("Opens in your browser")}
-      onPress={() => void Linking.openURL(url)}
-      style={styles.link}
-    >
-      <Text translate={false} style={[styles.linkText, { color: accent }]}>
-        {label}
-      </Text>
-      <Ionicons name="open-outline" size={14} color={accent} />
-    </Pressable>
-  );
-}
-
-function PolicySection({ title, children }: { title: string; children: string }) {
-  const colors = useAppColors();
-  return (
-    <View style={styles.section}>
-      <Text
-        translate={false}
-        accessibilityRole="header"
-        style={[styles.sectionTitle, { color: colors.ink }]}
-      >
-        {title}
-      </Text>
-      <Text translate={false} style={[styles.body, { color: colors.muted }]}>
-        {children}
-      </Text>
-    </View>
-  );
-}
+const supportUrl =
+  process.env.EXPO_PUBLIC_SUPPORT_URL?.trim() ||
+  "mailto:ahmad.adayeh@gmail.com";
 
 export default function PrivacyScreen() {
-  const colors = useAppColors();
-  const accent = useGroupAccent();
-  const t = useTranslation();
-  const supportUrl =
-    process.env.EXPO_PUBLIC_SUPPORT_URL?.trim() ||
-    "mailto:ahmad.adayeh@gmail.com";
-  const validSupportUrl =
-    supportUrl && /^(https?:\/\/|mailto:)/i.test(supportUrl) ? supportUrl : null;
-
   return (
-    <Screen contentContainerStyle={styles.page}>
-      <View style={styles.content}>
-        <PageHeader
-          title={t("Privacy & Health Data Policy")}
-          subtitle={t("How HabHub handles account, tracker, and Google Health data.")}
-          showMenu={false}
-          action={
-            <IconButton
-              icon="close"
-              label={t("Close privacy policy")}
-              onPress={() =>
-                router.canGoBack()
-                  ? router.back()
-                  : router.replace("/sign-in" as never)
-              }
-            />
-          }
-        />
+    <LegalDocumentScreen
+      title="Privacy & Health Data Policy"
+      subtitle="How HabHub handles account, tracker, device, and health data."
+      badge="Privacy controls stay with you"
+      badgeIcon="shield-checkmark-outline"
+      updated={policyVersionLabel(CURRENT_PRIVACY_VERSION)}
+      reviewRequired
+    >
+      <LegalSection title="Scope and operator">
+        This policy covers HabHub&apos;s local demo, account, tracker, body
+        profile, group, challenge, chat, journal, photo, workout, reminder,
+        notification, screen-time, cloud-sync, AI, and connected-health
+        features. HabHub is currently operated by Ahmad Adayeh. Privacy and
+        deletion questions can be sent to {HABHUB_SUPPORT_EMAIL}. The operator
+        identity, address, retention schedule, and region-specific notices must
+        receive qualified legal review before public store submission.
+      </LegalSection>
 
-        <Card style={styles.card}>
-          <View style={[styles.badge, { backgroundColor: `${accent}18` }]}>
-            <Ionicons name="shield-checkmark-outline" size={21} color={accent} />
-            <Text translate={false} style={[styles.badgeText, { color: colors.ink }]}>
-              Privacy controls stay with you
-            </Text>
-          </View>
-          <Text translate={false} style={[styles.updated, { color: colors.faint }]}>
-            Last updated: 21 August 2026
-          </Text>
+      <LegalSection title="Data you provide">
+        HabHub stores account and profile details you provide, including name,
+        email-linked account identifiers, body-profile inputs, tracker
+        definitions, goals, entries, notes, food and workout records, schedules,
+        reminders, photos, chat and challenge content, group activity,
+        visibility choices, and settings. Local demo data remains on the device
+        unless you sign in and choose an action that synchronizes it.
+      </LegalSection>
 
-          <PolicySection title="Scope and operator">
-            This policy covers HabHub account, tracker, group, status, cloud-sync, and Google Health features. HabHub is operated by Ahmad Adayeh. Privacy and deletion questions can be sent to ahmad.adayeh@gmail.com.
-          </PolicySection>
+      <LegalSection title="Connected health data">
+        On supported devices, HabHub can read only the Apple Health or Android
+        Health Connect categories you grant. The optional Google Health bridge
+        can import only the read-only categories authorized through its consent
+        flow. Depending on your choices, these categories cover activity and fitness, health measurements, nutrition, and sleep, and can include
+        exercise, energy, body measurements, heart rate, hydration, blood
+        pressure, blood glucose, and menstrual data. HabHub does not currently
+        write data back to those health services.
+      </LegalSection>
 
-          <PolicySection title="Data HabHub collects">
-            HabHub stores the account details and content you provide, including tracker definitions, goals, entries, notes, food and workout records, photos, group activity, and settings. If you connect Google Health, HabHub collects only the read-only categories you approve: activity and fitness, health measurements, nutrition, and sleep. Each imported value retains provider/source metadata needed for reconciliation and deletion.
-          </PolicySection>
+      <LegalSection title="How health data is used">
+        Approved health data is used to populate your private trackers,
+        dashboards, history, progress, and goals; reconcile later source
+        updates or deletions; and synchronize signed-in HabHub data across your
+        devices. Health data is not used for advertising, eligibility decisions,
+        or unrelated profiling.
+      </LegalSection>
 
-          <PolicySection title="How health data is used">
-            Approved Google Health data is used only to populate your trackers, dashboards, history, progress, and goals; reconcile later updates or deletions; and sync your HabHub data across your signed-in devices. HabHub does not request write access to Google Health.
-          </PolicySection>
+      <LegalSection title="Android screen-time access">
+        If you explicitly grant Android Usage Access, HabHub reads approximate
+        app foreground time. A private daily total can be stored as a tracker
+        entry and synchronized with your signed-in account. The app-by-app
+        package breakdown and private app-limit settings remain on that Android
+        device and are not uploaded by the current implementation. You can
+        revoke Usage Access in Android settings.
+      </LegalSection>
 
-          <PolicySection title="Visibility and sharing">
-            Google Health imports follow the current configured visibility of their HabHub tracker. You can change that visibility in the tracker&apos;s settings. Private data remains account-only. Group-visible values and their source provenance are shared only with authorized members in group views, including leaderboards. Status visibility shares the permitted goal/status projection rather than the private raw value.
-          </PolicySection>
+      <LegalSection title="Notifications and device data">
+        If you enable notifications, HabHub processes a push subscription or
+        device push token, platform, language, notification preferences, and
+        delivery/routing metadata. Notification providers can process the title,
+        message preview, sender label, and destination needed to deliver an
+        alert. You can disable HabHub notifications in the app and in system or
+        browser settings.
+      </LegalSection>
 
-          <PolicySection title="Processors, storage, and security">
-            Supabase processes HabHub authentication, database and file storage, server functions, and account sync. Expo processes web hosting and, where used, app builds, updates, and push delivery; Google and Apple may process platform notification delivery. Google processes OAuth and provides only the Health categories you authorize. Authorized group or status recipients receive only data allowed by your visibility settings. HabHub uses HTTPS in transit, encrypts stored Google authorization credentials, applies per-account database access controls, and never exposes Google credentials to the web client.
-          </PolicySection>
+      <LegalSection title="Food search and optional AI">
+        Food queries or barcodes can be sent to configured food-data providers,
+        including Open Food Facts, USDA FoodData Central, or FatSecret, so
+        matching products can be returned. If you explicitly use a configured
+        cloud AI action, its prompt and any selected image are sent through a
+        HabHub server function to the configured AI provider. Provider keys are
+        not stored in the app. Do not submit content you do not want processed
+        for that request.
+      </LegalSection>
 
-          <PolicySection title="Device and browser caches">
-            Raw Google Health imports, identifiable Google-derived daily or group projections, provider-linked entry identifiers, and Google entry time or date choices are excluded from HabHub&apos;s plaintext device and browser activity caches, cloud merge-base cache, Android widget snapshot, and locally scheduled goal-notification projections. They remain available from the protected cloud account while signed in and in memory while the app is open. Consequently, a cold offline launch cannot display Google Health imports until HabHub reconnects. Editing an imported food time or date, or hiding a Google Health entry, requires an online, authenticated server confirmation; HabHub reports the change as saved only after that confirmation. The protected cloud account, rather than a plaintext local outbox, preserves those confirmed changes across refreshes and provider syncs.
-          </PolicySection>
+      <LegalSection title="Visibility and sharing">
+        Connected-health imports follow the current configured visibility of
+        their HabHub tracker. You can change that visibility in the tracker&apos;s settings. Private data remains account-only. Group-visible
+        tracker values, photos, messages, challenge activity, and their permitted
+        source provenance are shared only with authorized members in group views, including leaderboards. Status visibility shares the permitted
+        goal/status projection rather than the private raw value. Review a
+        tracker&apos;s visibility before posting or importing sensitive
+        information.
+      </LegalSection>
 
-          <PolicySection title="Retention and your controls">
-            Imported health entries remain in your HabHub account until you delete them or delete the account. Disconnect Google Health stops future access, removes the active HabHub credential and sync state, and keeps entries already imported. Delete imported data stops access and removes entries and import records owned by that Google Health connection; manual entries and Apple Health or Health Connect imports made by the HabHub phone app remain. Delete account in Settings removes active Google access first, then deletes the account&apos;s remaining cloud data. If full deletion cannot finish, HabHub reports failure so the remaining work can be retried; completed deletion steps are not rolled back. If Google&apos;s remote revocation endpoint is temporarily unavailable, an account-detached encrypted revocation job is queued and retried; account deletion may still finish after that durable handoff. Infrastructure backups age out under each processor&apos;s configured retention and recovery schedule.
-          </PolicySection>
+      <LegalSection title="Processors, storage, and security">
+        Supabase processes authentication, database and file storage, server
+        functions, and account sync. Expo processes web hosting and, where used,
+        app builds, updates, and push delivery. Apple Push Notification service,
+        Firebase Cloud Messaging, browser push services, sign-in providers,
+        connected-health providers, food databases, and any configured AI
+        provider process only the information needed for the feature you choose.
+        HabHub uses HTTPS in transit, encrypts stored Google authorization
+        credentials, and applies per-account database access controls. Security
+        and processor agreements still require launch review.
+      </LegalSection>
 
-          <PolicySection title="Uses HabHub prohibits">
-            HabHub does not sell health data, use it for targeted advertising, share it with data brokers, use it to determine credit, insurance, employment, lending, or housing eligibility, or use it for research. HabHub does not combine Google Health data with unrelated advertising profiles.
-          </PolicySection>
+      <LegalSection title="Device and browser caches">
+        HabHub keeps local state and caches needed for offline use. Raw Google
+        Health imports, identifiable Google-derived daily or group projections,
+        provider-linked entry identifiers, and Google entry time or date choices
+        are excluded from HabHub&apos;s plaintext device and browser activity
+        caches, cloud merge-base cache, Android widget snapshot, and locally scheduled goal-notification projections. They remain available from the
+        protected cloud account while signed in and in memory while the app is
+        open. Consequently, a cold offline launch cannot display Google Health imports until HabHub reconnects. Editing an imported food time or date,
+        or hiding a Google Health entry, requires an online, authenticated server confirmation; HabHub reports the change as saved only after that
+        confirmation.
+      </LegalSection>
 
-          <View style={[styles.limitedUse, { borderColor: colors.border, backgroundColor: colors.canvas }]}>
-            <Text
-              translate={false}
-              accessibilityRole="header"
-              style={[styles.sectionTitle, { color: colors.ink }]}
-            >
-              Google Health Limited Use
-            </Text>
-            <Text translate={false} style={[styles.body, { color: colors.muted }]}>
-              The use of information received from Google Health API and/or Developer Tools will adhere to the Google Health API Developer and User Data Policy, including the Limited Use requirements.
-            </Text>
-            <View style={styles.policyLinks}>
-              <ExternalLink
-                label="Google Health API Developer and User Data Policy"
-                url={GOOGLE_HEALTH_POLICY_URL}
-              />
-              <ExternalLink
-                label="Google Health Limited Use requirements"
-                url={GOOGLE_HEALTH_LIMITED_USE_URL}
-              />
-            </View>
-          </View>
+      <LegalSection title="Retention and your controls">
+        Account data remains until you delete individual content, disconnect or
+        delete an eligible import, or delete the account, subject to the final
+        published retention schedule. Disconnect Google Health stops future access, removes the active HabHub credential and sync state, and keeps
+        entries already imported. Delete imported data stops access and removes
+        entries and import records owned by that Google Health connection;
+        manual entries and Apple Health or Health Connect imports made by the
+        HabHub phone app remain. Delete account in Settings removes active Google
+        access first, then explicitly removes uploaded media, sent messages,
+        tracker entries, progress posts, social comments and reactions, group
+        to-dos and challenges, templates, and the account&apos;s remaining cloud
+        data. Social interactions attached to deleted content are also removed.
+        The deleted account is removed from surviving challenge rosters, and
+        other members&apos; private sync snapshots are scrubbed and revision-invalidated
+        so an older offline copy cannot restore the deleted member identity.
+        A report filed by the deleting account is normally removed after its
+        service-operator review finishes. If review is still queued, HabHub
+        removes the reporter account identifier but retains the report reason,
+        details, relevant content evidence, moderation status, and timestamps
+        in the service-operator review queue until the published safety-retention
+        period ends. This limited exception prevents account deletion from
+        erasing unresolved abuse evidence. A report filed by someone else can
+        also retain its reason, details, moderation status, and timestamps for
+        safety handling, but the deleted subject&apos;s identifier, display-name
+        snapshot, message identifier, and copied message text are removed.
+        Existing groups can transfer to another active member. If full
+        deletion cannot finish, HabHub reports failure so the remaining work can be retried; completed deletion steps are not rolled back. If Google&apos;s
+        remote revocation endpoint is temporarily unavailable, an
+        account-detached encrypted revocation job is queued and retried.
+        Processor backups age out under their configured retention and recovery
+        schedules, which must be documented precisely before launch.
+      </LegalSection>
 
-          <PolicySection title="Contact and deletion help">
-            For privacy questions or help disconnecting Google Health, deleting imported health data, or deleting your HabHub account, contact Ahmad Adayeh at ahmad.adayeh@gmail.com. Signed-in users can perform each deletion action directly in Settings.
-          </PolicySection>
-          {validSupportUrl ? (
-            <ExternalLink label="Contact HabHub support" url={validSupportUrl} />
-          ) : null}
-        </Card>
-      </View>
-    </Screen>
+      <LegalSection title="Uses HabHub prohibits">
+        HabHub does not sell health data, use it for targeted advertising, share
+        it with data brokers, use it to determine credit, insurance, employment,
+        lending, or housing eligibility, or use it for research. HabHub does not
+        combine Google Health data with unrelated advertising profiles.
+      </LegalSection>
+
+      <LegalSection title="Google Health Limited Use">
+        The use of information received from Google Health API and/or Developer
+        Tools will adhere to the Google Health API Developer and User Data
+        Policy, including the Limited Use requirements.
+      </LegalSection>
+      <ExternalLink
+        label="Google Health API Developer and User Data Policy"
+        url={GOOGLE_HEALTH_POLICY_URL}
+      />
+      <ExternalLink
+        label="Google Health Limited Use requirements"
+        url={GOOGLE_HEALTH_LIMITED_USE_URL}
+      />
+
+      <LegalSection title="Contact and deletion help">
+        For privacy questions, access/export requests, or help disconnecting a
+        health source, deleting imported data, or deleting your HabHub account,
+        contact {HABHUB_SUPPORT_EMAIL}. Signed-in users can initiate account
+        deletion directly in Settings; the public deletion page provides an
+        option when the installed app is unavailable.
+      </LegalSection>
+      <ExternalLink label="Contact HabHub support" url={supportUrl} icon="mail-outline" />
+      <ExternalLink
+        label="Email privacy support"
+        url={supportMailto("HabHub privacy request")}
+        icon="mail-outline"
+      />
+      <LegalRouteLink label="Terms of Use" route="/terms" />
+      <LegalRouteLink label="Support" route="/support" />
+      <LegalRouteLink label="Account deletion" route="/delete-account" />
+    </LegalDocumentScreen>
   );
 }
-
-const styles = StyleSheet.create({
-  page: { paddingTop: 18, paddingBottom: 48 },
-  content: { width: "100%", maxWidth: 780, alignSelf: "center" },
-  card: { padding: 18 },
-  badge: {
-    alignSelf: "flex-start",
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    paddingHorizontal: 11,
-    paddingVertical: 8,
-    borderRadius: 12,
-  },
-  badgeText: { fontSize: 11, lineHeight: 16, fontWeight: "900" },
-  updated: { fontSize: 9, lineHeight: 14, marginTop: 9 },
-  section: { marginTop: 20 },
-  sectionTitle: { fontSize: 14, lineHeight: 19, fontWeight: "900" },
-  body: { fontSize: 11, lineHeight: 18, marginTop: 6 },
-  limitedUse: { borderWidth: 1, borderRadius: 14, padding: 13, marginTop: 20 },
-  policyLinks: { gap: 2, marginTop: 7 },
-  link: {
-    alignSelf: "flex-start",
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-    minHeight: 44,
-    paddingVertical: 7,
-  },
-  linkText: { fontSize: 10, lineHeight: 15, fontWeight: "900", textDecorationLine: "underline" },
-});

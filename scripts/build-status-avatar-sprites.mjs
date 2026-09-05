@@ -199,6 +199,16 @@ function smoothStep(edge0, edge1, value) {
   return progress * progress * (3 - 2 * progress);
 }
 
+function armAdiposityWeight(normalizedY) {
+  // The source poses join the upper arm to the shoulder until roughly 32% of
+  // body height, then separate from the torso down to the fingertips near 58%.
+  // Ease both ends so the reconstructed limb cannot create a shoulder seam or
+  // an oversized hand. The middle section receives the full proportional gain.
+  const shoulderRelease = smoothStep(0.32, 0.39, normalizedY);
+  const handRelease = 1 - smoothStep(0.52, 0.585, normalizedY);
+  return shoulderRelease * handRelease;
+}
+
 function fatRegionWeight(normalizedY) {
   if (normalizedY < 0.12) return 0;
   if (normalizedY < 0.2) return 0.25;
@@ -259,11 +269,116 @@ function premultipliedBilinear(image, mappedX, mappedY, output, offset) {
   output[offset + 3] = Math.round(resolvedAlpha * 255);
 }
 
+function alphaRunsForRow(image, y, threshold = 16) {
+  const runs = [];
+  let start = -1;
+  for (let x = 0; x < image.width; x += 1) {
+    const visible = image.data[(y * image.width + x) * 4 + 3] > threshold;
+    if (visible && start < 0) start = x;
+    if ((!visible || x === image.width - 1) && start >= 0) {
+      runs.push([start, visible ? x : x - 1]);
+      start = -1;
+    }
+  }
+  return runs;
+}
+
+function rowBodyAndArms(image, y) {
+  const runs = alphaRunsForRow(image, y);
+  const bodyIndex = runs.findIndex(
+    ([left, right]) => left <= BODY_CENTER && right >= BODY_CENTER,
+  );
+  if (bodyIndex <= 0 || bodyIndex >= runs.length - 1) return undefined;
+  const widest = (candidates) =>
+    candidates
+      .filter(([left, right]) => right - left >= 4)
+      .sort(
+        ([leftA, rightA], [leftB, rightB]) =>
+          rightB - leftB - (rightA - leftA),
+      )[0];
+  const leftArm = widest(runs.slice(0, bodyIndex));
+  const rightArm = widest(runs.slice(bodyIndex + 1));
+  if (!leftArm || !rightArm) return undefined;
+  return { body: runs[bodyIndex], leftArm, rightArm };
+}
+
+function drawScaledArm({
+  destination,
+  destinationRun,
+  regionalWeight,
+  reference,
+  run,
+  extensionProgress,
+  y,
+}) {
+  const [sourceLeft, sourceRight] = run;
+  const sourceCenter = (sourceLeft + sourceRight) / 2;
+  const sourceHalfWidth = (sourceRight - sourceLeft + 1) / 2 + 1.5;
+  const destinationCenter = (destinationRun[0] + destinationRun[1]) / 2;
+  const destinationHalfWidth =
+    (destinationRun[1] - destinationRun[0] + 1) / 2 + 1.5;
+  // Blend out of the protected-torso result at the shoulder, then recover the
+  // approved arm thickness and add a restrained high-adiposity gain. Keeping
+  // the original arm centerline lets a large torso naturally meet the upper
+  // arm instead of forcing the limb outward into a disconnected bulge.
+  const resolvedReferenceHalfWidth =
+    sourceHalfWidth * (1 + extensionProgress * regionalWeight * 0.14);
+  const targetHalfWidth =
+    destinationHalfWidth +
+    (resolvedReferenceHalfWidth - destinationHalfWidth) * regionalWeight;
+  const targetCenter =
+    destinationCenter + (sourceCenter - destinationCenter) * regionalWeight;
+  const scale = targetHalfWidth / sourceHalfWidth;
+  const targetLeft = Math.max(0, Math.floor(targetCenter - targetHalfWidth - 1));
+  const targetRight = Math.min(
+    destination.width - 1,
+    Math.ceil(targetCenter + targetHalfWidth + 1),
+  );
+  for (let x = targetLeft; x <= targetRight; x += 1) {
+    const mappedX = sourceCenter + (x - targetCenter) / scale;
+    const offset = (y * destination.width + x) * 4;
+    premultipliedBilinear(reference, mappedX, y, destination.data, offset);
+  }
+}
+
+function restoreProportionalArms(destination, reference, adiposityExtension) {
+  if (adiposityExtension <= 0) return destination;
+  const extensionProgress = Math.min(1, adiposityExtension / 7);
+  for (let y = 0; y < destination.height; y += 1) {
+    const normalizedY = Math.max(0, Math.min(1, (y - BODY_TOP) / BODY_HEIGHT));
+    const regionalWeight = armAdiposityWeight(normalizedY);
+    if (regionalWeight <= 0.001) continue;
+    const referenceParts = rowBodyAndArms(reference, y);
+    const destinationParts = rowBodyAndArms(destination, y);
+    if (!referenceParts || !destinationParts) continue;
+    drawScaledArm({
+      destination,
+      destinationRun: destinationParts.leftArm,
+      extensionProgress,
+      regionalWeight,
+      reference,
+      run: referenceParts.leftArm,
+      y,
+    });
+    drawScaledArm({
+      destination,
+      destinationRun: destinationParts.rightArm,
+      extensionProgress,
+      regionalWeight,
+      reference,
+      run: referenceParts.rightArm,
+      y,
+    });
+  }
+  return destination;
+}
+
 function midpointSprite(
   anchors,
   rowCoordinate,
   columnCoordinate,
   adiposityExtension = 0,
+  extensionReference,
 ) {
   const row = Math.floor(rowCoordinate);
   const column = Math.floor(columnCoordinate);
@@ -314,7 +429,11 @@ function midpointSprite(
       premultipliedBilinear(base, mappedX, y, output.data, offset);
     }
   }
-  return output;
+  return restoreProportionalArms(
+    output,
+    extensionReference ?? base,
+    adiposityExtension,
+  );
 }
 
 function spriteName(row, column) {
@@ -514,19 +633,28 @@ function buildVariant(variant, config) {
   let totalBytes = 0;
   for (let row = 0; row < MUSCLE_STATES; row += 1) {
     const rowFiles = [];
+    const rowCoordinate =
+      (row * (config.bodyCenters.length - 1)) / (MUSCLE_STATES - 1);
+    const sourceMaximum = config.bodyCenters[0].length - 1;
+    const extensionReference = midpointSprite(
+      anchors,
+      rowCoordinate,
+      sourceMaximum,
+    );
     for (let column = 0; column < adiposityStates; column += 1) {
-      const rowCoordinate =
-        (row * (config.bodyCenters.length - 1)) / (MUSCLE_STATES - 1);
-      const sourceMaximum = config.bodyCenters[0].length - 1;
       const approvedColumn = Math.min(column, 12);
       const columnCoordinate = (approvedColumn * sourceMaximum) / 12;
       const adiposityExtension = Math.max(0, column - 12);
-      const image = midpointSprite(
-        anchors,
-        rowCoordinate,
-        columnCoordinate,
-        adiposityExtension,
-      );
+      const image =
+        column === 12
+          ? extensionReference
+          : midpointSprite(
+              anchors,
+              rowCoordinate,
+              columnCoordinate,
+              adiposityExtension,
+              extensionReference,
+            );
       const name = spriteName(row, column);
       const filePath = path.join(outputDirectory, name);
       writePng(filePath, image);

@@ -30,6 +30,8 @@ import {
   groupSocialTargetKey,
   groupSocialTargetResolutionKey,
 } from "@/src/domain/groupSocialTarget";
+import { moderateChatContent } from "@/src/safety/contentFilter";
+import { useUserSafety } from "@/src/safety/userSafety";
 import { useApp } from "@/src/state/AppProvider";
 import { useTutorialSandbox } from "@/src/tutorial/TutorialSandboxContext";
 
@@ -60,6 +62,7 @@ export function useGroupSocialEngagement(
   const { state } = useApp();
   const cloud = useCloudSyncActions();
   const tutorial = useTutorialSandbox();
+  const safety = useUserSafety(state.currentUserId, tutorial.active);
   const stableTargets = useMemo(
     () =>
       [...targets]
@@ -219,6 +222,10 @@ export function useGroupSocialEngagement(
 
   const react = useCallback(
     async (target: GroupSocialTarget, reaction: GroupSocialReactionKind) => {
+      if (cloudEnabled && !safety.hydrated)
+        throw new Error("Safety settings are still loading. Try again shortly.");
+      if (cloudEnabled && !safety.termsAccepted)
+        throw new Error("Accept the community Terms before reacting.");
       const operationGroupId = groupId;
       const requestedTargetKey = targetKey(target);
       const knownPersistedKey = targetAliasesRef.current.get(requestedTargetKey);
@@ -402,6 +409,8 @@ export function useGroupSocialEngagement(
       groupId,
       mutationTarget,
       interactionSurface,
+      safety.hydrated,
+      safety.termsAccepted,
       state.currentUserId,
     ],
   );
@@ -409,6 +418,15 @@ export function useGroupSocialEngagement(
   const comment = useCallback(
     async (target: GroupSocialTarget, content: string) => {
       if (!content.trim()) return;
+      const moderation = moderateChatContent(content);
+      if (!moderation.allowed)
+        throw new Error(
+          moderation.message.replace("message", "comment"),
+        );
+      if (cloudEnabled && !safety.hydrated)
+        throw new Error("Safety settings are still loading. Try again shortly.");
+      if (cloudEnabled && !safety.termsAccepted)
+        throw new Error("Accept the community Terms before commenting.");
       const operationGroupId = groupId;
       const now = new Date().toISOString();
       const pendingId = `local-comment-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
@@ -490,7 +508,15 @@ export function useGroupSocialEngagement(
         throw reason;
       }
     },
-    [cloudEnabled, groupId, interactionSurface, mutationTarget, state.currentUserId],
+    [
+      cloudEnabled,
+      groupId,
+      interactionSurface,
+      mutationTarget,
+      safety.hydrated,
+      safety.termsAccepted,
+      state.currentUserId,
+    ],
   );
 
   const removeComment = useCallback(
@@ -510,9 +536,21 @@ export function useGroupSocialEngagement(
     [cloudEnabled],
   );
 
+  const visibleReactions = useMemo(
+    () =>
+      reactions.filter(
+        (reaction) => !safety.blockedUserIds.has(reaction.userId),
+      ),
+    [reactions, safety.blockedUserIds],
+  );
+  const visibleComments = useMemo(
+    () =>
+      comments.filter((comment) => !safety.blockedUserIds.has(comment.userId)),
+    [comments, safety.blockedUserIds],
+  );
   const reactionsByTarget = useMemo(() => {
     const map = new Map<string, GroupSocialReaction[]>();
-    for (const reaction of reactions) {
+    for (const reaction of visibleReactions) {
       if (reaction.groupId !== groupId) continue;
       const key = persistedTargetKey({
         type: reaction.targetType,
@@ -521,10 +559,10 @@ export function useGroupSocialEngagement(
       map.set(key, [...(map.get(key) ?? []), reaction]);
     }
     return map;
-  }, [groupId, reactions]);
+  }, [groupId, visibleReactions]);
   const commentsByTarget = useMemo(() => {
     const map = new Map<string, GroupSocialComment[]>();
-    for (const item of comments) {
+    for (const item of visibleComments) {
       if (item.groupId !== groupId) continue;
       const key = persistedTargetKey({
         type: item.targetType,
@@ -533,7 +571,7 @@ export function useGroupSocialEngagement(
       map.set(key, [...(map.get(key) ?? []), item]);
     }
     return map;
-  }, [comments, groupId]);
+  }, [groupId, visibleComments]);
   const resolvedTargetKey = useCallback(
     (target: GroupSocialTarget) => {
       const key = targetKey(target);
@@ -543,8 +581,8 @@ export function useGroupSocialEngagement(
   );
 
   return {
-    reactions,
-    comments,
+    reactions: visibleReactions,
+    comments: visibleComments,
     reactionsByTarget,
     commentsByTarget,
     loading,

@@ -2519,6 +2519,7 @@ function TrackerRow({
 }) {
   const locale = useLocale();
   const { t } = useLocalization();
+  const tutorial = useTutorial();
   const lastTapRef = useRef(0);
   const tapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressHandledRef = useRef(false);
@@ -2787,7 +2788,12 @@ function TrackerRow({
       pathname: "/metric-detail",
       params: { metric: item.id, date: day },
     } as never);
-  }, [day, item.id]);
+    if (item.id === "steps")
+      tutorial.reportEvent({
+        actionId: "tutorial.today.open-tracker",
+        scope: "isolated-preview",
+      });
+  }, [day, item.id, tutorial]);
   const openLog = useCallback(() => {
     if (!canLog) {
       openDetails();
@@ -2855,7 +2861,7 @@ function TrackerRow({
     },
     [],
   );
-  return (
+  const row = (
     <Reanimated.View
       style={[
         smoothDrag.animatedStyle,
@@ -3220,6 +3226,9 @@ function TrackerRow({
     </Animated.View>
     </Reanimated.View>
   );
+  return item.id === "steps" && tutorial.activeSession ? (
+    <TutorialTarget id="today-steps-tracker">{row}</TutorialTarget>
+  ) : row;
 }
 
 function GoalProgressBar({

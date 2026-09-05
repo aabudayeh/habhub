@@ -4,6 +4,8 @@ import {
 } from "https://esm.sh/@supabase/supabase-js@2";
 import webpush from "npm:web-push@3.6.7";
 
+import { isAllowedWebPushEndpoint } from "../_shared/web-push-endpoint.ts";
+
 // This server function intentionally touches several internal tables without
 // a generated database schema. An explicit untyped admin client prevents
 // ReturnType from collapsing generic table results to `never` as the Supabase
@@ -27,6 +29,7 @@ type RequestPayload = {
   eventKey?: unknown;
   clientMessageId?: unknown;
   groupId?: unknown;
+  receiptLeaseOwner?: unknown;
 };
 type CanonicalEvent = {
   eventKey: string;
@@ -57,6 +60,7 @@ type ExpoPushTarget = {
   kind: "expo";
   userId: string;
   token: string;
+  updatedAt: string;
   preferences: Record<string, unknown>;
 };
 type WebPushTarget = {
@@ -67,6 +71,7 @@ type WebPushTarget = {
   p256dh: string;
   auth: string;
   expirationTime: number | null;
+  updatedAt: string;
   preferences: Record<string, unknown>;
 };
 type PushTarget = ExpoPushTarget | WebPushTarget;
@@ -74,6 +79,7 @@ type DevicePushTokenRow = {
   user_id: string;
   token: string;
   preferences: unknown;
+  updated_at: string;
 };
 type WebPushSubscriptionRow = {
   user_id: string;
@@ -82,6 +88,7 @@ type WebPushSubscriptionRow = {
   auth: string;
   expiration_time: number | string | null;
   preferences: unknown;
+  updated_at: string;
 };
 type StoredPushEvent = {
   id: string;
@@ -101,6 +108,11 @@ type StoredPushEvent = {
   dispatched_at: string | null;
   attempt_count: number;
 };
+type ReceiptResendTargetRow = {
+  user_id: string;
+  token: string;
+  registration_updated_at: string;
+};
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -114,6 +126,21 @@ const legacyPreMutationMembershipEvents = new Set([
   "membership_request_declined",
 ]);
 const legacyClaimAdoptionWindowMs = 2 * 60 * 1000;
+const terminalExpoTicketErrors = new Set([
+  "DeviceNotRegistered",
+  "MessageTooBig",
+  "MismatchSenderId",
+  "InvalidCredentials",
+]);
+
+function expoTicketDisposition(ticket: PushTicket) {
+  if (ticket.status === "ok") return "accepted" as const;
+  const code = ticket.details?.error;
+  if (code === "DeviceNotRegistered") return "stale" as const;
+  if (code && terminalExpoTicketErrors.has(code)) return "terminal" as const;
+  // MessageRateExceeded and unknown gateway/provider failures can recover.
+  return "retry" as const;
+}
 
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS")
@@ -124,6 +151,7 @@ Deno.serve(async (request) => {
   let claimedEvent: string | undefined;
   let canonical: CanonicalEvent | undefined;
   let admin: AdminClient | undefined;
+  let internalResendTargets: Set<string> | undefined;
   try {
     const url = Deno.env.get("SUPABASE_URL")!;
     const service = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -159,14 +187,25 @@ Deno.serve(async (request) => {
     const requestPayload = (await request.json()) as RequestPayload;
     const eventKey = normalizedString(requestPayload.eventKey, 240);
     if (!eventKey) return json({ error: "A valid event key is required" }, 400);
+    const receiptLeaseOwner = normalizedUuid(
+      requestPayload.receiptLeaseOwner,
+    );
+    if (
+      requestPayload.receiptLeaseOwner !== undefined &&
+      !receiptLeaseOwner
+    )
+      return json({ error: "Receipt resend lease is invalid" }, 400);
+    if (receiptLeaseOwner && !internalServiceRequest)
+      return json({ error: "Receipt resend lease is service-only" }, 403);
 
     const clientMessageId = normalizedString(
       requestPayload.clientMessageId,
       180,
     );
-    if (eventKey.startsWith("message:") || clientMessageId) {
-      if (!requesterId)
-        return json({ error: "Server workers cannot dispatch chat payloads" }, 403);
+    if (
+      !internalServiceRequest &&
+      (eventKey.startsWith("message:") || clientMessageId)
+    ) {
       const groupId = normalizedUuid(requestPayload.groupId);
       if (!groupId || !clientMessageId)
         return json(
@@ -175,7 +214,7 @@ Deno.serve(async (request) => {
         );
       const messageResult = await canonicalChatEvent(
         admin,
-        requesterId,
+        requesterId!,
         groupId,
         clientMessageId,
         eventKey,
@@ -283,7 +322,60 @@ Deno.serve(async (request) => {
         canonical.titles = copy.titles;
         canonical.bodies = copy.bodies;
       }
-      if (stored.dispatched_at)
+      if (internalServiceRequest) {
+        const pendingResendRead = await admin
+          .from("expo_push_receipts")
+          .select("ticket_id")
+          .eq("event_key", eventKey)
+          .eq("receipt_status", "pending")
+          .eq("delivery_action", "resend")
+          .limit(1);
+        if (pendingResendRead.error) throw pendingResendRead.error;
+        if (pendingResendRead.data?.length && !receiptLeaseOwner)
+          return json(
+            {
+              error: "Canonical resend requires its durable lease",
+              retryable: true,
+            },
+            409,
+          );
+        const resendRead = receiptLeaseOwner
+          ? await admin
+              .from("expo_push_receipts")
+              .select("user_id, token, registration_updated_at")
+              .eq("event_key", eventKey)
+              .eq("receipt_status", "pending")
+              .eq("delivery_action", "resend")
+              .eq("lease_owner", receiptLeaseOwner)
+              .gt("lease_until", new Date().toISOString())
+          : { data: [], error: null };
+        if (resendRead.error) throw resendRead.error;
+        const pendingResends = (resendRead.data ?? []) as
+          ReceiptResendTargetRow[];
+        if (receiptLeaseOwner) {
+          if (!pendingResends.length)
+            return json(
+              {
+                error: "Canonical resend lease is no longer active",
+                retryable: true,
+              },
+              409,
+            );
+          internalResendTargets = new Set(
+            pendingResends.map((row) =>
+              registrationVersionKey(
+                row.user_id,
+                row.token,
+                row.registration_updated_at,
+              ),
+            ),
+          );
+        }
+      }
+      // A canonical event may already be marked dispatched for a different
+      // target from the same provider batch. An actively leased receipt resend
+      // still has its own exact owner/token/version work to do.
+      if (stored.dispatched_at && !internalResendTargets)
         return json({ sent: 0, deduplicated: true, accepted: true });
       if (stored.id) {
         const attemptUpdate = await admin
@@ -456,23 +548,26 @@ Deno.serve(async (request) => {
 
     const { data: tokens, error: tokenError } = await admin
       .from("device_push_tokens")
-      .select("user_id, token, preferences, platform")
+      .select("user_id, token, preferences, platform, updated_at")
       .in("user_id", recipientIds);
     if (tokenError) throw tokenError;
     const webSubscriptionResult = await admin
       .from("web_push_subscriptions")
-      .select("user_id, endpoint, p256dh, auth, expiration_time, preferences")
+      .select(
+        "user_id, endpoint, p256dh, auth, expiration_time, preferences, updated_at",
+      )
       .in("user_id", recipientIds);
     if (
       webSubscriptionResult.error &&
       !isMissingWebPushSubscriptionsError(webSubscriptionResult.error)
     )
       throw webSubscriptionResult.error;
-    const targets: PushTarget[] = [
+    const discoveredTargets: PushTarget[] = [
       ...((tokens ?? []) as DevicePushTokenRow[]).map((item) => ({
         kind: "expo" as const,
         userId: item.user_id as string,
         token: item.token as string,
+        updatedAt: item.updated_at as string,
         preferences: objectRecord(item.preferences),
       })),
       ...(webSubscriptionResult.error
@@ -491,10 +586,35 @@ Deno.serve(async (request) => {
               expirationTime: Number.isFinite(expirationTime)
                 ? expirationTime
                 : null,
+              updatedAt: item.updated_at as string,
               preferences: objectRecord(item.preferences),
             };
           })),
     ];
+    const targets = internalResendTargets
+      ? discoveredTargets.filter(
+          (target): target is ExpoPushTarget =>
+            target.kind === "expo" &&
+            internalResendTargets!.has(
+              registrationVersionKey(
+                target.userId,
+                target.token,
+                target.updatedAt,
+              ),
+            ),
+        )
+      : discoveredTargets;
+    if (!targets.length && internalResendTargets) {
+      // The selected owner/token/version disappeared after the SQL transition.
+      // Completing as a safety suppression prevents an old receipt from
+      // replaying private copy to a refreshed or reassigned registration.
+      await markCanonicalEventAccepted(
+        admin,
+        canonical,
+        "resend_registration_changed",
+      );
+      return json({ sent: 0, accepted: true, suppressed: true });
+    }
     if (!targets.length) {
       await releaseClaim(admin, canonical.eventKey);
       claimedEvent = undefined;
@@ -512,8 +632,12 @@ Deno.serve(async (request) => {
       preferenceEligible.length
         ? await admin
             .from("push_token_dispatch_acceptances")
-            .select("token")
+            .select("user_id, token")
             .eq("event_key", canonical.eventKey)
+            .in(
+              "user_id",
+              [...new Set(preferenceEligible.map((item) => item.userId))],
+            )
             .in(
               "token",
               preferenceEligible.map((item) => item.token),
@@ -521,10 +645,12 @@ Deno.serve(async (request) => {
         : { data: [], error: null };
     if (acceptanceReadError) throw acceptanceReadError;
     const alreadyAccepted = new Set(
-      (priorAcceptances ?? []).map((item) => item.token as string),
+      (priorAcceptances ?? []).map(
+        (item) => `${item.user_id as string}:${item.token as string}`,
+      ),
     );
     const eligible = preferenceEligible.filter(
-      (item) => !alreadyAccepted.has(item.token),
+      (item) => !alreadyAccepted.has(`${item.userId}:${item.token}`),
     );
     const expoEligible = eligible.filter(
       (item): item is ExpoPushTarget => item.kind === "expo",
@@ -556,11 +682,12 @@ Deno.serve(async (request) => {
           recipientEvent.body,
           220,
         ),
-        data: recipientEvent.data,
+        data: { ...recipientEvent.data, accountId: item.userId },
       };
     });
 
     let acceptedTicketCount = 0;
+    const terminalExpoErrors = new Set<string>();
     if (messages.length) {
       for (let offset = 0; offset < messages.length; offset += 100) {
         const batch = messages.slice(offset, offset + 100);
@@ -580,40 +707,82 @@ Deno.serve(async (request) => {
         const tickets = ticketPayload.data ?? [];
         if (tickets.length !== batch.length)
           throw new Error("Expo push ticket count mismatch");
-        const acceptedTokens = tickets.flatMap((ticket, index) =>
-          ticket.status === "ok" ? [batch[index].to] : [],
-        );
-        const staleTokens = tickets.flatMap((ticket, index) =>
-          ticket.status === "error" &&
-          ticket.details?.error === "DeviceNotRegistered"
-            ? [expoEligible[offset + index]?.token]
+        const acceptedTickets = tickets.flatMap((ticket, index) => {
+          if (expoTicketDisposition(ticket) !== "accepted") return [];
+          const ticketId = normalizedString(ticket.id, 200);
+          if (!ticketId)
+            throw new Error("Expo accepted a push without a valid receipt ID");
+          return [
+            {
+              ticketId,
+              token: batch[index].to,
+              userId: expoEligible[offset + index].userId,
+              updatedAt: expoEligible[offset + index].updatedAt,
+            },
+          ];
+        });
+        const staleTargets = tickets.flatMap((ticket, index) =>
+          expoTicketDisposition(ticket) === "stale"
+            ? [expoEligible[offset + index]]
             : [],
-        ).filter((token): token is string => Boolean(token));
-        const terminalTokens = [...acceptedTokens, ...staleTokens];
-        if (terminalTokens.length) {
+        ).filter((target): target is ExpoPushTarget => Boolean(target));
+        const terminalTargets = tickets.flatMap((ticket, index) => {
+          if (expoTicketDisposition(ticket) !== "terminal") return [];
+          terminalExpoErrors.add(ticket.details?.error ?? "TerminalError");
+          const target = expoEligible[offset + index];
+          return target ? [target] : [];
+        });
+        if (acceptedTickets.length) {
+          // This service-only RPC commits the existing per-token acceptance and
+          // its receipt queue row atomically. A ticket is never checkpointed
+          // without retaining the ID needed for the 15-minute receipt poll.
+          const receiptWrite = await admin.rpc(
+            "record_expo_push_ticket_acceptances",
+            {
+              p_event_key: canonical!.eventKey,
+              p_tickets: acceptedTickets,
+            },
+          );
+          if (receiptWrite.error) throw receiptWrite.error;
+          if (Number(receiptWrite.data) !== acceptedTickets.length)
+            throw new Error("Expo push receipt checkpoint count mismatch");
+        }
+        if (terminalTargets.length) {
           const acceptanceWrite = await admin
             .from("push_token_dispatch_acceptances")
             .upsert(
-              terminalTokens.map((token) => ({
+              terminalTargets.map((target) => ({
                 event_key: canonical!.eventKey,
-                token,
+                user_id: target.userId,
+                token: target.token,
               })),
-              { onConflict: "event_key,token", ignoreDuplicates: true },
+              {
+                onConflict: "event_key,user_id,token",
+                ignoreDuplicates: true,
+              },
             );
           if (acceptanceWrite.error) throw acceptanceWrite.error;
         }
-        acceptedTicketCount += acceptedTokens.length;
-        if (staleTokens.length) {
-          const staleCleanup = await admin
-            .from("device_push_tokens")
-            .delete()
-            .in("token", staleTokens);
+        acceptedTicketCount += acceptedTickets.length;
+        if (staleTargets.length) {
+          const staleCleanup = await admin.rpc(
+            "delete_exact_stale_push_registrations",
+            {
+              p_event_key: canonical!.eventKey,
+              p_registrations: staleTargets.map((target) => ({
+                kind: "expo",
+                userId: target.userId,
+                token: target.token,
+                updatedAt: target.updatedAt,
+              })),
+            },
+          );
           if (staleCleanup.error) throw staleCleanup.error;
+          if (changedStaleRegistrationCount(staleCleanup.data) > 0)
+            throw new Error("Push registration changed during delivery");
         }
         const transient = tickets.find(
-          (ticket) =>
-            ticket.status === "error" &&
-            ticket.details?.error !== "DeviceNotRegistered",
+          (ticket) => expoTicketDisposition(ticket) === "retry",
         );
         if (transient)
           throw new Error(transient.message || "Expo push delivery failed");
@@ -639,37 +808,52 @@ Deno.serve(async (request) => {
             ),
           ),
         );
-        const acceptedTokens = outcomes.flatMap((outcome, index) =>
+        const acceptedTargets = outcomes.flatMap((outcome, index) =>
           outcome.status === "fulfilled" && outcome.value === "accepted"
-            ? [batch[index].token]
+            ? [batch[index]]
             : [],
         );
-        const staleTokens = outcomes.flatMap((outcome, index) =>
+        const staleTargets = outcomes.flatMap((outcome, index) =>
           outcome.status === "fulfilled" && outcome.value === "stale"
-            ? [batch[index].token]
+            ? [batch[index]]
             : [],
         );
-        const terminalTokens = [...acceptedTokens, ...staleTokens];
-        if (terminalTokens.length) {
+        if (acceptedTargets.length) {
           const acceptanceWrite = await admin
             .from("push_token_dispatch_acceptances")
             .upsert(
-              terminalTokens.map((token) => ({
+              acceptedTargets.map((target) => ({
                 event_key: canonical!.eventKey,
-                token,
+                user_id: target.userId,
+                token: target.token,
               })),
-              { onConflict: "event_key,token", ignoreDuplicates: true },
+              {
+                onConflict: "event_key,user_id,token",
+                ignoreDuplicates: true,
+              },
             );
           if (acceptanceWrite.error) throw acceptanceWrite.error;
         }
-        if (staleTokens.length) {
-          const staleCleanup = await admin
-            .from("web_push_subscriptions")
-            .delete()
-            .in("endpoint", staleTokens);
+        if (staleTargets.length) {
+          const staleCleanup = await admin.rpc(
+            "delete_exact_stale_push_registrations",
+            {
+              p_event_key: canonical!.eventKey,
+              p_registrations: staleTargets.map((target) => ({
+                kind: "web",
+                userId: target.userId,
+                endpoint: target.endpoint,
+                p256dh: target.p256dh,
+                auth: target.auth,
+                updatedAt: target.updatedAt,
+              })),
+            },
+          );
           if (staleCleanup.error) throw staleCleanup.error;
+          if (changedStaleRegistrationCount(staleCleanup.data) > 0)
+            throw new Error("Push registration changed during delivery");
         }
-        acceptedTicketCount += acceptedTokens.length;
+        acceptedTicketCount += acceptedTargets.length;
         const transient = outcomes.find(
           (outcome): outcome is PromiseRejectedResult =>
             outcome.status === "rejected",
@@ -686,7 +870,9 @@ Deno.serve(async (request) => {
     await markCanonicalEventAccepted(
       admin,
       canonical,
-      messages.length || webEligible.length
+      terminalExpoErrors.size
+        ? `gateway_terminal:${[...terminalExpoErrors].sort().join(",")}`
+        : messages.length || webEligible.length
         ? "gateway_accepted"
         : "preference_suppressed",
     );
@@ -794,34 +980,102 @@ async function canonicalChatEvent(
         ),
       )
     : undefined;
+  const eventType = direct ? "direct_message" : "group_message";
+  const audience = direct ? "user" : "group";
+  const title = pushPreview(
+    direct
+      ? `Direct message from ${senderName}`
+      : `Group message in ${groupName}`,
+    120,
+  );
+  const body = pushPreview(direct ? text : `${senderName}: ${text}`, 220);
+  const data = {
+    route: "/chat",
+    category: "chat",
+    groupId,
+    messageId: clientMessageId,
+    senderId,
+    senderName,
+    conversationType: direct ? "direct" : "group",
+    ...(direct ? { recipient: senderId } : {}),
+    conversationId:
+      stored.conversation_id ||
+      (direct ? `direct:${senderId}` : `group:${groupId}`),
+  };
+  const outboxSelect =
+    "id, event_key, group_id, dispatcher_id, category, event_type, audience, recipient_id, metric_slug, title, body, data, created_at, expires_at, dispatched_at, attempt_count";
+  const outboxInput = {
+    event_key: eventKey,
+    group_id: groupId,
+    dispatcher_id: senderId,
+    category: "chat",
+    event_type: eventType,
+    audience,
+    recipient_id: stored.recipient_id ?? null,
+    metric_slug: null,
+    title,
+    body,
+    data,
+    // The initial client request still has a 15-minute freshness gate above.
+    // Retaining the canonical row for 24 hours gives a delayed rate-limit
+    // receipt a bounded window in which to perform a safe targeted resend.
+    expires_at: new Date(
+      new Date(stored.created_at).getTime() + 24 * 60 * 60 * 1000,
+    ).toISOString(),
+  };
+  const inserted = await admin
+    .from("push_dispatch_events")
+    .upsert(outboxInput, { onConflict: "event_key", ignoreDuplicates: true })
+    .select(outboxSelect)
+    .maybeSingle();
+  if (inserted.error) throw inserted.error;
+  let outbox = inserted.data as StoredPushEvent | null;
+  if (!outbox) {
+    const existing = await admin
+      .from("push_dispatch_events")
+      .select(outboxSelect)
+      .eq("event_key", eventKey)
+      .maybeSingle();
+    if (existing.error) throw existing.error;
+    outbox = existing.data as StoredPushEvent | null;
+  }
+  const outboxData = stringRecord(outbox?.data);
+  if (
+    !outbox ||
+    outbox.group_id !== groupId ||
+    outbox.dispatcher_id !== senderId ||
+    outbox.category !== "chat" ||
+    outbox.event_type !== eventType ||
+    outbox.audience !== audience ||
+    (outbox.recipient_id ?? null) !== (stored.recipient_id ?? null) ||
+    outboxData.messageId !== clientMessageId ||
+    outboxData.senderId !== senderId
+  )
+    return {
+      response: json({ error: "Message push identity collision" }, 409),
+    };
+  if (outbox.dispatched_at) {
+    await markMessageAccepted(admin, groupId, senderId, clientMessageId);
+    return {
+      response: json({ sent: 0, deduplicated: true, accepted: true }),
+    };
+  }
   return {
     event: {
       eventKey,
       groupId,
       category: "chat",
-      eventType: direct ? "direct_message" : "group_message",
-      audience: direct ? "user" : "group",
+      eventType,
+      audience,
       recipientId: stored.recipient_id ?? undefined,
-      title: pushPreview(
-        direct
-          ? `Direct message from ${senderName}`
-          : `Group message in ${groupName}`,
-        120,
-      ),
-      body: pushPreview(direct ? text : `${senderName}: ${text}`, 220),
+      title: outbox.title,
+      body: outbox.body,
       bodies: fallbackBodies,
-      data: {
-        route: "/chat",
-        category: "chat",
-        groupId,
-        messageId: clientMessageId,
-        senderId,
-        senderName,
-        conversationType: direct ? "direct" : "group",
-        ...(direct ? { recipient: senderId } : {}),
-        conversationId:
-          stored.conversation_id || (direct ? `direct:${senderId}` : `group:${groupId}`),
-      },
+      data: outboxData,
+      dispatcherId: senderId,
+      outboxId: outbox.id,
+      outboxCreatedAt: outbox.created_at,
+      expiresAt: outbox.expires_at,
     },
   };
 }
@@ -1532,24 +1786,7 @@ async function validWebPushTarget(target: WebPushTarget) {
   )
     return false;
   try {
-    const endpoint = new URL(target.endpoint);
-    const hostname = endpoint.hostname.toLowerCase().replace(/\.$/, "");
-    const nonPublicHostname =
-      !hostname.includes(".") ||
-      hostname.includes(":") ||
-      /^[0-9.]+$/.test(hostname) ||
-      /(?:^|\.)(?:localhost|local|internal|lan|home|corp|test|invalid|example)$/.test(
-        hostname,
-      );
-    if (!(
-      endpoint.protocol === "https:" &&
-      !endpoint.username &&
-      !endpoint.password &&
-      !endpoint.hash &&
-      (!endpoint.port || endpoint.port === "443") &&
-      !nonPublicHostname
-    ))
-      return false;
+    if (!isAllowedWebPushEndpoint(target.endpoint)) return false;
     const publicKey = base64UrlByteArray(target.p256dh);
     const authSecret = base64UrlByteArray(target.auth);
     if (
@@ -1716,7 +1953,13 @@ async function canonicalRecipients(
   }
   if (event.audience === "user") {
     if (!event.recipientId) return [];
-    if (event.category !== "challenge") return [event.recipientId];
+    if (event.category !== "challenge")
+      return filterBlockedChatRecipients(
+        admin,
+        event,
+        senderId,
+        [event.recipientId],
+      );
     if (!challengeParticipantIds?.has(event.recipientId)) return [];
     const { data: membership, error } = await admin
       .from("group_members")
@@ -1742,7 +1985,48 @@ async function canonicalRecipients(
   if (event.audience === "challenge_participants") {
     ids = ids.filter((id) => challengeParticipantIds?.has(id));
   }
-  return [...new Set(ids)];
+  return filterBlockedChatRecipients(
+    admin,
+    event,
+    senderId,
+    [...new Set(ids)],
+  );
+}
+
+async function filterBlockedChatRecipients(
+  admin: AdminClient,
+  event: CanonicalEvent,
+  senderId: string,
+  recipientIds: string[],
+) {
+  const unique = [...new Set(recipientIds)];
+  const userAuthoredInteraction =
+    event.category === "chat" ||
+    event.eventType === "social_reaction" ||
+    event.eventType === "social_comment";
+  if (!userAuthoredInteraction || !unique.length) return unique;
+  const { data, error } = await admin
+    .from("user_blocks")
+    .select("blocker_id, blocked_user_id")
+    .or(`blocker_id.eq.${senderId},blocked_user_id.eq.${senderId}`);
+  if (error) {
+    // During a rolling deploy, suppress user-authored chat and social pushes
+    // until the safety migration is available. Failing closed avoids leaking
+    // previews or interactions across a block.
+    if (/user_blocks|relation|schema cache/i.test(error.message)) return [];
+    throw error;
+  }
+  const candidates = new Set(unique);
+  const blocked = new Set<string>();
+  for (const relationship of data ?? []) {
+    const blockerId = String(relationship.blocker_id ?? "");
+    const blockedUserId = String(relationship.blocked_user_id ?? "");
+    if (blockerId === senderId && candidates.has(blockedUserId))
+      blocked.add(blockedUserId);
+    if (blockedUserId === senderId && candidates.has(blockerId))
+      blocked.add(blockerId);
+  }
+  return unique.filter((recipientId) => !blocked.has(recipientId));
 }
 
 async function markCanonicalEventAccepted(
@@ -2052,6 +2336,25 @@ function objectRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+}
+
+function changedStaleRegistrationCount(value: unknown) {
+  const count = objectRecord(value).changedRegistrations;
+  if (typeof count !== "number" || !Number.isInteger(count) || count < 0)
+    throw new Error("Invalid stale push cleanup result");
+  return count;
+}
+
+function registrationVersionKey(
+  userId: string,
+  token: string,
+  updatedAt: string,
+) {
+  const instant = new Date(updatedAt);
+  const normalizedUpdatedAt = Number.isFinite(instant.getTime())
+    ? instant.toISOString()
+    : updatedAt;
+  return JSON.stringify([userId, token, normalizedUpdatedAt]);
 }
 
 function localDateKey(timeZone: string, instant = new Date()) {

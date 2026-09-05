@@ -561,6 +561,23 @@ export function statusAvatarGeometry(
     muscle * 2;
   const ankleHalf =
     (female ? 10 : male ? 11.5 : 10.8) + size * 0.7 + fatFull * 1.3;
+  // Fat distribution must remain anatomical across the complete figure. A
+  // previous torso-heavy calibration barely changed limb thickness, which
+  // made high-adiposity bodies look as if thin arms were attached to a much
+  // larger torso. Widen around each limb's centerline: inner landmarks move
+  // inward and outer landmarks move outward, with a restrained wrist gain.
+  const upperArmInnerHalf =
+    shoulderHalf - 9 + muscle * 1.4 + size - fatFull * 2.5;
+  const upperArmOuterHalf =
+    shoulderHalf + 8 + muscle * 3.8 + size * 1.5 + fatFull * 6.5;
+  const elbowInnerHalf =
+    shoulderHalf - 1 + muscle * 1.2 + size - fatFull * 2.2;
+  const elbowOuterHalf =
+    shoulderHalf + 10 + muscle * 3.5 + size * 1.5 + fatFull * 6;
+  const wristInnerHalf =
+    shoulderHalf - 4 + size * 0.25 - fatFull * 1.2;
+  const wristOuterHalf =
+    shoulderHalf + 4 + muscle * 1.2 + size * 0.55 + fatFull * 3;
 
   return {
     accessory: {
@@ -576,22 +593,19 @@ export function statusAvatarGeometry(
       ankleHalf,
       calfHalf,
       chestHalf,
-      elbowInnerHalf: shoulderHalf - 1 + muscle * 1.2 + size,
-      elbowOuterHalf:
-        shoulderHalf + 10 + muscle * 3.5 + size * 1.5 + fatFull * 3,
+      elbowInnerHalf,
+      elbowOuterHalf,
       headHalf,
       hipHalf,
       kneeHalf,
       neckHalf,
       shoulderHalf,
       thighHalf,
-      upperArmInnerHalf: shoulderHalf - 9 + muscle * 1.4 + size,
-      upperArmOuterHalf:
-        shoulderHalf + 8 + muscle * 3.8 + size * 1.5 + fatFull * 3,
+      upperArmInnerHalf,
+      upperArmOuterHalf,
       waistHalf,
-      wristInnerHalf: shoulderHalf - 4 + size * 0.25 + fatFull * 0.25,
-      wristOuterHalf:
-        shoulderHalf + 4 + muscle * 1.2 + size * 0.55 + fatFull,
+      wristInnerHalf,
+      wristOuterHalf,
     },
     adiposity: fat,
     bodyMass: mass,

@@ -51,6 +51,13 @@ import { WebDocumentMetadata } from "@/src/i18n/WebDocumentMetadata";
 import { onboardingCompletedLocally } from "@/src/storage/onboardingState";
 import { shouldWaitForOnboardingAuthority } from "@/src/domain/onboarding";
 import { dateKey, dateWithOffsetFrom } from "@/src/domain/date";
+import {
+  createNotificationResponseClaimGate,
+  notificationResponseDisposition,
+  notificationResponseOwnerId,
+  scheduleGuardedDefaultLanding,
+  shouldDeferWorkoutNotificationResponseClear,
+} from "@/src/domain/notificationResponses";
 import { ScreenTimeSyncBridge } from "@/src/screenTime/ScreenTimeSyncBridge";
 import { WidgetSnapshotBridge } from "@/src/widgets/WidgetSnapshotBridge";
 import {
@@ -96,6 +103,8 @@ import {
 // This runs during root-module evaluation, before AuthProvider and every
 // loading/redirect guard. The completion credential remains in memory only.
 captureGoogleHealthCompletionFromBrowserUrl();
+
+const claimNotificationResponse = createNotificationResponseClaimGate();
 
 const theme = {
   ...DefaultTheme,
@@ -205,6 +214,10 @@ function RootNavigator() {
   const rootSegment = String(segments[0] ?? "");
   const tabSegment = String(segments[1] ?? "");
   const landingApplied = useRef(false);
+  const landingDecisionVersion = useRef(0);
+  const cancelDefaultLanding = useRef<(() => void) | null>(null);
+  const [pendingNotificationResponse, setPendingNotificationResponse] =
+    useState<Notifications.NotificationResponse | null>(null);
   const onboardingAccountId =
     auth.user?.id ?? (!auth.configured ? `demo:${state.currentUserId}` : null);
   const [onboardingMarker, setOnboardingMarker] = useState<{
@@ -972,41 +985,109 @@ function RootNavigator() {
   ]);
   useEffect(() => {
     if (Platform.OS === "web") return;
-    const open = (response: Notifications.NotificationResponse) => {
-      const data = response.notification.request.content.data;
-      const route = data?.route;
+    let active = true;
+    const queue = (response: Notifications.NotificationResponse) => {
+      if (!active) return;
       if (
-        route === "/chat" &&
-        data?.conversationType === "direct" &&
-        typeof data?.senderId === "string"
-      ) {
-        router.push({
-          pathname: "/chat",
-          params: { recipient: data.senderId },
-        } as never);
-      } else if (typeof route === "string" && route.startsWith("/")) {
-        const params = Object.fromEntries(
-          Object.entries(data ?? {}).flatMap(([key, value]) =>
-            key !== "route" &&
-            (typeof value === "string" ||
-              typeof value === "number" ||
-              typeof value === "boolean")
-              ? [[key, String(value)]]
-              : [],
-          ),
-        );
-        if (!route.includes("?") && Object.keys(params).length)
-          router.push({ pathname: route, params } as never);
-        else router.push(route as never);
-      }
+        !claimNotificationResponse({
+          actionIdentifier: response.actionIdentifier,
+          notificationDate: response.notification.date,
+          notificationIdentifier: response.notification.request.identifier,
+        })
+      )
+        return;
+      setPendingNotificationResponse(response);
     };
     const subscription =
-      Notifications.addNotificationResponseReceivedListener(open);
+      Notifications.addNotificationResponseReceivedListener(queue);
     void Notifications.getLastNotificationResponseAsync().then((response) => {
-      if (response) open(response);
-    });
-    return () => subscription.remove();
+      if (response) queue(response);
+    }).catch(() => undefined);
+    return () => {
+      active = false;
+      subscription.remove();
+    };
   }, []);
+  useEffect(() => {
+    if (Platform.OS === "web" || !pendingNotificationResponse) return;
+    const data = pendingNotificationResponse.notification.request.content.data;
+    const disposition = notificationResponseDisposition({
+      authConfigured: auth.configured,
+      authStatus: auth.status,
+      authUserId: auth.user?.id,
+      hydrated,
+      onboardingComplete: onboardingDone,
+      responseOwnerId: notificationResponseOwnerId(data),
+      stateUserId: state.currentUserId,
+      tutorialActive,
+    });
+    if (disposition === "wait") return;
+
+    const deferClearToGym = shouldDeferWorkoutNotificationResponseClear({
+      actionIdentifier: pendingNotificationResponse.actionIdentifier,
+      data,
+      disposition,
+      platform: Platform.OS,
+    });
+
+    if (disposition === "open") {
+      const route = data?.route;
+      try {
+        // Suppress the configured landing redirect before dispatching the
+        // user's explicit tap. React runs this effect before the landing one.
+        landingApplied.current = true;
+        landingDecisionVersion.current += 1;
+        cancelDefaultLanding.current?.();
+        cancelDefaultLanding.current = null;
+        if (
+          route === "/chat" &&
+          data?.conversationType === "direct" &&
+          typeof data?.senderId === "string"
+        ) {
+          router.push({
+            pathname: "/chat",
+            params: { recipient: data.senderId },
+          } as never);
+        } else if (typeof route === "string" && route.startsWith("/")) {
+          const params = Object.fromEntries(
+            Object.entries(data ?? {}).flatMap(([key, value]) =>
+              key !== "route" &&
+              (typeof value === "string" ||
+                typeof value === "number" ||
+                typeof value === "boolean")
+                ? [[key, String(value)]]
+                : [],
+            ),
+          );
+          if (!route.includes("?") && Object.keys(params).length)
+            router.push({ pathname: route, params } as never);
+          else router.push(route as never);
+        }
+      } catch {
+        // Keep the response queued. A later navigation-ready render can retry.
+        return;
+      }
+    }
+
+    setPendingNotificationResponse(null);
+    if (deferClearToGym) return;
+    // Clear only after the destination was dispatched or an authenticated
+    // account proved that the response belongs to somebody else. Actionable
+    // iOS workout responses stay in Expo's durable cache until Gym restores
+    // the account draft and consumes the action.
+    void Notifications.clearLastNotificationResponseAsync().catch(
+      () => undefined,
+    );
+  }, [
+    auth.configured,
+    auth.status,
+    auth.user?.id,
+    hydrated,
+    onboardingDone,
+    pendingNotificationResponse,
+    state.currentUserId,
+    tutorialActive,
+  ]);
   const safeDefaultLandingPage = useMemo(() => {
     const target = state.settings.defaultLandingPage ?? "index";
     const visible = {
@@ -1045,8 +1126,25 @@ function RootNavigator() {
     ) return;
     landingApplied.current = true;
     const target = safeDefaultLandingPage;
-    if (target !== "index")
-      setTimeout(() => router.replace(`/${target}` as never), 0);
+    const decisionVersion = ++landingDecisionVersion.current;
+    if (target === "index") return;
+
+    cancelDefaultLanding.current?.();
+    const cancel = scheduleGuardedDefaultLanding({
+      isStillPending: () =>
+        landingApplied.current &&
+        landingDecisionVersion.current === decisionVersion,
+      navigate: () => {
+        cancelDefaultLanding.current = null;
+        router.replace(`/${target}` as never);
+      },
+    });
+    cancelDefaultLanding.current = cancel;
+    return () => {
+      cancel();
+      if (cancelDefaultLanding.current === cancel)
+        cancelDefaultLanding.current = null;
+    };
   }, [
     auth.status,
     hydrated,
@@ -1094,7 +1192,11 @@ function RootNavigator() {
     rootSegment === "join" ||
     rootSegment === "onboarding" ||
     rootSegment === "extension" ||
-    rootSegment === "privacy";
+    rootSegment === "privacy" ||
+    rootSegment === "community-guidelines" ||
+    rootSegment === "terms" ||
+    rootSegment === "support" ||
+    rootSegment === "delete-account";
 
   const accountStateMismatch =
     auth.status === "signedIn" &&
@@ -1131,7 +1233,7 @@ function RootNavigator() {
   )
     return <Redirect href={"/update-password" as never} />;
   if (
-    auth.status === "signedIn" &&
+    (auth.status === "signedIn" || auth.status === "demo") &&
     onboardingDone &&
     rootSegment === "onboarding"
   ) {
@@ -1144,6 +1246,10 @@ function RootNavigator() {
     rootSegment !== "onboarding" &&
     rootSegment !== "extension" &&
     rootSegment !== "privacy" &&
+    rootSegment !== "community-guidelines" &&
+    rootSegment !== "terms" &&
+    rootSegment !== "support" &&
+    rootSegment !== "delete-account" &&
     !(auth.configured && auth.status === "signedOut")
   )
     return <Redirect href={"/onboarding" as never} />;
@@ -1181,6 +1287,13 @@ function RootNavigator() {
               <Stack.Screen name="onboarding" options={{ animation: "fade" }} />
               <Stack.Screen name="extension" options={{ animation: "fade" }} />
               <Stack.Screen name="privacy" options={{ animation: "fade" }} />
+              <Stack.Screen name="community-guidelines" options={{ animation: "fade" }} />
+              <Stack.Screen name="terms" options={{ animation: "fade" }} />
+              <Stack.Screen name="support" options={{ animation: "fade" }} />
+              <Stack.Screen
+                name="delete-account"
+                options={{ animation: "fade" }}
+              />
               <Stack.Screen
                 name="food-search"
                 options={{ presentation: "modal" }}

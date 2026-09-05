@@ -39,6 +39,10 @@ export default function SignInScreen() {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const lastEmailRequestAt = useRef(0);
+  // Release posture: Apple OAuth stays disabled until account deletion can
+  // revoke its provider token. Google is hidden on iOS so that build uses only
+  // HabHub's email/password and magic-link account system.
+  const showGoogleOAuth = Platform.OS !== "ios";
 
   useEffect(() => {
     void rememberPendingInvite(params.invite);
@@ -230,7 +234,6 @@ export default function SignInScreen() {
               busy !== null &&
               busy !== "reset" &&
               busy !== "google" &&
-              busy !== "apple" &&
               busy !== "demo"
             }
             onPress={submit}
@@ -253,41 +256,32 @@ export default function SignInScreen() {
               </Text>
             </Pressable>
           ) : null}
-          <View style={styles.divider}>
-            <View
-              style={[styles.line, { backgroundColor: colors.border }]}
-            />
-            <Text style={[styles.or, { color: colors.faint }]}>OR</Text>
-            <View
-              style={[styles.line, { backgroundColor: colors.border }]}
-            />
-          </View>
-          <View style={styles.providers}>
-            <View style={styles.provider}>
-              <Button
-                label="Google"
-                variant="ghost"
-                icon="logo-google"
-                loading={busy === "google"}
-                onPress={() =>
-                  run("google", () => auth.signInWithProvider("google"))
-                }
-              />
-            </View>
-            {Platform.OS !== "android" ? (
-              <View style={styles.provider}>
-                <Button
-                  label="Apple"
-                  variant="ghost"
-                  icon="logo-apple"
-                  loading={busy === "apple"}
-                  onPress={() =>
-                    run("apple", () => auth.signInWithProvider("apple"))
-                  }
+          {showGoogleOAuth ? (
+            <>
+              <View style={styles.divider}>
+                <View
+                  style={[styles.line, { backgroundColor: colors.border }]}
+                />
+                <Text style={[styles.or, { color: colors.faint }]}>OR</Text>
+                <View
+                  style={[styles.line, { backgroundColor: colors.border }]}
                 />
               </View>
-            ) : null}
-          </View>
+              <View style={styles.providers}>
+                <View style={styles.provider}>
+                  <Button
+                    label="Google"
+                    variant="ghost"
+                    icon="logo-google"
+                    loading={busy === "google"}
+                    onPress={() =>
+                      run("google", () => auth.signInWithProvider("google"))
+                    }
+                  />
+                </View>
+              </View>
+            </>
+          ) : null}
           {auth.authError ? (
             <View
               accessibilityLiveRegion="polite"
@@ -337,21 +331,41 @@ export default function SignInScreen() {
           />
         </Pressable>
         <Text style={[styles.terms, { color: colors.faint }]}>
-          By continuing, you agree to the app’s privacy policy and terms
-          configured by its operator.
+          By continuing, you agree to the Terms of Use and acknowledge the
+          Privacy &amp; Health Data Policy.
         </Text>
-        <Pressable
-          accessibilityRole="link"
-          accessibilityLabel={t("Read Privacy & Health Data Policy")}
-          onPress={() => router.push("/privacy" as never)}
-          style={styles.policyLink}
-        >
-          <Text
-            style={[styles.policyLinkText, { color: accent }]}
+        <View style={styles.legalLinks}>
+          <Pressable
+            accessibilityRole="link"
+            accessibilityLabel={t("Read Privacy & Health Data Policy")}
+            onPress={() => router.push("/privacy" as never)}
+            style={styles.policyLink}
           >
-            {t("Privacy & Health Data Policy")}
-          </Text>
-        </Pressable>
+            <Text style={[styles.policyLinkText, { color: accent }]}>
+              {t("Privacy & Health Data Policy")}
+            </Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="link"
+            accessibilityLabel="Read Terms of Use"
+            onPress={() => router.push("/terms" as never)}
+            style={styles.policyLink}
+          >
+            <Text translate={false} style={[styles.policyLinkText, { color: accent }]}>
+              Terms of Use
+            </Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="link"
+            accessibilityLabel="Open HabHub support"
+            onPress={() => router.push("/support" as never)}
+            style={styles.policyLink}
+          >
+            <Text translate={false} style={[styles.policyLinkText, { color: accent }]}>
+              Support
+            </Text>
+          </Pressable>
+        </View>
         <Pressable
           accessibilityRole="link"
           onPress={() => void Linking.openURL("https://platform.fatsecret.com")}
@@ -493,6 +507,14 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginHorizontal: 24,
     marginTop: 14,
+  },
+  legalLinks: {
+    minHeight: 44,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    justifyContent: "center",
+    columnGap: 18,
   },
   policyLink: { alignSelf: "center", minHeight: 44, justifyContent: "center" },
   policyLinkText: {

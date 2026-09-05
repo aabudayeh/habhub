@@ -1714,6 +1714,7 @@ export function mergeHealthEntries(
   provider: HealthProvider,
   metricIds: string[],
   fromDate: string,
+  throughDate?: string,
 ) {
   const targetMetrics = new Set(metricIds);
   const byId = new Map(
@@ -1722,7 +1723,8 @@ export function mergeHealthEntries(
         entry.userId === state.currentUserId &&
         entry.sourceProvider === provider &&
         targetMetrics.has(entry.metricId) &&
-        entry.localDate >= fromDate
+        entry.localDate >= fromDate &&
+        (!throughDate || entry.localDate <= throughDate)
       ))
       .map((entry) => [
         metricEntryKey(entry.userId, entry.id),

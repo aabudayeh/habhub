@@ -5,6 +5,11 @@ import { AppState as NativeAppState, InteractionManager, Platform } from 'react-
 import { useAuth } from '@/src/auth/AuthProvider';
 import { entriesForUserDay } from '@/src/domain/dataIndex';
 import { dateKey } from '@/src/domain/date';
+import {
+  healthHistorySelectionKey,
+  healthImportStart,
+  normalizeHealthHistoryDays,
+} from '@/src/domain/healthHistory';
 import { setCloudSyncPaused } from '@/src/cloud/syncGate';
 import { enabledHealthDataTypes, healthFallbackContextForRead, healthVisibilityByMetric, mapHealthRecordsToEntries, metricIdsForHealthDataTypes } from '@/src/domain/health';
 import {
@@ -20,6 +25,7 @@ import { nativeHealthAdapter } from '@/src/health/adapter';
 import { configureBackgroundHealthSync } from '@/src/health/background';
 import {
   HEALTH_INITIAL_DAYS,
+  HEALTH_ROUTINE_OVERLAP_DAYS,
   healthPhysicalActivityMigrationKey,
   HEALTH_STEPS_IMPORT_VERSION,
   HEALTH_TODAY_STEPS_ACTIVE_REFRESH_MS,
@@ -34,12 +40,13 @@ import {
   normalizeHealthSyncMode,
 } from '@/src/health/schedule';
 import { HealthAdapterAvailability, LiveStepDiagnostics, PersistedHealthStatus } from '@/src/health/types';
+import { parsePersistedHealthStatus, rebaseForegroundHealthStatus, reconcilePersistedHealthConnection } from '@/src/health/persistedStatus';
 import { useApp } from '@/src/state/AppProvider';
-import { LiveStepCombination, LiveStepSource, SyncMode } from '@/src/types';
+import { runAppStateStorageMutation } from '@/src/storage/appStateMutation';
+import { HealthDataType, HealthHistoryDays, LiveStepCombination, LiveStepSource, SyncMode } from '@/src/types';
 
 export type HealthSyncStatus = 'checking' | 'unavailable' | 'idle' | 'requesting' | 'syncing' | 'ready' | 'error';
 
-const RECENT_IMPORT_DAYS = 7;
 const BACKFILL_CHUNK_DAYS = 30;
 const FIRST_BACKFILL_DELAY_MS = 6_000;
 const NEXT_BACKFILL_DELAY_MS = 900;
@@ -75,11 +82,13 @@ type HealthSyncContextValue = {
   }[];
   liveStepDiagnostics: LiveStepDiagnostics | null;
   connect: (options?: {
-    historyDays?: 30 | 90 | 365 | 730;
+    historyDays?: HealthHistoryDays;
+    dataTypes?: HealthDataType[];
     startTrackedGoalsAtFirstData?: boolean;
   }) => Promise<void>;
   syncNow: (reason?: 'open' | 'pull' | 'manual') => Promise<void>;
   syncHistory: () => Promise<void>;
+  setHealthHistoryDays: (days: HealthHistoryDays) => Promise<void>;
   setSyncMode: (mode: SyncMode) => Promise<void>;
   setBackgroundSyncIntervalHours: (hours: number) => Promise<void>;
   setSourceEnabled: (sourceId: string, enabled: boolean) => Promise<void>;
@@ -115,6 +124,7 @@ const disabledHealthContext: HealthSyncContextValue = {
   connect: disabledHealthAction,
   syncNow: disabledHealthAction,
   syncHistory: disabledHealthAction,
+  setHealthHistoryDays: disabledHealthAction,
   setSyncMode: disabledHealthAction,
   setBackgroundSyncIntervalHours: disabledHealthAction,
   setSourceEnabled: disabledHealthAction,
@@ -135,22 +145,17 @@ export function TutorialHealthSyncBoundary({ children }: PropsWithChildren) {
 function syncStart(
   lastSyncedAt: string | null,
   fullRefresh = false,
-  historyDays = 90,
+  historyDays: HealthHistoryDays = 90,
+  now = new Date(),
 ) {
-  let from = lastSyncedAt ? new Date(lastSyncedAt) : new Date();
-  if (Number.isNaN(from.getTime())) from = new Date();
-  from.setHours(0, 0, 0, 0);
-  // First setup imports a lightweight month. Explicit history repair imports
-  // two years; routine syncs overlap two days so provider edits are corrected.
-  from.setDate(
-    from.getDate() -
-      (fullRefresh
-        ? historyDays
-        : lastSyncedAt
-          ? 2
-          : HEALTH_INITIAL_DAYS),
-  );
-  return from;
+  return healthImportStart({
+    now,
+    lastSyncedAt,
+    fullRefresh,
+    historyDays,
+    initialDays: HEALTH_INITIAL_DAYS,
+    routineOverlapDays: HEALTH_ROUTINE_OVERLAP_DAYS,
+  });
 }
 
 export function HealthSyncProvider({ children }: PropsWithChildren) {
@@ -250,9 +255,17 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
   );
 
   const saveStatus = useCallback(async (next: PersistedHealthStatus) => {
-    persistedRef.current = next;
-    setPersisted(next);
-    await AsyncStorage.setItem(`${HEALTH_STATUS_STORAGE_KEY}:${stateRef.current.currentUserId}`, JSON.stringify(next));
+    const accountId = stateRef.current.currentUserId;
+    const key = `${HEALTH_STATUS_STORAGE_KEY}:${accountId}`;
+    const rebased = await runAppStateStorageMutation(async () => {
+      const stored = parsePersistedHealthStatus(await AsyncStorage.getItem(key));
+      const durable = rebaseForegroundHealthStatus(stored, next);
+      await AsyncStorage.setItem(key, JSON.stringify(durable));
+      return durable;
+    });
+    if (stateRef.current.currentUserId !== accountId) return;
+    persistedRef.current = rebased;
+    setPersisted(rebased);
   }, []);
 
   useEffect(() => {
@@ -329,6 +342,8 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
               error: parsed.error ?? null,
               lastReason: parsed.lastReason,
               lastImportFromDate: parsed.lastImportFromDate,
+              backgroundReconciliation:
+                parsed.backgroundReconciliation ?? null,
               backfill:
                 parsed.backfill &&
                 !Number.isNaN(new Date(parsed.backfill.from).getTime()) &&
@@ -339,7 +354,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
               nextRetryAt: parsed.nextRetryAt ?? null,
             };
           } catch {
-            await AsyncStorage.removeItem(statusKey);
+            restored = empty;
           }
         }
         // Reconcile persisted intent with current native grants on every
@@ -347,48 +362,42 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
         // closed, so a cached true must not keep showing Connected. Never turn
         // an explicit false back on merely because permissions remain after
         // the user chose Disconnect inside HabHub.
-        if (
+        const connectionStateReader =
+          nativeHealthAdapter.grantedConnectionState;
+        const canReconcileNativeGrant =
           restored.connectionEnabled !== false &&
           nextAvailability.available &&
-          nativeHealthAdapter.grantedConnectionState
-        ) {
-          const granted = await nativeHealthAdapter
-            .grantedConnectionState(
+          Boolean(connectionStateReader);
+        const granted = canReconcileNativeGrant && connectionStateReader
+          ? await connectionStateReader(
               enabledHealthDataTypes(
                 stateRef.current.settings.healthSync.dataTypes,
               ),
             )
-            .catch(() => null);
-          if (cancelled) return;
-          if (
-            restored.connectionEnabled === true &&
-            granted?.connected === false
-          ) {
-            restored = {
-              ...restored,
-              connectionEnabled: false,
-              backgroundAccess: false,
-            };
-            await AsyncStorage.setItem(
-              statusKey,
-              JSON.stringify(restored),
-            ).catch(() => undefined);
-            await nativeHealthAdapter.disconnect?.().catch(() => undefined);
-          } else if (
-            restored.connectionEnabled === undefined &&
-            granted?.connected
-          ) {
-            restored = {
-              ...restored,
-              connectionEnabled: true,
-              backgroundAccess: granted.backgroundAccess,
-            };
-            await AsyncStorage.setItem(
-              statusKey,
-              JSON.stringify(restored),
-            ).catch(() => undefined);
+            .catch(() => null)
+          : null;
+        if (cancelled) return;
+        let disconnectRevokedGrant = false;
+        restored = await runAppStateStorageMutation(async () => {
+          const latestRaw = await AsyncStorage.getItem(statusKey);
+          let latest = parsePersistedHealthStatus(latestRaw);
+          if (!latest) {
+            if (latestRaw) await AsyncStorage.removeItem(statusKey);
+            latest = restored;
           }
-        }
+          const connection = reconcilePersistedHealthConnection(
+            latest,
+            granted,
+          );
+          const reconciled = connection.status;
+          disconnectRevokedGrant = connection.disconnectRevokedGrant;
+          if (reconciled !== latest)
+            await AsyncStorage.setItem(statusKey, JSON.stringify(reconciled));
+          return reconciled;
+        });
+        if (disconnectRevokedGrant)
+          await nativeHealthAdapter.disconnect?.().catch(() => undefined);
+        if (cancelled) return;
         persistedRef.current = restored;
         setPersisted(restored);
         if (restored.connectionEnabled !== undefined) {
@@ -710,6 +719,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     if (
       !current.settings.healthSync.enabled ||
       !current.settings.healthSync.dataTypes.steps ||
+      normalizeHealthHistoryDays(current.settings.healthHistoryDays) === 0 ||
       current.settings.healthSync.initialHistoryImportPending ||
       Boolean(persistedRef.current.backfill) ||
       !nativeHealthAdapter.provider ||
@@ -736,7 +746,9 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
             .map((entry) => entry.localDate);
           const repairFrom = historicalStepRepairStart(
             now,
-            current.settings.healthHistoryDays ?? 90,
+            normalizeHealthHistoryDays(
+              current.settings.healthHistoryDays,
+            ),
             existingDates,
           );
           cursor = {
@@ -900,7 +912,20 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
             current.settings.healthSync.backgroundAccess,
           );
         }
-        const historyDays = current.settings.healthHistoryDays ?? 90;
+        const historyDays = normalizeHealthHistoryDays(
+          current.settings.healthHistoryDays,
+        );
+        const requestedHistorySelection = healthHistorySelectionKey(
+          historyDays,
+        );
+        const historySelectionIsCurrent = () => {
+          const latest = stateRef.current.settings;
+          return (
+            healthHistorySelectionKey(
+              normalizeHealthHistoryDays(latest.healthHistoryDays),
+            ) === requestedHistorySelection
+          );
+        };
         const metricIds = metricIdsForHealthDataTypes(
           dataTypes,
           current.metrics,
@@ -919,16 +944,24 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
         const requestedAt = new Date();
         let importedCount = 0;
         let cumulativeImportedCount = 0;
-        let backfill = fullRefresh ? null : previous.backfill;
+        let backfill =
+          historyDays === 0 || fullRefresh ? null : previous.backfill;
         let completedStepHistoryRange: {
           from: string;
           through: string;
         } | null = null;
         if ((fullRefresh || initialHistoryImport) && !backfill) {
           const now = new Date();
-          const historyFrom = syncStart(null, true, historyDays);
+          const historyFrom = syncStart(
+            null,
+            true,
+            historyDays,
+            now,
+          );
           const recentFrom = new Date(now);
-          recentFrom.setDate(recentFrom.getDate() - RECENT_IMPORT_DAYS);
+          recentFrom.setDate(
+            recentFrom.getDate() - HEALTH_ROUTINE_OVERLAP_DAYS,
+          );
           if (recentFrom < historyFrom) recentFrom.setTime(historyFrom.getTime());
           const finalChunk = recentFrom.getTime() <= historyFrom.getTime();
           backfill = finalChunk
@@ -965,6 +998,10 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
             liveStepCombination:
               current.settings.healthSync.liveStepCombination,
           });
+          if (!historySelectionIsCurrent()) {
+            setStatus('ready');
+            return;
+          }
           rememberLiveStepDiagnostics(records);
           const sourcePreferences = rememberHealthSources(records);
           const entries = mapHealthRecordsToEntries(
@@ -1008,6 +1045,10 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
             liveStepCombination:
               current.settings.healthSync.liveStepCombination,
           });
+          if (!historySelectionIsCurrent()) {
+            setStatus('ready');
+            return;
+          }
           rememberLiveStepDiagnostics(records);
           const sourcePreferences = rememberHealthSources(records);
           const entries = mapHealthRecordsToEntries(
@@ -1046,7 +1087,11 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
               };
           if (backfill) scheduleBackfill(NEXT_BACKFILL_DELAY_MS);
         } else {
-          const from = syncStart(previous.lastSyncedAt, false, historyDays);
+          const from = syncStart(
+            previous.lastSyncedAt,
+            false,
+            historyDays,
+          );
           const to = new Date();
           const records = await nativeHealthAdapter.read({
             from,
@@ -1057,6 +1102,10 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
             liveStepCombination:
               current.settings.healthSync.liveStepCombination,
           });
+          if (!historySelectionIsCurrent()) {
+            setStatus('ready');
+            return;
+          }
           rememberLiveStepDiagnostics(records);
           const sourcePreferences = rememberHealthSources(records);
           const entries = mapHealthRecordsToEntries(
@@ -1110,6 +1159,10 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
           )
             ? HEALTH_STEPS_IMPORT_VERSION
             : persistedRef.current.stepsImportVersion;
+        if (!historySelectionIsCurrent()) {
+          setStatus('ready');
+          return;
+        }
         await saveStatus({
           ...persistedRef.current,
           // Any successful native read proves that this device remains
@@ -1162,13 +1215,89 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
   }, [importHealthEntries, markPhysicalActivityMigrationAttempt, rememberHealthSources, rememberLiveStepDiagnostics, saveStatus, scheduleBackfill, signedInNativeAccountId]);
   runSyncRef.current = runSync;
 
+  const resetPersistedHistoryWork = useCallback(async () => {
+    const accountId = stateRef.current.currentUserId;
+    const key = `${HEALTH_STATUS_STORAGE_KEY}:${accountId}`;
+    const reset = await runAppStateStorageMutation(async () => {
+      const stored =
+        parsePersistedHealthStatus(await AsyncStorage.getItem(key)) ??
+        persistedRef.current;
+      const next: PersistedHealthStatus = {
+        ...stored,
+        backfill: null,
+        stepsRepair: null,
+        stepsRepairError: null,
+        stepsRepairNextRetryAt: null,
+        backgroundReconciliation: null,
+        retryAttempt: 0,
+        nextRetryAt: null,
+      };
+      await AsyncStorage.setItem(key, JSON.stringify(next));
+      return next;
+    });
+    if (stateRef.current.currentUserId !== accountId) return;
+    persistedRef.current = reset;
+    setPersisted(reset);
+  }, []);
+
+  const setHealthHistoryDays = useCallback(async (days: HealthHistoryDays) => {
+    const nextDays = normalizeHealthHistoryDays(days);
+    const currentState = stateRef.current;
+    const previousDays = normalizeHealthHistoryDays(
+      currentState.settings.healthHistoryDays,
+    );
+    if (nextDays === previousDays) return;
+
+    const pending = syncingRef.current;
+    if (backfillTimerRef.current) {
+      clearTimeout(backfillTimerRef.current);
+      backfillTimerRef.current = null;
+    }
+    if (stepsRepairTimerRef.current) {
+      clearTimeout(stepsRepairTimerRef.current);
+      stepsRepairTimerRef.current = null;
+    }
+    setCloudSyncPaused('health-backfill', false);
+    setCloudSyncPaused('health-steps-repair', false);
+    const healthSync = {
+      ...currentState.settings.healthSync,
+      ...(nextDays === 0
+        ? {
+            backfillTrackedGoalsOnFirstImport: false,
+            backfillTrackedGoalsEmptyReadCount: undefined,
+          }
+        : {}),
+    };
+    const settings = {
+      ...currentState.settings,
+      healthHistoryDays: nextDays,
+      healthSync,
+    };
+    // Publish the boundary before awaiting storage so any native read already
+    // in flight fails its pre-commit selection check.
+    stateRef.current = { ...currentState, settings };
+    updateSettingsRef.current({ healthHistoryDays: nextDays, healthSync });
+    await resetPersistedHistoryWork();
+    if (pending) {
+      await pending.catch(() => undefined);
+      // A foreground save that was already queued can land after the first
+      // reset. Clear its obsolete cursor once more after it fully exits.
+      await resetPersistedHistoryWork();
+    }
+  }, [resetPersistedHistoryWork]);
+
   const connect = useCallback(async (options?: {
-    historyDays?: 30 | 90 | 365 | 730;
+    historyDays?: HealthHistoryDays;
+    dataTypes?: HealthDataType[];
     startTrackedGoalsAtFirstData?: boolean;
   }) => {
     if (!availability?.available) throw new Error(availability?.detail ?? 'Health data is not available on this device.');
     const current = stateRef.current.settings;
-    const dataTypes = enabledHealthDataTypes(current.healthSync.dataTypes);
+    const dataTypes = options?.dataTypes
+      ? [...new Set(options.dataTypes)]
+      : enabledHealthDataTypes(current.healthSync.dataTypes);
+    if (!dataTypes.length)
+      throw new Error('Choose at least one connected-health tracker first.');
     const requestedBackgroundAccess =
       healthSyncSchedule(
         current.syncMode,
@@ -1198,10 +1327,18 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
         requestedBackgroundAccess &&
         (granted ? granted.backgroundAccess : true);
       const latest = stateRef.current.settings;
+      const previousHistoryDays = normalizeHealthHistoryDays(
+        latest.healthHistoryDays,
+      );
+      const requestedHistoryDays = normalizeHealthHistoryDays(
+        options?.historyDays ?? previousHistoryDays,
+      );
       const historyBackfillAlreadyPending =
         latest.healthSync.backfillTrackedGoalsOnFirstImport === true;
       const shouldArmHistoryBackfill =
-        options === undefined
+        requestedHistoryDays === 0
+          ? false
+          : options === undefined
           ? historyBackfillAlreadyPending
           : options.startTrackedGoalsAtFirstData === true;
       const initialHistoryImportPending =
@@ -1210,6 +1347,13 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
         ...latest.healthSync,
         enabled: true,
         backgroundAccess,
+        dataTypes: options?.dataTypes
+          ? (Object.fromEntries(
+              (Object.keys(latest.healthSync.dataTypes) as HealthDataType[]).map(
+                (type) => [type, dataTypes.includes(type)],
+              ),
+            ) as Record<HealthDataType, boolean>)
+          : latest.healthSync.dataTypes,
         // The initial read is deferred until onboarding has navigated away.
         // Remember that this is still the onboarding import so its historical
         // entries can establish the selected goals' start dates exactly once.
@@ -1224,7 +1368,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
       const nextSettings = {
         ...latest,
         healthSync,
-        healthHistoryDays: options?.historyDays ?? latest.healthHistoryDays,
+        healthHistoryDays: requestedHistoryDays,
       };
       await saveStatus({
         ...persistedRef.current,
@@ -1239,6 +1383,15 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
         ...stateRef.current,
         settings: nextSettings,
       };
+      if (
+        healthHistorySelectionKey(
+          requestedHistoryDays,
+        ) !==
+        healthHistorySelectionKey(
+          previousHistoryDays,
+        )
+      )
+        await resetPersistedHistoryWork();
       // Permission approval should return control to onboarding immediately.
       // The first lightweight import runs after navigation instead of making
       // the setup button wait while Health Connect reads and maps its records.
@@ -1251,7 +1404,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
       setStatus('error');
       throw error;
     }
-  }, [availability, markPhysicalActivityMigrationAttempt, runSync, saveStatus, signedInNativeAccountId, updateSettings]);
+  }, [availability, markPhysicalActivityMigrationAttempt, resetPersistedHistoryWork, runSync, saveStatus, signedInNativeAccountId, updateSettings]);
 
   const setSyncMode = useCallback(async (
     mode: SyncMode,
@@ -1484,6 +1637,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
       !state.settings.onboardingComplete ||
       !state.settings.healthSync.enabled ||
       !state.settings.healthSync.dataTypes.steps ||
+      normalizeHealthHistoryDays(state.settings.healthHistoryDays) === 0 ||
       state.settings.healthSync.initialHistoryImportPending ||
       Boolean(persisted.backfill) ||
       (persisted.stepsImportVersion ?? 0) >= HEALTH_STEPS_IMPORT_VERSION
@@ -1513,6 +1667,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     state.settings.healthSync.dataTypes.steps,
     state.settings.healthSync.enabled,
     state.settings.healthSync.initialHistoryImportPending,
+    state.settings.healthHistoryDays,
     state.settings.onboardingComplete,
     status,
   ]);
@@ -1561,7 +1716,8 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
       status !== 'ready' ||
       !persisted.backfill ||
       !state.settings.onboardingComplete ||
-      !state.settings.healthSync.enabled
+      !state.settings.healthSync.enabled ||
+      normalizeHealthHistoryDays(state.settings.healthHistoryDays) === 0
     ) return;
     const retryAt = persisted.nextRetryAt
       ? new Date(persisted.nextRetryAt).getTime()
@@ -1577,6 +1733,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     persisted.nextRetryAt,
     scheduleBackfill,
     state.settings.healthSync.enabled,
+    state.settings.healthHistoryDays,
     state.settings.onboardingComplete,
     status,
   ]);
@@ -1668,6 +1825,9 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
         stateRef.current.settings.onboardingComplete &&
         stateRef.current.settings.healthSync.enabled &&
         stateRef.current.settings.healthSync.dataTypes.steps &&
+        normalizeHealthHistoryDays(
+          stateRef.current.settings.healthHistoryDays,
+        ) !== 0 &&
         !stateRef.current.settings.healthSync.initialHistoryImportPending &&
         !persistedRef.current.backfill &&
         (persistedRef.current.stepsImportVersion ?? 0) <
@@ -1715,7 +1875,10 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
           if (
             persistedRef.current.backfill &&
             stateRef.current.settings.onboardingComplete &&
-            stateRef.current.settings.healthSync.enabled
+            stateRef.current.settings.healthSync.enabled &&
+            normalizeHealthHistoryDays(
+              stateRef.current.settings.healthHistoryDays,
+            ) !== 0
           ) {
             const retryAt = persistedRef.current.nextRetryAt
               ? new Date(persistedRef.current.nextRetryAt).getTime()
@@ -1841,13 +2004,14 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     connect,
     syncNow,
     syncHistory: () => runSync('history'),
+    setHealthHistoryDays,
     setSyncMode,
     setBackgroundSyncIntervalHours,
     setSourceEnabled,
     setLiveStepConfiguration,
     disconnect,
     openSettings: nativeHealthAdapter.openSettings,
-  }), [availability, backgroundRegistration, connect, disconnect, liveStepDiagnostics, persisted, runSync, setBackgroundSyncIntervalHours, setLiveStepConfiguration, setSourceEnabled, setSyncMode, sourceOptions, sourceOrigins, status, syncNow]);
+  }), [availability, backgroundRegistration, connect, disconnect, liveStepDiagnostics, persisted, runSync, setBackgroundSyncIntervalHours, setHealthHistoryDays, setLiveStepConfiguration, setSourceEnabled, setSyncMode, sourceOptions, sourceOrigins, status, syncNow]);
 
   return <HealthSyncContext.Provider value={value}>{children}</HealthSyncContext.Provider>;
 }

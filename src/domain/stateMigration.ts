@@ -17,6 +17,7 @@ import {
   normalizeLiveStepSources,
   LIVE_STEP_STRATEGY_VERSION,
 } from "@/src/domain/healthDedup";
+import { normalizeHealthHistoryDays } from "@/src/domain/healthHistory";
 import { normalizeTodoItems } from "@/src/domain/todos";
 import { DEFAULT_WORKOUT_QUALIFICATION } from "@/src/domain/workoutQualification";
 import {
@@ -443,20 +444,25 @@ function repairOrphanedGroupMetrics(state: AppState): AppState {
   });
   const groups = state.groups.map(repairGroup);
   const group = repairGroup(state.group);
+  const storedLiveStepSources = state.settings.healthSync.liveStepSources;
   const normalizedLiveStepSources = normalizeLiveStepSources(
-    state.settings.healthSync.liveStepSources,
+    storedLiveStepSources,
   );
   const migrateLiveStepStrategy =
     (state.settings.healthSync.liveStepStrategyVersion ?? 0) <
       LIVE_STEP_STRATEGY_VERSION &&
-    normalizedLiveStepSources.length === 1 &&
-    normalizedLiveStepSources[0] === "android_device";
-  const liveStepCombination = migrateLiveStepStrategy
-    ? "priority"
-    : state.settings.healthSync.liveStepCombination === "priority" ||
-        state.settings.healthSync.liveStepCombination === "sum"
-      ? state.settings.healthSync.liveStepCombination
-      : "highest";
+    (!Array.isArray(storedLiveStepSources) ||
+      normalizedLiveStepSources.length === 0 ||
+      (normalizedLiveStepSources.length === 1 &&
+        normalizedLiveStepSources[0] === "android_device"));
+  const storedLiveStepCombination =
+    state.settings.healthSync.liveStepCombination;
+  const liveStepCombination =
+    storedLiveStepCombination === "highest" ||
+    storedLiveStepCombination === "priority" ||
+    storedLiveStepCombination === "sum"
+      ? storedLiveStepCombination
+      : "priority";
   const storedBackgroundIntervalHours = Number(
     state.settings.healthSync.backgroundIntervalHours,
   );
@@ -489,7 +495,9 @@ function repairOrphanedGroupMetrics(state: AppState): AppState {
     showJournal: state.settings.showJournal !== false,
     showPerformance: state.settings.showPerformance !== false,
     showStatus: state.settings.showStatus !== false,
-    healthHistoryDays: state.settings.healthHistoryDays ?? 90,
+    healthHistoryDays: normalizeHealthHistoryDays(
+      state.settings.healthHistoryDays,
+    ),
     todayHistoryCollapsed: state.settings.todayHistoryCollapsed ?? true,
     showFeaturedTodoProgress:
       state.settings.showFeaturedTodoProgress ?? false,

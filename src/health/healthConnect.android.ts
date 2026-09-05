@@ -32,6 +32,7 @@ import {
   resolveCurrentDeviceStepOrigins,
   samsungDailySummaryStepCount,
 } from "@/src/domain/healthDedup";
+import { createHealthConnectInitializationGate } from "@/src/health/healthConnectInitialization";
 import { HealthAdapter, HealthImportRecord } from "@/src/health/types";
 import { HealthDataType, NutritionDetails } from "@/src/types";
 
@@ -61,6 +62,9 @@ const LOCAL_PHONE_STEP_SOURCE = "Android phone (Physical Activity)";
 const HEALTH_CONNECT_PHONE_STEP_SOURCE = "Android phone (Health Connect)";
 let rememberedCurrentDeviceStepOrigins = ["android"];
 let nextRawStepOriginDiscoveryAt = 0;
+const ensureHealthConnectInitialized = createHealthConnectInitializationGate(
+  () => initialize(),
+);
 
 async function currentDeviceStepOrigins() {
   let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -718,7 +722,9 @@ function convert(
 export const healthConnectAdapter: HealthAdapter = {
   provider: "health_connect",
   availability: async () => {
-    const available = await initialize().catch(() => false);
+    const available = await ensureHealthConnectInitialized()
+      .then(() => true)
+      .catch(() => false);
     return {
       available,
       provider: "health_connect",
@@ -728,6 +734,7 @@ export const healthConnectAdapter: HealthAdapter = {
     };
   },
   grantedConnectionState: async (dataTypes) => {
+    await ensureHealthConnectInitialized();
     const relevantRecordTypes = new Set(recordTypesFor(dataTypes));
     const granted = await getGrantedPermissions();
     return {
@@ -744,6 +751,7 @@ export const healthConnectAdapter: HealthAdapter = {
     };
   },
   requestPermissions: async (dataTypes, backgroundAccess) => {
+    await ensureHealthConnectInitialized();
     const recordTypes = recordTypesFor(dataTypes);
     const base = recordTypes.map((recordType) => ({
       accessType: "read" as const,
@@ -791,6 +799,7 @@ export const healthConnectAdapter: HealthAdapter = {
     liveStepSources,
     liveStepCombination,
   }) => {
+    await ensureHealthConnectInitialized();
     const options = {
       timeRangeFilter: {
         operator: "between",

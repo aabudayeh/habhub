@@ -55,6 +55,7 @@ import { formatMetricValue } from "@/src/domain/metrics";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import type { GroupChallenge } from "@/src/types";
+import { DEFAULT_DEMO_GROUP_ID } from "@/src/data/demoChallenges";
 
 type ChallengeTab = "current" | "past" | "public";
 const TABS: { id: ChallengeTab; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
@@ -99,6 +100,7 @@ function currentChallengeOccurrence(
 
 export default function ChallengesScreen() {
   const { state } = useApp();
+  const localDemo = state.group.id === DEFAULT_DEMO_GROUP_ID;
   const t = useTranslation();
   const colors = useAppColors();
   const accent = useGroupAccent();
@@ -118,7 +120,7 @@ export default function ChallengesScreen() {
   const groupDiscovery = useGroupChallenges(state.group.id, {
     discoverActive: true,
   });
-  const publicCloud = usePublicChallenges();
+  const publicCloud = usePublicChallenges(!localDemo);
   const challengePreferences = useChallengePreferences();
   const [tab, setTab] = useState<ChallengeTab>("current");
   const [editingMode, setEditingMode] = useState(false);
@@ -347,7 +349,7 @@ export default function ChallengesScreen() {
 
   useEffect(() => {
     let active = true;
-    if (!standingRequests.length) {
+    if (localDemo || !standingRequests.length) {
       setViewerStandings(new Map());
       return () => {
         active = false;
@@ -378,7 +380,7 @@ export default function ChallengesScreen() {
     // The stable key prevents a harmless catalogue object refresh from
     // repeatedly querying the same bounded rank set.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [standingChallengeKey]);
+  }, [localDemo, standingChallengeKey]);
 
   useEffect(() => {
     if (!editingMode) {
@@ -419,7 +421,7 @@ export default function ChallengesScreen() {
   }, [current, past, publicChallenges]);
 
   useEffect(() => {
-    if (!expandedId || challengeStandings.has(expandedId)) return;
+    if (localDemo || !expandedId || challengeStandings.has(expandedId)) return;
     const challenge = visibleChallengeOccurrences.find(
       (candidate) => occurrenceKey(candidate) === expandedId,
     );
@@ -450,6 +452,7 @@ export default function ChallengesScreen() {
   }, [
     expandedId,
     challengeStandings,
+    localDemo,
     state.currentUserId,
     visibleChallengeOccurrences,
   ]);

@@ -3,6 +3,8 @@ export const HEALTH_STATUS_STORAGE_KEY = 'paceboard-health-status-v1';
 export const HEALTH_HISTORY_DAYS = 730;
 /** Keep first-run onboarding responsive; deeper history is an explicit repair. */
 export const HEALTH_INITIAL_DAYS = 30;
+/** Routine imports overlap a week for slow phone/watch provider hand-offs. */
+export const HEALTH_ROUTINE_OVERLAP_DAYS = 7;
 /**
  * Version 6 recalculates historical synthetic walking and replaces Samsung
  * completed-day Steps with Samsung Health's full-day phone+watch summary row.

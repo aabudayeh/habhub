@@ -27,6 +27,10 @@ function requireTokens(relativePath, tokens) {
 // persistence and every account/native provider are shadowed inside it.
 requireTokens("src/tutorial/TutorialAppStateBoundary.tsx", [
   "createTutorialDemoState(anchorDate)",
+  "[anchorDate]",
+  ":${runId}`",
+  "<TutorialSandboxProvider key={demoStateKey}",
+  "key={demoStateKey}",
   'persistence="ephemeral"',
   "TutorialSandboxProvider",
   "TutorialCloudSyncBoundary",

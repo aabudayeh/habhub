@@ -17,6 +17,7 @@ import {
   googleHealthSetupAcknowledgementKey,
   googleHealthSetupPlatform,
 } from "@/src/domain/googleHealthSetup";
+import { normalizeHealthHistoryDays } from "@/src/domain/healthHistory";
 import { LocalizedAlert as Alert, useLocale, useTranslation } from "@/src/i18n";
 import {
   GoogleHealthClientError,
@@ -31,12 +32,14 @@ import {
 } from "@/src/health/googleHealthCompletionBrowser";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { useApp } from "@/src/state/AppProvider";
+import type { HealthHistoryDays } from "@/src/types";
 
 type Operation =
   | "checking"
   | "connecting"
   | "initialSyncing"
   | "syncing"
+  | "history"
   | "disconnecting"
   | "deleting";
 type CallbackOutcome = "connected" | "error";
@@ -227,6 +230,7 @@ function statusLabel(connection: GoogleHealthConnection | null, operation: Opera
   if (operation === "connecting") return "Waiting for Google…";
   if (operation === "initialSyncing") return "Importing…";
   if (operation === "syncing") return "Syncing…";
+  if (operation === "history") return "Saving history choice…";
   if (operation === "disconnecting") return "Disconnecting…";
   if (operation === "deleting") return "Deleting…";
   if (connection?.state === "connected") return "Connected";
@@ -279,7 +283,7 @@ function StoreLink({
 export function GoogleHealthWebCard() {
   const auth = useAuth();
   const cloud = useCloudSync();
-  const { purgeGoogleHealthData } = useApp();
+  const { state, updateSettings, purgeGoogleHealthData } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const locale = useLocale();
@@ -307,6 +311,22 @@ export function GoogleHealthWebCard() {
   const platform = useMemo(detectedPhonePlatform, []);
   const accountId = auth.user?.id ?? null;
   const hasLiveSession = Boolean(auth.session && accountId);
+  const localHistoryDays = normalizeHealthHistoryDays(
+    state.settings.healthHistoryDays,
+  );
+
+  useEffect(() => {
+    if (
+      !connection ||
+      connection.state === "disconnected" ||
+      operation === "history" ||
+      localHistoryDays === connection.historyDays
+    ) return;
+    // The server owns automatic Google Health work while the web app is
+    // closed. Mirror its confirmed boundary locally so disconnect/reconnect
+    // cannot silently replace Today-only with a stale browser preference.
+    updateSettings({ healthHistoryDays: connection.historyDays });
+  }, [connection, localHistoryDays, operation, updateSettings]);
 
   const stopPopupPoll = useCallback(() => {
     if (popupPollRef.current) clearInterval(popupPollRef.current);
@@ -751,6 +771,7 @@ export function GoogleHealthWebCard() {
     try {
       const response = await invokeGoogleHealth("connect", {
         redirectUri: new URL("/settings", window.location.origin).toString(),
+        historyDays: localHistoryDays,
       });
       if (requestGenerationRef.current !== requestGeneration) {
         if (popup && !popup.closed) popup.close();
@@ -795,6 +816,7 @@ export function GoogleHealthWebCard() {
     connectBlockedNotice,
     disclosureAccepted,
     hasLiveSession,
+    localHistoryDays,
     phoneReady,
     refreshStatus,
     stopPopupPoll,
@@ -938,8 +960,40 @@ export function GoogleHealthWebCard() {
     }
   }, [beginRequest, cloud, purgeGoogleHealthData]);
 
+  const chooseHistoryDays = useCallback(async (days: HealthHistoryDays) => {
+    if (connection?.state !== "connected" || !hasLiveSession) {
+      updateSettings({ healthHistoryDays: days });
+      return;
+    }
+    const requestGeneration = beginRequest();
+    setNotice(null);
+    setOperation("history");
+    try {
+      const response = await invokeGoogleHealth("setHistory", {
+        historyDays: days,
+      });
+      if (requestGenerationRef.current !== requestGeneration) return;
+      setConnection(response.connection);
+      updateSettings({ healthHistoryDays: response.connection.historyDays });
+      setNotice(
+        days === 0
+          ? "Today only is active. Existing imported entries remain, but Google Health will not read any prior date."
+          : "History choice saved. Use Sync now to rebuild the selected available window.",
+      );
+    } catch (error) {
+      if (requestGenerationRef.current !== requestGeneration) return;
+      setNotice(clientErrorCopy(error));
+    } finally {
+      if (requestGenerationRef.current === requestGeneration)
+        setOperation(null);
+    }
+  }, [beginRequest, connection, hasLiveSession, updateSettings]);
+
   const connected = connection?.state === "connected";
   const busy = operation !== null;
+  const selectedHistoryDays = connected
+    ? connection.historyDays
+    : localHistoryDays;
   const status = statusLabel(connection, operation);
   const healthScopes = (connection?.scopes
     .map(googleHealthScopeLabel)
@@ -1139,7 +1193,36 @@ export function GoogleHealthWebCard() {
           <Ionicons name="flask-outline" size={16} color={accent} />
           <Text style={[styles.noticeText, { color: colors.muted }]}>Pilot limited to 100 Google accounts. Google may block managed Workspace or Advanced Protection accounts, or show an unverified-app warning; contact support if access is denied.</Text>
         </View>
-        <Text style={[styles.historyNote, { color: colors.faint }]}>First sync imports up to 90 days; heart-rate averages up to 14 days. Available phone-source history may be shorter. If data looks old, sync Google Health on your phone first, then use Sync now in HabHub.</Text>
+        <View style={[styles.historyChoice, { borderColor: colors.border, backgroundColor: colors.canvas }]}>
+          <Text style={[styles.stepTitle, { color: colors.ink }]}>Import starting point</Text>
+          <Text style={[styles.historyNote, { color: colors.muted }]}>
+            Today only always reads the current local day. A missed prior day
+            will not be imported by a later automatic sync.
+          </Text>
+          <View style={styles.scopeChips}>
+            {(
+              [
+                [0, "Today only"],
+                [30, "30 days"],
+                [90, "90 days"],
+                [365, "1 year"],
+                [730, "2 years"],
+              ] as const satisfies readonly (readonly [HealthHistoryDays, string])[]
+            ).map(([days, label]) => (
+              <Chip
+                key={days}
+                label={label}
+                selected={selectedHistoryDays === days}
+                onPress={busy ? undefined : () => void chooseHistoryDays(days)}
+              />
+            ))}
+          </View>
+          <Text style={[styles.historyNote, { color: colors.faint }]}>
+            Google Health currently provides at most 90 days per category and
+            14 days for heart-rate averages, even if you allow a longer app
+            history window. Existing imports remain until you delete them.
+          </Text>
+        </View>
 
         {!hasLiveSession ? (
           <View style={[styles.notice, { backgroundColor: colors.canvas }]}>
@@ -1373,6 +1456,7 @@ const styles = StyleSheet.create({
   notice: { flexDirection: "row", alignItems: "flex-start", gap: 8, borderRadius: 12, padding: 10, marginTop: 10 },
   pilotNotice: { flexDirection: "row", alignItems: "flex-start", gap: 8, borderRadius: 12, padding: 9, marginTop: 9 },
   historyNote: { fontSize: 8, lineHeight: 13, marginTop: 7 },
+  historyChoice: { borderWidth: 1, borderRadius: 13, padding: 10, marginTop: 10, gap: 5 },
   noticeText: { flex: 1, fontSize: 9, lineHeight: 14 },
   buttons: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 12 },
   grow: { flexGrow: 1, flexBasis: 150 },

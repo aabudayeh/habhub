@@ -1,0 +1,122 @@
+{
+  "version": 3,
+  "fixture": {
+    "source": "Credential-free synthetic demo state from src/data/seed.ts and src/data/demoAssets.ts",
+    "captureDate": "2026-09-04",
+    "requirements": [
+      "real running HabHub UI",
+      "synthetic names, entries, meals, and progress photos only",
+      "tutorial overlay hidden",
+      "no debug or network error UI",
+      "no Android-only or unverified feature claims"
+    ]
+  },
+  "screenshots": [
+    {
+      "order": 1,
+      "id": "today-personalized",
+      "headline": "YOUR DAY, YOUR WAY",
+      "route": "/",
+      "show": ["3 of 7 goals hit", "two to-dos", "steps", "food", "daily deficit", "water"],
+      "platforms": ["apple", "google"]
+    },
+    {
+      "order": 2,
+      "id": "tracker-history",
+      "headline": "TRACK ANYTHING",
+      "route": "/metric-detail",
+      "show": ["steps value", "weekly history", "line chart", "bar chart", "entries"],
+      "platforms": ["apple", "google"]
+    },
+    {
+      "order": 3,
+      "id": "progress-grid",
+      "headline": "SEE THE PATTERN",
+      "route": "/insights",
+      "show": ["weekly grid", "tracked-goals summary", "steps summary"],
+      "platforms": ["apple", "google"]
+    },
+    {
+      "order": 4,
+      "id": "photo-collage",
+      "headline": "PHOTO PROGRESS, SIDE BY SIDE",
+      "route": "/insights",
+      "show": ["five-photo timeline", "two-photo comparison", "collage"],
+      "platforms": ["apple", "google"],
+      "disclosure": "Synthetic demo imagery",
+      "excluded": ["native video export buttons"]
+    },
+    {
+      "order": 5,
+      "id": "workout",
+      "headline": "TRAIN WITH A PLAN",
+      "route": "/gym",
+      "show": ["logged workout", "exercise sets", "time remaining", "history totals"],
+      "platforms": ["apple", "google"]
+    },
+    {
+      "order": 6,
+      "id": "leaderboard",
+      "headline": "PROGRESS TOGETHER",
+      "route": "/group",
+      "show": ["four-person ranking", "overall score", "steps", "sync freshness"],
+      "platforms": ["apple", "google"]
+    },
+    {
+      "order": 7,
+      "id": "challenges",
+      "headline": "CHALLENGE YOUR CREW",
+      "route": "/challenges",
+      "show": ["active step challenge", "four-person standings", "share to chat"],
+      "platforms": ["apple", "google"]
+    },
+    {
+      "order": 8,
+      "id": "schedule",
+      "headline": "REMEMBER THE ROUTINE",
+      "route": "/calendar",
+      "show": ["month schedule", "goals", "reminders", "to-dos"],
+      "platforms": ["apple", "google"]
+    },
+    {
+      "order": 9,
+      "id": "journal",
+      "headline": "REFLECT, THEN ADJUST",
+      "route": "/journal",
+      "show": ["training note", "meal note", "synthetic meal photo"],
+      "platforms": ["apple"]
+    },
+    {
+      "order": 10,
+      "id": "group-chat",
+      "headline": "ENCOURAGEMENT IN ONE PLACE",
+      "route": "/chat",
+      "show": ["private group", "synthetic encouragement", "quick actions"],
+      "platforms": ["apple"],
+      "releaseGate": "Revalidate reporting, blocking, moderation, and Terms acceptance before submission"
+    },
+    {
+      "order": 11,
+      "id": "badges",
+      "headline": "MOMENTUM YOU CAN SEE",
+      "route": "/badges",
+      "show": ["earned badges", "milestone progress"],
+      "platforms": ["video"]
+    },
+    {
+      "order": 12,
+      "id": "status-avatar",
+      "headline": "A PROFILE THAT EVOLVES",
+      "route": "/status",
+      "show": ["custom avatar", "goal progress rings"],
+      "platforms": ["video"]
+    }
+  ],
+  "featureGraphic": {
+    "platform": "google",
+    "size": "1024x500",
+    "headline": "TRACK ANYTHING.",
+    "composition": "HabHub mark with real Today, progress-grid, and photo-progress panels",
+    "disclosure": "REAL APP | SYNTHETIC DEMO DATA"
+  }
+}

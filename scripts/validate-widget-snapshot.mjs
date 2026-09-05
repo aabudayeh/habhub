@@ -237,7 +237,13 @@ for (const metric of leaderboard.metrics) {
 const privateMemberState = {
   ...leaderboardState,
   dailyMetricStatuses: [
-    ...(state.dailyMetricStatuses ?? []),
+    ...(state.dailyMetricStatuses ?? []).filter(
+      (status) =>
+        status.groupId !== state.group.id ||
+        status.metricId !== "steps" ||
+        status.userId !== "sarah" ||
+        status.localDate !== today,
+    ),
     {
       groupId: state.group.id,
       metricId: "steps",

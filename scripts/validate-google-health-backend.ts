@@ -29,6 +29,8 @@ const [
   groupProjectionMigration,
   cloudProtocolMigration,
   universalCloudProtocolMigration,
+  accountContentDeletionMigration,
+  historyWindowMigration,
   endpoint,
   sync,
   api,
@@ -55,6 +57,8 @@ const [
   read("supabase/migrations/202608240007_google_health_group_projection.sql"),
   read("supabase/migrations/202608240011_google_health_cloud_protocol_gate.sql"),
   read("supabase/migrations/202608240012_universal_cloud_protocol_gate.sql"),
+  read("supabase/migrations/202609040003_fail_closed_account_content_deletion.sql"),
+  read("supabase/migrations/202609050002_google_health_history_window.sql"),
   read("supabase/functions/google-health/index.ts"),
   read("supabase/functions/_shared/google-health-sync.ts"),
   read("supabase/functions/_shared/google-health-api.ts"),
@@ -154,6 +158,51 @@ const stepsDefinition = {
   maxInitialDays: 90,
   requiredScope: "activity",
 };
+assert.equal(
+  googleHealthSyncTestHooks.normalizeGoogleHealthHistoryDays(0),
+  0,
+  "zero must remain a first-class Google Health history selection",
+);
+assert.equal(
+  googleHealthSyncTestHooks.normalizeGoogleHealthHistoryDays(14),
+  90,
+  "unsupported persisted Google Health history values must fail safely to the legacy default",
+);
+assert.equal(
+  googleHealthSyncTestHooks.normalizeGoogleHealthHistoryDays(null),
+  90,
+  "null must not be coerced into Today-only by the server",
+);
+assert.deepEqual(
+  googleHealthSyncTestHooks.historyBoundedGoogleHealthRange(
+    { fromDate: "2026-09-01", throughDate: "2026-09-05" },
+    "2026-09-05",
+    0,
+    90,
+  ),
+  { fromDate: "2026-09-05", throughDate: "2026-09-05" },
+  "a normal foreground Google Health pass must stay on the current day in Today-only mode",
+);
+assert.deepEqual(
+  googleHealthSyncTestHooks.historyBoundedGoogleHealthRange(
+    { fromDate: "2026-08-01", throughDate: "2026-09-04" },
+    "2026-09-05",
+    0,
+    90,
+  ),
+  { fromDate: "2026-09-05", throughDate: "2026-09-05" },
+  "a webhook or worker catch-up range must not reintroduce prior days in Today-only mode",
+);
+assert.deepEqual(
+  googleHealthSyncTestHooks.historyBoundedGoogleHealthRange(
+    { fromDate: "2026-01-01", throughDate: "2026-09-10" },
+    "2026-09-05",
+    30,
+    90,
+  ),
+  { fromDate: "2026-08-07", throughDate: "2026-09-05" },
+  "positive selections must preserve their exact inclusive window and clamp future provider dates",
+);
 const explicitStepDates = googleHealthSyncTestHooks.dailyValueDates(
   stepsDefinition,
   [
@@ -2174,6 +2223,40 @@ assert.match(durableCatchupMigration, /created_at > now\(\) - interval '1 minute
 assert.match(durableCatchupMigration, /order by connection\.next_catchup_at, connection\.user_id[\s\S]*?limit 1/);
 assert.match(durableCatchupMigration, /when 'webhook' then 0[\s\S]*?when 'initial' then 1/);
 assert.match(durableCatchupMigration, /for update skip locked/);
+assert.match(
+  historyWindowMigration,
+  /add column if not exists history_days smallint not null default 90/,
+  "existing Google Health accounts must receive the legacy 90-day default",
+);
+assert.match(
+  historyWindowMigration,
+  /check \(history_days in \(0, 30, 90, 365, 730\)\)/,
+  "the database must reject unsupported history selections",
+);
+assert.match(
+  historyWindowMigration,
+  /create or replace function public\.set_google_health_history_days/,
+);
+assert.match(
+  historyWindowMigration,
+  /auth\.role\(\)[\s\S]{0,100}service_role/,
+  "history preferences must cross the authenticated Edge Function boundary",
+);
+assert.match(
+  historyWindowMigration,
+  /sync_lease_until is not null[\s\S]{0,100}google_health_sync_busy/,
+  "a range change must not race an active server import",
+);
+assert.match(
+  historyWindowMigration,
+  /delete from public\.google_health_sync_cursors/,
+  "changing the range must invalidate provider cursors",
+);
+assert.match(
+  historyWindowMigration,
+  /revoke all on function public\.set_google_health_history_days\(uuid, smallint\)[\s\S]{0,120}from public, anon, authenticated[\s\S]{0,120}grant execute[\s\S]{0,80}to service_role/,
+  "the preference RPC must remain service-role only",
+);
 assert.match(hourlyCatchupMigration, /now\(\) \+ interval '1 hour'/);
 assert.match(hourlyCatchupMigration, /create or replace function public\.invoke_google_health_worker\(\)/);
 assert.match(hourlyCatchupMigration, /v_hourly_maintenance/);
@@ -2219,6 +2302,25 @@ assert.match(endpoint, /FOREGROUND_REFRESH_MIN_AGE_MS = 30 \* 60 \* 1000/);
 assert.match(endpoint, /async function queueForegroundRefresh/);
 assert.match(endpoint, /last_synced_at\.is\.null,last_synced_at\.lte/);
 assert.match(endpoint, /action === "refresh"/);
+assert.match(endpoint, /action === "setHistory"/);
+assert.match(endpoint, /body\.historyDays === undefined[\s\S]{0,100}\? 90/);
+assert.match(endpoint, /admin\.rpc\("set_google_health_history_days"/);
+assert.match(endpoint, /error: "invalid_history_days"/);
+assert.match(
+  endpoint,
+  /typeof value === "number" && \[0, 30, 90, 365, 730\]\.includes\(value\)/,
+  "null and string request values must not be coerced into Today-only",
+);
+assert.match(
+  sync,
+  /historyDays === 0\) return \{ fromDate: today, throughDate: today \}/,
+  "every server-triggered range, including webhook catch-up, must obey Today-only",
+);
+assert.match(
+  sync,
+  /options\?\.ranges\?\.get\(definition\.googleType\)[\s\S]{0,240}historyBoundedGoogleHealthRange/,
+  "webhook ranges must pass through the persisted history boundary",
+);
 const completeConnectionBody = endpoint.match(
   /async function completeConnection[\s\S]*?async function handleAction/,
 )?.[0] ?? "";
@@ -2243,6 +2345,65 @@ assert.ok(!/error instanceof Error \? error\.message/.test(deleteAccount));
 assert.match(deleteAccount, /offset,/);
 assert.match(deleteAccount, /page\.length < pageSize/);
 assert.match(deleteAccount, /account_media_cleanup_incomplete/);
+assert.match(deleteAccount, /purge_account_authored_shared_content/);
+assert.match(deleteAccount, /account_shared_content_cleanup_incomplete/);
+for (const key of [
+  "socialReactions",
+  "socialComments",
+  "safetyReportsFiled",
+  "safetyReportsRedacted",
+  "messages",
+  "metricEntries",
+  "photoUpdates",
+  "groupTodos",
+  "groupChallenges",
+  "templates",
+]) assert.match(deleteAccount, new RegExp(`['"]${key}['"]`));
+assert.match(
+  accountContentDeletionMigration,
+  /create or replace function public\.purge_account_authored_shared_content\([\s\S]*?security definer[\s\S]*?auth\.role\(\)[\s\S]*?service_role/i,
+);
+assert.match(
+  accountContentDeletionMigration,
+  /google_health_account_deletion_guards[\s\S]*?guard\.attempt_id = p_attempt_id/,
+);
+for (const [table, ownership] of [
+  ["group_social_reactions", "reaction.user_id = p_user_id"],
+  ["group_social_comments", "comment.user_id = p_user_id"],
+  ["messages", "message.sender_id = p_user_id"],
+  ["metric_entries", "entry.user_id = p_user_id"],
+  ["photo_updates", "photo.owner_user_id = p_user_id"],
+  ["group_todos", "todo.creator_id = p_user_id"],
+  ["group_challenges", "challenge.creator_id = p_user_id"],
+  ["templates", "template.creator_user_id = p_user_id"],
+] as const) {
+  assert.match(
+    accountContentDeletionMigration,
+    new RegExp(`delete from public\\.${table}[\\s\\S]*?${ownership.replaceAll(".", "\\.")}`),
+  );
+}
+assert.match(
+  accountContentDeletionMigration,
+  /delete from public\.user_safety_reports report[\s\S]*?report\.reporter_id = p_user_id/,
+);
+assert.match(
+  accountContentDeletionMigration,
+  /update public\.user_safety_reports report[\s\S]*?reported_user_id = null[\s\S]*?reported_display_name = 'Deleted member'[\s\S]*?message_client_generated_id = null[\s\S]*?message_excerpt = ''[\s\S]*?report\.reported_user_id = p_user_id/,
+);
+assert.match(
+  accountContentDeletionMigration,
+  /revoke all on function public\.purge_account_authored_shared_content\(uuid, uuid\)[\s\S]*?from public, anon, authenticated[\s\S]*?grant execute[\s\S]*?to service_role/,
+);
+for (const table of [
+  "messages",
+  "group_social_reactions",
+  "group_social_comments",
+  "metric_entries",
+  "photo_updates",
+  "group_todos",
+  "group_challenges",
+  "templates",
+]) assert.match(accountContentDeletionMigration, new RegExp(`['"]${table}['"]`));
 const legacyCommittedBody = sendPush.match(
   /async function legacyCommittedCanonicalEvent[\s\S]*?async function legacyCompetitionCanonicalEvent/,
 )?.[0] ?? "";
@@ -2263,15 +2424,28 @@ assert.ok(
     legacyCompetitionBody.indexOf("storeCanonicalLegacyEvent"),
   "legacy lead push must reject every Google source candidate before storing an event",
 );
+const googleCleanupIndex = deleteAccount.indexOf("await deleteGoogleHealthData");
+const mediaCleanupIndex = deleteAccount.indexOf("await deleteAllMedia");
+const contentCleanupIndex = deleteAccount.indexOf("await deleteUserAuthoredSharedContent");
+const deletionVerifyIndex = deleteAccount.indexOf("admin.rpc('verify_google_health_account_deletion'");
+const authDeleteIndex = deleteAccount.indexOf("admin.auth.admin.deleteUser");
 assert.ok(
-  deleteAccount.indexOf("await deleteGoogleHealthData") < deleteAccount.indexOf("await deleteAllMedia"),
-  "write-blocking deletion guard must commit before media enumeration",
+  googleCleanupIndex >= 0 && googleCleanupIndex < contentCleanupIndex,
+  "the write-blocking deletion guard must commit before shared-content cleanup",
 );
 assert.ok(
-  deleteAccount.indexOf("await deleteAllMedia") < deleteAccount.indexOf("deleteUser"),
+  contentCleanupIndex < mediaCleanupIndex && mediaCleanupIndex < deletionVerifyIndex,
+  "shared-content and media cleanup must finish before final lease verification",
+);
+assert.ok(
+  deletionVerifyIndex < authDeleteIndex,
+  "the owned lease must be verified after every explicit purge and before auth deletion",
+);
+assert.ok(
+  mediaCleanupIndex < authDeleteIndex,
   "media cleanup must finish before auth deletion",
 );
-assert.ok(deleteAccount.indexOf("deleteGoogleHealthData") < deleteAccount.indexOf("deleteUser"));
+assert.ok(googleCleanupIndex < authDeleteIndex);
 assert.match(sync, /requiredScope/);
 assert.match(sync, /activeGrantedScopes\.has\(definition\.requiredScope\)/);
 assert.match(sync, /last_error_code,sync_lease_until/);

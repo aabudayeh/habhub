@@ -6,6 +6,7 @@ import {
   dispatchPushWithBoundedRetry,
   isRetryablePushDeliveryError,
 } from "../src/domain/pushDelivery.ts";
+import { isAllowedWebPushEndpoint } from "../supabase/functions/_shared/web-push-endpoint.ts";
 
 // Metro supplies require() for bundled demo assets reached by the alert-domain
 // fixture. Install the focused validator stub before loading that graph.
@@ -28,6 +29,15 @@ const auth = read("src/auth/AuthProvider.tsx");
 const cloud = read("src/cloud/groupCloud.ts");
 const cloudSyncProvider = read("src/cloud/CloudSyncProvider.tsx");
 const edge = read("supabase/functions/send-push/index.ts");
+const receiptWorker = read("supabase/functions/push-receipts/index.ts");
+const receiptMigration = read(
+  "supabase/migrations/202609040001_expo_push_receipts.sql",
+);
+const trustedWebPushMigration = read(
+  "supabase/migrations/202609040004_trusted_web_push_endpoints.sql",
+);
+const supabaseConfig = read("supabase/config.toml");
+const deploymentRunbook = read("docs/DEPLOYMENT.md");
 const expand = read(
   "supabase/migrations/202608140001_group_notification_events.sql",
 );
@@ -187,11 +197,14 @@ assert.equal(
 );
 const remoteLifecycle = layout.slice(
   layout.indexOf("const pushRegistrationUserId"),
-  layout.indexOf("const safeDefaultLandingPage"),
+  layout.indexOf(
+    "const queue = (response: Notifications.NotificationResponse)",
+    layout.indexOf("const pushRegistrationUserId"),
+  ),
 );
 assert.doesNotMatch(remoteLifecycle, /tutorialActive/);
-assert.match(remoteLifecycle, /addNotificationResponseReceivedListener/);
 assert.match(remoteLifecycle, /NativeAppState\.addEventListener/);
+assert.match(layout, /addNotificationResponseReceivedListener/);
 assert.match(alertDomain, /groupPreferencesByGroup\?\.\[state\.group\.id\]/);
 assert.match(alertDomain, /groupPreferences\?\.enabled !== false/);
 assert.match(alertDomain, /groupPreferences\?\.leadChanges/);
@@ -332,10 +345,15 @@ assert.match(
   /\.eq\("group_id", event\.groupId\)[\s\S]{0,180}\.eq\("subject_user_id", senderId\)[\s\S]{0,180}\.in\("owner_user_id", recipientIds\)/,
   "chat pushes must resolve each recipient's private group-scoped alias",
 );
-assert.match(edge, /\.select\("user_id, token, preferences, platform"\)/);
 assert.match(
   edge,
-  /\.select\("user_id, endpoint, p256dh, auth, expiration_time, preferences"\)/,
+  /\.select\("user_id, token, preferences, platform, updated_at"\)/,
+  "native delivery must retain the exact registration version selected before the provider request",
+);
+assert.match(
+  edge,
+  /\.select\([\s\S]{0,40}"user_id, endpoint, p256dh, auth, expiration_time, preferences, updated_at"[\s\S]{0,20}\)/,
+  "Web Push delivery must retain the owner, key material, and registration version selected before the provider request",
 );
 const expoChatPersonalization = edge.slice(
   edge.indexOf("const messages = expoEligible.map"),
@@ -346,7 +364,11 @@ assert.match(
   /eventForPushRecipient\([\s\S]{0,100}item\.userId/,
   "Expo pushes must personalize sender identity for their recipient",
 );
-assert.match(expoChatPersonalization, /data: recipientEvent\.data/);
+assert.match(
+  expoChatPersonalization,
+  /data: \{ \.\.\.recipientEvent\.data, accountId: item\.userId \}/,
+  "native push routes must remain scoped to the receiving account",
+);
 const webChatPersonalization = edge.slice(
   edge.indexOf("if (webEligible.length)"),
   edge.indexOf("// `sent` is retained for old clients"),
@@ -566,13 +588,324 @@ const acceptanceTable = expand.slice(
 );
 assert.doesNotMatch(acceptanceTable, /references public\.push_events|on delete cascade/);
 assert.match(acceptanceTable, /accepted_at/);
+const acceptanceHardening = receiptMigration.slice(
+  0,
+  receiptMigration.indexOf("create table if not exists public.expo_push_receipts"),
+);
+assert.match(
+  acceptanceHardening,
+  /alter table public\.push_token_dispatch_acceptances[\s\S]{0,100}add column if not exists user_id uuid/,
+);
+assert.match(
+  acceptanceHardening,
+  /registration_owners[\s\S]{0,300}public\.device_push_tokens[\s\S]{0,300}public\.web_push_subscriptions/,
+  "legacy checkpoints must consider both native and browser registration owners",
+);
+assert.match(
+  acceptanceHardening,
+  /owner\.updated_at <= acceptance\.accepted_at/,
+  "legacy ownership may be backfilled only from a registration that is no newer than its checkpoint",
+);
+assert.match(
+  acceptanceHardening,
+  /delete from public\.push_token_dispatch_acceptances acceptance[\s\S]{0,100}acceptance\.user_id is null/,
+  "unprovable legacy ownership must be discarded before enforcing the owner",
+);
+assert.match(acceptanceHardening, /alter column user_id set not null/);
+assert.match(
+  acceptanceHardening,
+  /foreign key \(user_id\) references public\.profiles\(id\) on delete cascade/,
+);
+assert.match(
+  acceptanceHardening,
+  /primary key \(event_key, user_id, token\)/,
+);
 assert.match(edge, /priorAcceptances/);
 assert.match(edge, /alreadyAccepted/);
-assert.match(edge, /terminalTokens/);
+assert.match(edge, /acceptedTickets/);
+const acceptanceRead = edge.slice(
+  edge.indexOf("const { data: priorAcceptances"),
+  edge.indexOf("const expoEligible"),
+);
+assert.match(acceptanceRead, /\.select\("user_id, token"\)/);
+assert.match(acceptanceRead, /\.in\([\s\S]{0,40}"user_id"/);
+assert.match(acceptanceRead, /\.in\([\s\S]{0,40}"token"/);
+assert.match(
+  acceptanceRead,
+  /`\$\{item\.user_id as string\}:\$\{item\.token as string\}`[\s\S]{0,160}`\$\{item\.userId\}:\$\{item\.token\}`/,
+  "retry suppression must be scoped to both registration owner and token",
+);
+assert.match(
+  edge,
+  /terminalExpoTicketErrors = new Set\(\[[\s\S]{0,240}"MessageTooBig"[\s\S]{0,160}"InvalidCredentials"/,
+  "non-retryable Expo ticket errors must be classified explicitly",
+);
+assert.match(edge, /expoTicketDisposition\(ticket\) !== "terminal"/);
+assert.doesNotMatch(
+  edge,
+  /terminalCheckpointTokens|staleTokens/,
+  "stale registrations must not be checkpointed separately from their exact SQL delete",
+);
 assert.ok(
-  edge.indexOf("push_token_dispatch_acceptances", edge.indexOf("terminalTokens")) <
+  (edge.match(/onConflict: "event_key,user_id,token"/g) ?? []).length >= 2,
+  "every direct acceptance writer must include the registration owner in its conflict key",
+);
+assert.match(edge, /gateway_terminal:/);
+assert.match(
+  edge,
+  /const transient = tickets\.find\([\s\S]{0,160}expoTicketDisposition\(ticket\) === "retry"/,
+  "only retryable Expo ticket errors may release the canonical event claim",
+);
+assert.match(edge, /record_expo_push_ticket_acceptances/);
+assert.ok(
+  edge.indexOf("record_expo_push_ticket_acceptances") <
     edge.indexOf("const transient = tickets.find"),
-  "accepted tickets must be checkpointed before a later ticket failure throws",
+  "accepted ticket IDs and per-token acceptance must commit before a later ticket failure throws",
+);
+assert.match(
+  edge,
+  /expoTicketDisposition\(ticket\) !== "accepted"[\s\S]{0,240}normalizedString\(ticket\.id, 200\)[\s\S]{0,300}ticketId,\s*token: batch\[index\]\.to,\s*userId: expoEligible\[offset \+ index\]\.userId/,
+  "every Expo-accepted message must retain its matching receipt ID and token",
+);
+
+assert.match(
+  receiptMigration,
+  /create table if not exists public\.expo_push_receipts/,
+);
+assert.match(
+  receiptMigration,
+  /registration_updated_at timestamptz not null/,
+  "delayed receipts must retain the registration version originally selected",
+);
+assert.match(
+  receiptMigration,
+  /user_id uuid not null references public\.profiles\(id\) on delete cascade/,
+  "receipt diagnostics must be deleted with their owning account",
+);
+assert.match(
+  receiptMigration,
+  /alter table public\.expo_push_receipts enable row level security[\s\S]{0,180}revoke all on table public\.expo_push_receipts[\s\S]{0,180}grant select, insert, update, delete[\s\S]{0,120}service_role/,
+  "receipt tickets and tokens must remain service-only behind RLS",
+);
+assert.match(
+  receiptMigration,
+  /record_expo_push_ticket_acceptances[\s\S]{0,5200}insert into public\.expo_push_receipts[\s\S]{0,2400}insert into public\.push_token_dispatch_acceptances/,
+  "ticket and dispatch-acceptance writes must share one atomic RPC",
+);
+assert.match(
+  edge,
+  /ticketId,[\s\S]{0,180}userId: expoEligible\[offset \+ index\]\.userId,[\s\S]{0,100}updatedAt: expoEligible\[offset \+ index\]\.updatedAt/,
+  "every accepted Expo ticket must checkpoint its observed owner and registration version",
+);
+assert.match(
+  receiptMigration,
+  /v_registration_updated_at := \(v_item ->> 'updatedAt'\)::timestamptz[\s\S]{0,1600}registration_updated_at[\s\S]{0,500}v_registration_updated_at/,
+);
+assert.match(
+  receiptMigration,
+  /if v_inserted = 1 then[\s\S]{0,600}on conflict \(event_key, user_id, token\) do update[\s\S]{0,220}greatest\([\s\S]{0,180}accepted_at/,
+  "a distinct newer ticket must advance the owner-scoped acceptance checkpoint",
+);
+assert.match(
+  receiptMigration,
+  /ambiguous network retry with the same Expo ticket[\s\S]{0,700}on conflict \(event_key, user_id, token\) do nothing/,
+  "replaying the same ticket write must not supersede its own receipt identity",
+);
+assert.match(receiptMigration, /v_now \+ interval '15 minutes'/);
+assert.match(receiptMigration, /v_now \+ interval '24 hours'/);
+assert.match(receiptMigration, /for update skip locked/);
+assert.match(receiptMigration, /least\(coalesce\(p_limit, 500\), 1000\)/);
+assert.match(receiptMigration, /lease_until = clock_timestamp\(\) \+ interval '3 minutes'/);
+assert.match(
+  receiptMigration,
+  /v_status = 'retry'[\s\S]{0,1200}3600[\s\S]{0,300}power\(/,
+  "unavailable receipts must use bounded exponential backoff",
+);
+assert.match(receiptMigration, /delivery_action in \('poll', 'resend'\)/);
+assert.match(receiptMigration, /'resend_complete'/);
+assert.match(
+  receiptMigration,
+  /v_status = 'resend'[\s\S]{0,260}v_error_code <> 'MessageRateExceeded'/,
+  "only the retryable Expo provider rate-limit receipt may enter resend",
+);
+assert.match(
+  receiptMigration,
+  /acceptance\.accepted_at into v_acceptance_at[\s\S]{0,380}v_acceptance_at = v_receipt\.accepted_at/,
+  "a delayed receipt may reopen delivery only while its exact acceptance is still current",
+);
+assert.match(
+  receiptMigration,
+  /token\.token = v_receipt\.token[\s\S]{0,120}token\.user_id = v_receipt\.user_id[\s\S]{0,120}token\.updated_at = v_receipt\.registration_updated_at[\s\S]{0,1800}delete from public\.push_token_dispatch_acceptances/,
+  "rate-limit recovery must preserve the owner and observed registration-version fence before deleting acceptance",
+);
+assert.match(
+  receiptMigration,
+  /update public\.push_dispatch_events event[\s\S]{0,160}dispatched_at = null[\s\S]{0,300}delete from public\.push_events claim/,
+  "a safe resend transition must reopen the canonical outbox and its global claim",
+);
+assert.match(
+  receiptMigration,
+  /v_outbox_category = 'chat'[\s\S]{0,300}update public\.messages message[\s\S]{0,120}push_dispatched_at = null/,
+  "chat receipt recovery must reopen the relational message marker in the same SQL transaction",
+);
+assert.match(
+  receiptMigration,
+  /A resend expiry must close its per-target hole[\s\S]{0,900}insert into public\.push_token_dispatch_acceptances[\s\S]{0,700}delivery_action = 'resend'[\s\S]{0,500}on conflict on constraint push_token_dispatch_acceptances_pkey do nothing/,
+  "an exhausted resend must be checkpointed before its reopened outbox can return to the ordinary drain",
+);
+assert.match(
+  receiptMigration,
+  /v_error_code = 'DeviceNotRegistered'[\s\S]{0,300}delete from public\.device_push_tokens[\s\S]{0,260}token\.user_id = v_receipt\.user_id[\s\S]{0,120}token\.updated_at = v_receipt\.registration_updated_at/,
+  "a stale receipt may delete only the exact owner and version selected for send",
+);
+const exactStaleCleanup = receiptMigration.slice(
+  receiptMigration.indexOf(
+    "create or replace function public.delete_exact_stale_push_registrations",
+  ),
+  receiptMigration.indexOf("-- One RPC makes an Expo ticket"),
+);
+assert.match(exactStaleCleanup, /language plpgsql[\s\S]{0,80}security definer/);
+assert.match(
+  exactStaleCleanup,
+  /delete from public\.device_push_tokens token[\s\S]{0,220}token\.token = v_token[\s\S]{0,100}token\.user_id = v_user_id[\s\S]{0,100}token\.updated_at = v_updated_at/,
+);
+assert.match(
+  exactStaleCleanup,
+  /delete from public\.web_push_subscriptions subscription[\s\S]{0,320}subscription\.endpoint = v_endpoint[\s\S]{0,100}subscription\.user_id = v_user_id[\s\S]{0,100}subscription\.updated_at = v_updated_at[\s\S]{0,100}subscription\.p256dh = v_p256dh[\s\S]{0,100}subscription\.auth = v_auth/,
+  "Web Push cleanup must compare owner, version, and both observed key values",
+);
+assert.ok(
+  (exactStaleCleanup.match(/if v_deleted = 1 then[\s\S]{0,220}insert into public\.push_token_dispatch_acceptances/g) ?? []).length === 2,
+  "stale checkpoints must be inserted only after the matching native or Web registration was deleted",
+);
+assert.ok(
+  (exactStaleCleanup.match(/on conflict \(event_key, user_id, token\) do nothing/g) ?? []).length === 2,
+);
+assert.match(exactStaleCleanup, /'changedRegistrations', v_changed/);
+assert.match(
+  receiptMigration,
+  /revoke all on function public\.delete_exact_stale_push_registrations\(text, jsonb\)[\s\S]{0,100}from public, anon, authenticated[\s\S]{0,120}grant execute[\s\S]{0,100}to service_role/,
+  "only the service worker may invoke exact stale-registration cleanup",
+);
+const expoStaleDelivery = edge.slice(
+  edge.indexOf("const staleTargets = tickets.flatMap"),
+  edge.indexOf("const transient = tickets.find"),
+);
+assert.match(
+  expoStaleDelivery,
+  /delete_exact_stale_push_registrations[\s\S]{0,300}kind: "expo"[\s\S]{0,80}userId: target\.userId[\s\S]{0,80}token: target\.token[\s\S]{0,80}updatedAt: target\.updatedAt/,
+);
+assert.match(
+  expoStaleDelivery,
+  /changedStaleRegistrationCount\(staleCleanup\.data\) > 0[\s\S]{0,100}Push registration changed during delivery/,
+);
+const webStaleDelivery = edge.slice(
+  edge.indexOf("const staleTargets = outcomes.flatMap"),
+  edge.indexOf("const transient = outcomes.find"),
+);
+assert.match(
+  webStaleDelivery,
+  /delete_exact_stale_push_registrations[\s\S]{0,360}kind: "web"[\s\S]{0,80}userId: target\.userId[\s\S]{0,80}endpoint: target\.endpoint[\s\S]{0,80}p256dh: target\.p256dh[\s\S]{0,80}auth: target\.auth[\s\S]{0,80}updatedAt: target\.updatedAt/,
+);
+assert.match(
+  webStaleDelivery,
+  /changedStaleRegistrationCount\(staleCleanup\.data\) > 0[\s\S]{0,100}Push registration changed during delivery/,
+);
+assert.doesNotMatch(
+  edge,
+  /\.from\("device_push_tokens"\)\s*\.delete\(\)|\.from\("web_push_subscriptions"\)\s*\.delete\(\)/,
+  "provider responses must never trigger a broad client-side registration delete",
+);
+assert.match(receiptMigration, /interval '7 days'/);
+assert.match(
+  receiptMigration,
+  /web_personal_notification_worker_url[\s\S]{0,1800}regexp_replace\([\s\S]{0,240}'\/push-receipts'/,
+  "the receipt worker URL must derive from the validated deployed Web worker URL",
+);
+assert.match(receiptMigration, /web_personal_notification_worker_secret/);
+assert.match(receiptMigration, /expo-push-receipts-every-five-minutes/);
+assert.match(receiptMigration, /'\*\/5 \* \* \* \*'/);
+assert.doesNotMatch(
+  receiptMigration,
+  /'40001'/,
+  "deterministic receipt lease conflicts must not masquerade as serialization failures",
+);
+
+assert.match(receiptWorker, /PERSONAL_NOTIFICATION_WORKER_SECRET/);
+assert.match(receiptWorker, /constantTimeEqual/);
+assert.match(receiptWorker, /claim_due_expo_push_receipts/);
+assert.match(
+  receiptWorker,
+  /https:\/\/exp\.host\/--\/api\/v2\/push\/getReceipts/,
+);
+assert.match(receiptWorker, /ids: pollRows\.map\(\(item\) => item\.ticket_id\)/);
+assert.match(receiptWorker, /AbortSignal\.timeout\(20_000\)/);
+assert.match(receiptWorker, /Object\.hasOwn\(receipts, item\.ticket_id\)/);
+assert.match(receiptWorker, /settle_expo_push_receipts/);
+assert.match(receiptWorker, /DeviceNotRegistered|terminal_error/);
+assert.match(
+  receiptWorker,
+  /errorCode === "MessageRateExceeded"[\s\S]{0,120}rateLimitedOutcome/,
+  "MessageRateExceeded must become a resend action rather than a terminal receipt",
+);
+assert.match(
+  receiptWorker,
+  /new Set\(resendRows\.map\(\(item\) => item\.event_key\)\)[\s\S]{0,300}resendCanonicalEvent/,
+  "resends must be grouped and invoked only by durable canonical event key",
+);
+assert.match(
+  receiptWorker,
+  /body: JSON\.stringify\(\{ eventKey, receiptLeaseOwner \}\)[\s\S]{0,160}AbortSignal\.timeout\(20_000\)/,
+  "the receipt worker must authenticate each canonical resend with its exact durable lease",
+);
+assert.match(
+  receiptWorker,
+  /resendCanonicalEvent\(sendPushUrl, service, leaseOwner, eventKey\)/,
+);
+assert.match(
+  receiptWorker,
+  /const safelyComplete =[\s\S]{0,120}payload\.accepted === true \|\| payload\.stale === true/,
+  "only an accepted/deduplicated or expiry-suppressed canonical response is a completed resend",
+);
+const resendWorkerBlock = receiptWorker.slice(
+  receiptWorker.indexOf("if (resendRows.length)"),
+  receiptWorker.indexOf("const { data: settlementData"),
+);
+assert.match(
+  resendWorkerBlock,
+  /result\?\.complete[\s\S]{0,160}status: "resend_complete"[\s\S]{0,260}CanonicalResendFailed/,
+  "failed or in-flight canonical resends must remain retryable",
+);
+assert.doesNotMatch(
+  receiptWorker,
+  /console\.(?:log|error|warn)\([^\n]*(?:token|claimed|receipt)/i,
+  "receipt workers must not log private ticket or token payloads",
+);
+assert.match(
+  supabaseConfig,
+  /\[functions\.push-receipts\][\s\S]{0,160}verify_jwt = false/,
+);
+assert.match(deploymentRunbook, /functions deploy push-receipts --no-verify-jwt/);
+assert.match(deploymentRunbook, /202609040001_expo_push_receipts\.sql/);
+assert.match(
+  deploymentRunbook,
+  /Quiesce group push dispatch[\s\S]{0,500}emitters_active = false/,
+  "the incompatible acceptance-writer upgrade must have an explicit coordinated rollout fence",
+);
+assert.match(
+  deploymentRunbook,
+  /202609040001_expo_push_receipts\.sql[\s\S]{0,800}202609040004_trusted_web_push_endpoints\.sql/,
+  "the coordinated rollout must apply every coupled migration through the trusted Web Push endpoint contract",
+);
+assert.match(
+  deploymentRunbook,
+  /old `send-push` revision is not[\s\S]{0,180}migration `202609040001`[\s\S]{0,360}Keep dispatch quiesced/,
+  "the runbook must identify the incompatible old acceptance writer",
+);
+assert.match(
+  deploymentRunbook,
+  /resume group push dispatch[\s\S]{0,120}emitters_active = true/,
+  "dispatch may resume only after the matching workers are deployed and smoke-tested",
 );
 
 assert.match(push, /const identityBarrier = pushIdentityCleanupQueue/);
@@ -623,6 +956,51 @@ assert.match(
   webPushMigration,
   /where public\.web_push_subscriptions\.user_id = caller_id[\s\S]*public\.web_push_subscriptions\.p256dh = excluded\.p256dh[\s\S]*public\.web_push_subscriptions\.auth = excluded\.auth/,
 );
+assert.equal(
+  isAllowedWebPushEndpoint(
+    "https://fcm.googleapis.com/wp/registration/accepted",
+  ),
+  true,
+);
+assert.equal(
+  isAllowedWebPushEndpoint(
+    "https://updates.push.services.mozilla.com/wpush/v2/accepted",
+  ),
+  true,
+);
+assert.equal(
+  isAllowedWebPushEndpoint(
+    "https://web.push.apple.com/QHaccepted",
+  ),
+  true,
+);
+assert.equal(
+  isAllowedWebPushEndpoint(
+    "https://wns2-am3p.notify.windows.com/w/?token=accepted",
+  ),
+  true,
+);
+for (const endpoint of [
+  "https://fcm.googleapis.com.evil.example/steal",
+  "https://updates.push.services.mozilla.com@evil.example/steal",
+  "https://web.push.apple.com:8443/steal",
+  "https://push.apple.com/unsupported-apex",
+  "https://127.0.0.1/internal",
+  "https://[::1]/internal",
+]) {
+  assert.equal(
+    isAllowedWebPushEndpoint(endpoint),
+    false,
+    `untrusted Web Push endpoint must be rejected: ${endpoint}`,
+  );
+}
+assert.match(edge, /isAllowedWebPushEndpoint\(target\.endpoint\)/);
+assert.doesNotMatch(edge, /const nonPublicHostname/);
+assert.match(
+  trustedWebPushMigration,
+  /web_push_subscriptions_trusted_endpoint_check[\s\S]{0,900}fcm\\\.googleapis\\\.com[\s\S]{0,300}push\\\.apple\\\.com[\s\S]{0,300}notify\\\.windows\\\.com/,
+  "the database must enforce the same bounded browser-provider endpoint allowlist",
+);
 assert.match(
   webPushMigration,
   /get diagnostics affected_rows = row_count;[\s\S]*if affected_rows = 0 then[\s\S]*using errcode = '42501';/,
@@ -650,11 +1028,7 @@ assert.match(
   /if \(event\.category === "challenge"\)[\s\S]{0,700}\.is\("deleted_at", null\)/,
 );
 assert.match(edge, /challengeParticipantIds\?\.has\(event\.recipientId\)/);
-assert.match(edge, /!hostname\.includes\("\."\)/);
-assert.match(
-  edge,
-  /\(\?:localhost\|local\|internal\|lan\|home\|corp\|test\|invalid\|example\)/,
-);
+assert.match(edge, /isAllowedWebPushEndpoint/);
 assert.match(webWorker, /self\.addEventListener\("push"/);
 assert.match(webWorker, /self\.registration\.showNotification/);
 assert.match(webWorker, /self\.addEventListener\("notificationclick"/);
@@ -1066,6 +1440,58 @@ assert.match(canonicalChatPreview, /\(\?:recap\|challenge\|metric-log\)/);
 assert.match(canonicalChatPreview, /Shared an attachment/);
 assert.match(canonicalChatPreview, /localizedChatFallback/);
 assert.match(canonicalChatPreview, /hasAttachment \? " · Attachment" : ""/);
+assert.match(
+  receiptMigration,
+  /push_dispatch_events_category_check[\s\S]{0,240}category in \('chat', 'metric', 'lead', 'winner', 'membership', 'challenge'\)/,
+  "chat must be a first-class durable canonical outbox category",
+);
+assert.match(
+  canonicalChat,
+  /from\("push_dispatch_events"\)[\s\S]{0,220}upsert\(outboxInput[\s\S]{0,120}onConflict: "event_key"/,
+  "authenticated chat dispatch must materialize only its server-derived committed message into the outbox",
+);
+assert.match(
+  canonicalChat,
+  /outbox\.group_id !== groupId[\s\S]{0,400}outboxData\.messageId !== clientMessageId[\s\S]{0,100}outboxData\.senderId !== senderId/,
+  "a colliding chat key must never adopt another message or sender's canonical row",
+);
+assert.match(
+  edge,
+  /internalServiceRequest[\s\S]{0,2200}from\("expo_push_receipts"\)[\s\S]{0,400}delivery_action", "resend"/,
+  "the service resend path must derive its target set from durable receipt state",
+);
+assert.match(
+  edge,
+  /receiptLeaseOwner && !internalServiceRequest[\s\S]{0,120}Receipt resend lease is service-only/,
+  "clients must never be able to select an internal receipt lease",
+);
+const exactReceiptLeaseBlock = edge.slice(
+  edge.indexOf("const pendingResendRead"),
+  edge.indexOf("if (stored.id)", edge.indexOf("const pendingResendRead")),
+);
+assert.match(
+  exactReceiptLeaseBlock,
+  /pendingResendRead\.data\?\.length && !receiptLeaseOwner[\s\S]{0,240}Canonical resend requires its durable lease/,
+  "a generic internal drain must not consume receipt-owned resend work",
+);
+assert.match(
+  exactReceiptLeaseBlock,
+  /\.eq\("lease_owner", receiptLeaseOwner\)[\s\S]{0,100}\.gt\("lease_until", new Date\(\)\.toISOString\(\)\)/,
+  "each resend invocation must select only rows currently leased by its caller",
+);
+assert.match(
+  exactReceiptLeaseBlock,
+  /pendingResends[\s\S]{0,700}registrationVersionKey[\s\S]{0,160}registration_updated_at/,
+  "canonical resend target identity must come only from the caller's actively leased durable rows",
+);
+assert.match(
+  edge.slice(
+    edge.indexOf("const discoveredTargets"),
+    edge.indexOf("if (!targets.length)", edge.indexOf("const discoveredTargets")),
+  ),
+  /discoveredTargets\.filter[\s\S]{0,500}registrationVersionKey[\s\S]{0,200}target\.updatedAt/,
+  "canonical resend delivery must be limited to exact owner/token/registration versions",
+);
 assert.match(edge, /event\.eventType === "social_reaction"[\s\S]{0,180}socialReactions/);
 assert.match(socialOriginMigration, /source_surface in \('feed', 'leaderboard_log'\)/);
 assert.match(

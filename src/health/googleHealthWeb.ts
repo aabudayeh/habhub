@@ -2,6 +2,7 @@ import { Platform } from "react-native";
 
 import { cloudConfigured, supabase } from "@/src/lib/supabase";
 import { isGoogleHealthCompletionToken } from "@/src/domain/googleHealthCallback";
+import type { HealthHistoryDays } from "@/src/types";
 
 export type GoogleHealthConnectionState =
   | "disconnected"
@@ -18,6 +19,7 @@ export type GoogleHealthConnection = {
   lastError: string | null;
   importedCount: number;
   syncing: boolean;
+  historyDays: HealthHistoryDays;
 };
 
 export type GoogleHealthSyncResult = {
@@ -54,6 +56,7 @@ export type GoogleHealthAction =
   | "connect"
   | "complete"
   | "sync"
+  | "setHistory"
   | "refresh"
   | "disconnect"
   | "delete"
@@ -130,6 +133,11 @@ function parseConnection(value: unknown): GoogleHealthConnection {
     lastError: optionalString(input.lastError),
     importedCount: parseCount(input.importedCount),
     syncing: input.syncing === true,
+    historyDays:
+      typeof input.historyDays === "number" &&
+      [0, 30, 90, 365, 730].includes(input.historyDays)
+      ? input.historyDays as HealthHistoryDays
+      : 90,
   };
 }
 
@@ -267,6 +275,7 @@ export async function invokeGoogleHealth(
     patch?: GoogleHealthEntryPatch;
     metricId?: string;
     visibility?: "private" | "status" | "group";
+    historyDays?: HealthHistoryDays;
   } = {},
 ): Promise<GoogleHealthResponse> {
   const isDataMutation =
@@ -290,7 +299,16 @@ export async function invokeGoogleHealth(
     patch?: GoogleHealthEntryPatch;
     metricId?: string;
     visibility?: "private" | "status" | "group";
+    historyDays?: HealthHistoryDays;
   } = { action };
+  if (action === "connect" || action === "setHistory") {
+    if (
+      options.historyDays === undefined ||
+      ![0, 30, 90, 365, 730].includes(options.historyDays)
+    )
+      throw new GoogleHealthClientError("invalid_history_days");
+    body.historyDays = options.historyDays;
+  }
   if (action === "connect" && options.redirectUri) {
     let redirect: URL;
     try {

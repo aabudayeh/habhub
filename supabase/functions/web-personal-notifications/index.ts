@@ -2,6 +2,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import webpush from "npm:web-push@3.6.7";
 
 import { constantTimeEqual } from "../_shared/google-health-crypto.ts";
+import { isAllowedWebPushEndpoint } from "../_shared/web-push-endpoint.ts";
 
 type ScheduledNotification = {
   user_id: string;
@@ -18,6 +19,7 @@ type Target = {
   endpoint: string;
   p256dh: string;
   auth: string;
+  updatedAt: string;
   expirationTime: number | null;
   preferences: Record<string, unknown>;
 };
@@ -45,6 +47,11 @@ function objectRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+}
+
+function changedStaleRegistrationCount(value: unknown) {
+  const count = Number(objectRecord(value).changedRegistrations ?? 0);
+  return Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0;
 }
 
 function boundedLimit(value: unknown) {
@@ -117,24 +124,7 @@ async function validTarget(target: Target) {
   )
     return false;
   try {
-    const endpoint = new URL(target.endpoint);
-    const host = endpoint.hostname.toLowerCase().replace(/\.$/, "");
-    const nonPublic =
-      !host.includes(".") ||
-      host.includes(":") ||
-      /^[0-9.]+$/.test(host) ||
-      /(?:^|\.)(?:localhost|local|internal|lan|home|corp|test|invalid|example)$/.test(
-        host,
-      );
-    if (
-      endpoint.protocol !== "https:" ||
-      endpoint.username ||
-      endpoint.password ||
-      endpoint.hash ||
-      (endpoint.port && endpoint.port !== "443") ||
-      nonPublic
-    )
-      return false;
+    if (!isAllowedWebPushEndpoint(target.endpoint)) return false;
     const publicKey = base64UrlBytes(target.p256dh);
     const auth = base64UrlBytes(target.auth);
     if (publicKey.length !== 65 || publicKey[0] !== 4 || auth.length !== 16)
@@ -251,23 +241,26 @@ Deno.serve(async (request) => {
         await Promise.all([
           admin
             .from("web_push_subscriptions")
-            .select("endpoint, p256dh, auth, expiration_time, preferences")
+            .select("endpoint, p256dh, auth, updated_at, expiration_time, preferences")
             .eq("user_id", event.user_id),
           admin
             .from("web_personal_notification_acceptances")
-            .select("endpoint")
+            .select("endpoint, registration_updated_at")
             .eq("user_id", event.user_id)
             .eq("schedule_key", event.schedule_key),
         ]);
       if (subscriptionError) throw subscriptionError;
       if (priorError) throw priorError;
       const alreadyAccepted = new Set(
-        (prior ?? []).map((item) => String(item.endpoint)),
+        (prior ?? []).map(
+          (item) => `${String(item.endpoint)}|${String(item.registration_updated_at)}`,
+        ),
       );
       const targets: Target[] = (subscriptions ?? []).map((item) => ({
         endpoint: String(item.endpoint),
         p256dh: String(item.p256dh),
         auth: String(item.auth),
+        updatedAt: String(item.updated_at),
         expirationTime: Number.isFinite(Number(item.expiration_time))
           ? Number(item.expiration_time)
           : null,
@@ -296,51 +289,66 @@ Deno.serve(async (request) => {
         continue;
       }
       const eligible = permitted.filter(
-        (target) => !alreadyAccepted.has(target.endpoint),
+        (target) =>
+          !alreadyAccepted.has(`${target.endpoint}|${target.updatedAt}`),
       );
       const topic = await topicFor(event.user_id, event.schedule_key);
       let transient: unknown;
       let gatewayAccepted = 0;
+      let staleRemoved = 0;
       const details = vapidDetails();
       for (let offset = 0; offset < eligible.length; offset += 20) {
         const batch = eligible.slice(offset, offset + 20);
         const outcomes = await Promise.allSettled(
           batch.map((target) => send(target, event, topic, details)),
         );
-        const terminal = outcomes.flatMap((outcome, index) =>
-          outcome.status === "fulfilled" ? [batch[index].endpoint] : [],
+        const acceptedTargets = outcomes.flatMap((outcome, index) =>
+          outcome.status === "fulfilled" && outcome.value === "accepted"
+            ? [batch[index]]
+            : [],
         );
         gatewayAccepted += outcomes.filter(
           (outcome) =>
             outcome.status === "fulfilled" && outcome.value === "accepted",
         ).length;
-        if (terminal.length) {
+        if (acceptedTargets.length) {
           const acceptance = await admin
             .from("web_personal_notification_acceptances")
             .upsert(
-              terminal.map((endpoint) => ({
+              acceptedTargets.map((target) => ({
                 user_id: event.user_id,
                 schedule_key: event.schedule_key,
-                endpoint,
+                endpoint: target.endpoint,
+                registration_updated_at: target.updatedAt,
               })),
               {
                 onConflict: "user_id,schedule_key,endpoint",
-                ignoreDuplicates: true,
               },
             );
           if (acceptance.error) throw acceptance.error;
         }
         const stale = outcomes.flatMap((outcome, index) =>
           outcome.status === "fulfilled" && outcome.value === "stale"
-            ? [batch[index].endpoint]
+            ? [batch[index]]
             : [],
         );
         if (stale.length) {
-          const cleanup = await admin
-            .from("web_push_subscriptions")
-            .delete()
-            .in("endpoint", stale);
+          const cleanup = await admin.rpc(
+            "delete_exact_stale_web_push_subscriptions",
+            {
+              p_registrations: stale.map((target) => ({
+                userId: event.user_id,
+                endpoint: target.endpoint,
+                p256dh: target.p256dh,
+                auth: target.auth,
+                updatedAt: target.updatedAt,
+              })),
+            },
+          );
           if (cleanup.error) throw cleanup.error;
+          if (changedStaleRegistrationCount(cleanup.data) > 0)
+            throw new Error("Web Push registration changed during delivery");
+          staleRemoved += stale.length;
         }
         const failed = outcomes.find(
           (outcome): outcome is PromiseRejectedResult =>
@@ -352,7 +360,8 @@ Deno.serve(async (request) => {
       if (
         eligible.length &&
         gatewayAccepted === 0 &&
-        alreadyAccepted.size === 0
+        alreadyAccepted.size === 0 &&
+        staleRemoved === 0
       )
         throw new Error("No active Web Push subscription accepted the reminder");
       const completed = await admin
@@ -361,7 +370,11 @@ Deno.serve(async (request) => {
           dispatched_at: new Date().toISOString(),
           lease_owner: null,
           lease_until: null,
-          last_error: eligible.length ? "gateway_accepted" : "already_accepted",
+            last_error: gatewayAccepted
+              ? "gateway_accepted"
+              : staleRemoved
+                ? "stale_registration_removed"
+                : "already_accepted",
           updated_at: new Date().toISOString(),
         })
         .eq("user_id", event.user_id)

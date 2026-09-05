@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AppState as NativeAppState,
   Platform,
@@ -22,6 +22,12 @@ import { useApp } from "@/src/state/AppProvider";
 import { GroupChallenge } from "@/src/types";
 import { useTutorialSandbox } from "@/src/tutorial/TutorialSandboxContext";
 import { subscribePrivateBroadcast } from "@/src/cloud/privateBroadcast";
+import {
+  DEFAULT_DEMO_GROUP_ID,
+  readDefaultDemoChallenges,
+  subscribeDefaultDemoChallenges,
+  updateDefaultDemoChallenges,
+} from "@/src/data/demoChallenges";
 
 type UseGroupChallengesOptions = {
   /** Group-settings discovery only; never use this for Leaderboard history. */
@@ -40,7 +46,29 @@ export function useGroupChallenges(
   const discoverActive = options.discoverActive === true;
   const discoveryPollingEnabled =
     options.discoveryPollingEnabled !== false;
-  const [challenges, setChallenges] = useState<GroupChallenge[]>([]);
+  const localDemoMetricIds = useMemo(
+    () =>
+      new Set(
+        (state.group.metricConfiguration ?? [])
+          .filter((metric) => metric.sections.group)
+          .map((metric) => metric.id),
+      ),
+    [state.group.metricConfiguration],
+  );
+  // The built-in showcase is deliberately local even in production builds
+  // that have Supabase configured. Treating it as cloud-backed empties the
+  // challenge screen and can leak demo interactions into network requests.
+  const localDemo = groupId === DEFAULT_DEMO_GROUP_ID;
+  const readVisibleDemoChallenges = useCallback(
+    () =>
+      readDefaultDemoChallenges().filter((challenge) =>
+        localDemoMetricIds.has(challenge.metricId),
+      ),
+    [localDemoMetricIds],
+  );
+  const [challenges, setChallenges] = useState<GroupChallenge[]>(() =>
+    localDemo ? readVisibleDemoChallenges() : [],
+  );
   const [loading, setLoading] = useState(false);
   const [initiallyLoadedGroupId, setInitiallyLoadedGroupId] = useState<
     string | undefined
@@ -70,7 +98,7 @@ export function useGroupChallenges(
       return Promise.resolve();
     }
     if (!isCloudGroupId(groupId) || !supabase) {
-      setChallenges([]);
+      setChallenges(localDemo ? readVisibleDemoChallenges() : []);
       setError(undefined);
       setInitiallyLoadedGroupId(groupId);
       return Promise.resolve();
@@ -107,7 +135,14 @@ export function useGroupChallenges(
       });
     requestRef.current = request;
     return request;
-  }, [discoverActive, groupId, tutorial.active, tutorial.bundle]);
+  }, [
+    discoverActive,
+    groupId,
+    localDemo,
+    readVisibleDemoChallenges,
+    tutorial.active,
+    tutorial.bundle,
+  ]);
   refreshRunnerRef.current = () => void refresh();
 
   useEffect(() => {
@@ -118,6 +153,16 @@ export function useGroupChallenges(
     setChallenges([]);
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    if (!localDemo) return;
+    setChallenges(readVisibleDemoChallenges());
+    return subscribeDefaultDemoChallenges((next) =>
+      setChallenges(
+        next.filter((challenge) => localDemoMetricIds.has(challenge.metricId)),
+      ),
+    );
+  }, [localDemo, localDemoMetricIds, readVisibleDemoChallenges]);
 
   useEffect(() => {
     if (
@@ -215,10 +260,10 @@ export function useGroupChallenges(
   }, [groupId, refresh, tutorial.active]);
 
   const save = useCallback(async (input: SaveGroupChallengeInput) => {
-    if (tutorial.active) {
+    if (tutorial.active || localDemo) {
       const now = new Date().toISOString();
       const saved: GroupChallenge = {
-        id: input.id ?? `tutorial-challenge-${Date.now()}`,
+        id: input.id ?? `${localDemo ? "demo" : "tutorial"}-challenge-${Date.now()}`,
         groupId: input.groupId,
         creatorId: state.currentUserId,
         metricId: input.metricId,
@@ -237,10 +282,12 @@ export function useGroupChallenges(
         createdAt: now,
         updatedAt: now,
       };
-      setChallenges((current) => [
+      const update = (current: GroupChallenge[]) => [
         saved,
         ...current.filter((challenge) => challenge.id !== saved.id),
-      ]);
+      ];
+      if (localDemo) updateDefaultDemoChallenges(update);
+      else setChallenges(update);
       return saved;
     }
     const isNew = !input.id;
@@ -253,7 +300,7 @@ export function useGroupChallenges(
     if (isNew)
       await sendGroupChallengeStartedPush(saved).catch(() => undefined);
     return saved;
-  }, [state.currentUserId, tutorial.active]);
+  }, [localDemo, state.currentUserId, tutorial.active]);
 
   const respond = useCallback(async (
     id: string,
@@ -262,9 +309,9 @@ export function useGroupChallenges(
     const sourceId =
       challengesRef.current.find((challenge) => challenge.id === id)
         ?.sourceChallengeId ?? id;
-    if (tutorial.active) {
+    if (tutorial.active || localDemo) {
       let saved: GroupChallenge | undefined;
-      setChallenges((current) =>
+      const update = (current: GroupChallenge[]) =>
         current.map((challenge) => {
           if (groupChallengeSourceId(challenge) !== sourceId) return challenge;
           const accepted = new Set(challenge.acceptedParticipantIds ?? []);
@@ -290,8 +337,9 @@ export function useGroupChallenges(
             updatedAt: new Date().toISOString(),
           };
           return saved;
-        }),
-      );
+        });
+      if (localDemo) updateDefaultDemoChallenges(update);
+      else setChallenges(update);
       return saved;
     }
     const saved = await respondToGroupChallenge(sourceId, response);
@@ -312,19 +360,20 @@ export function useGroupChallenges(
           "A member",
       ).catch(() => undefined);
     return saved;
-  }, [state.currentUserId, state.groups, tutorial.active]);
+  }, [localDemo, state.currentUserId, state.groups, tutorial.active]);
 
   const remove = useCallback(async (id: string) => {
     const sourceId =
       challengesRef.current.find((challenge) => challenge.id === id)
         ?.sourceChallengeId ?? id;
-    if (!tutorial.active) await deleteGroupChallenge(sourceId);
-    setChallenges((current) =>
+    if (!tutorial.active && !localDemo) await deleteGroupChallenge(sourceId);
+    const update = (current: GroupChallenge[]) =>
       current.filter(
         (challenge) => groupChallengeSourceId(challenge) !== sourceId,
-      ),
-    );
-  }, [tutorial.active]);
+      );
+    if (localDemo) updateDefaultDemoChallenges(update);
+    else setChallenges(update);
+  }, [localDemo, tutorial.active]);
 
   return {
     challenges,

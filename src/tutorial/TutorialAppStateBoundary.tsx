@@ -23,8 +23,12 @@ export function TutorialAppStateBoundary({
   );
   const demoStateKey = `tutorial-demo:${bundle.schemaVersion}:${anchorDate}:${runId}`;
   return (
-    <TutorialSandboxProvider bundle={bundle}>
-      <AppProvider initialState={bundle.appState} persistence="ephemeral">
+    <TutorialSandboxProvider key={demoStateKey} bundle={bundle}>
+      <AppProvider
+        key={demoStateKey}
+        initialState={bundle.appState}
+        persistence="ephemeral"
+      >
         <TutorialCloudSyncBoundary>
           <TutorialHealthSyncBoundary>
             <TutorialIsolatedPreviewBoundary demoStateKey={demoStateKey}>

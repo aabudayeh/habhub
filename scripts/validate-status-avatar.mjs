@@ -252,6 +252,11 @@ assert.match(
 );
 assert.match(
   componentSource,
+  /resizeMethod="scale"[\s\S]{0,100}resizeMode="contain"/,
+  "the 2x avatar source must retain full-resolution detail during its uniform downscale",
+);
+assert.match(
+  componentSource,
   /left: width \/ 2 - config\.bodyCenter \* scale[\s\S]{0,240}top: -config\.bodyTop \* scale[\s\S]{0,240}width: config\.spriteWidth \* scale/,
   "every atlas state must share one centered head-to-foot viewport",
 );
@@ -307,8 +312,8 @@ assert.match(
 );
 assert.match(
   spriteGeneratorSource,
-  /centralTaper[\s\S]{0,500}upperBodyGuard[\s\S]{0,300}extensionWeight/,
-  "extended adiposity must widen the central body without dragging forearms away from elbows",
+  /armAdiposityWeight[\s\S]*destinationHalfWidth[\s\S]*resolvedReferenceHalfWidth[\s\S]*restoreProportionalArms/,
+  "extended adiposity must restore and proportionally widen arms around their own pose",
 );
 assert.doesNotMatch(
   spriteGeneratorSource,
@@ -318,6 +323,36 @@ assert.doesNotMatch(
 
 const spriteCounts = { female: 20 * 10, male: 20 * 10 };
 let spriteBytes = 0;
+const detachedArmMetricsAtRow = (image, y) => {
+  const runs = [];
+  let start = -1;
+  for (let x = 0; x < image.width; x += 1) {
+    const visible = image.data[(y * image.width + x) * 4 + 3] > 16;
+    if (visible && start < 0) start = x;
+    if ((!visible || x === image.width - 1) && start >= 0) {
+      runs.push([start, visible ? x : x - 1]);
+      start = -1;
+    }
+  }
+  const bodyIndex = runs.findIndex(
+    ([left, right]) => left <= 164 && right >= 164,
+  );
+  const widest = (candidates) =>
+    candidates
+      .filter(([left, right]) => right - left >= 4)
+      .sort(
+        ([leftA, rightA], [leftB, rightB]) =>
+          rightB - leftB - (rightA - leftA),
+      )[0];
+  const left = widest(runs.slice(0, bodyIndex));
+  const right = widest(runs.slice(bodyIndex + 1));
+  assert.ok(left && right, `detached arms must resolve at sprite row ${y}`);
+  const metric = ([leftEdge, rightEdge]) => ({
+    center: (leftEdge + rightEdge) / 2,
+    width: rightEdge - leftEdge + 1,
+  });
+  return { left: metric(left), right: metric(right) };
+};
 for (const variant of ["female", "male"]) {
   const directory = path.join(
     root,
@@ -337,7 +372,7 @@ for (const variant of ["female", "male"]) {
   );
   const hashes = new Set();
   const alphaAreas = new Map();
-  const lowerArmBounds = new Map();
+  const detachedArmMetrics = new Map();
   for (const file of files) {
     const filePath = path.join(directory, file);
     const buffer = fs.readFileSync(filePath);
@@ -377,18 +412,11 @@ for (const variant of ["female", "male"]) {
       `${variant}/${file} must retain transparent side safety and never clip`,
     );
     alphaAreas.set(file, alphaArea);
-    lowerArmBounds.set(
+    detachedArmMetrics.set(
       file,
-      [206, 231, 256].map((y) => {
-        let rowLeft = image.width;
-        let rowRight = -1;
-        for (let x = 0; x < image.width; x += 1) {
-          if (image.data[(y * image.width + x) * 4 + 3] <= 16) continue;
-          rowLeft = Math.min(rowLeft, x);
-          rowRight = Math.max(rowRight, x);
-        }
-        return [rowLeft, rowRight];
-      }),
+      [210, 230, 250, 270].map((y) =>
+        detachedArmMetricsAtRow(image, y),
+      ),
     );
     hashes.add(crypto.createHash("sha256").update(image.data).digest("hex"));
   }
@@ -412,21 +440,33 @@ for (const variant of ["female", "male"]) {
       extensionAreas.at(-1) >= extensionAreas[0] * 1.08,
       `${variant} a19 must be visibly fuller than the approved a12 endpoint`,
     );
-    const approvedArmBounds = lowerArmBounds.get(
+    const approvedArmMetrics = detachedArmMetrics.get(
       `m${String(row).padStart(2, "0")}-a12.png`,
     );
-    for (let column = 13; column < 20; column += 1) {
-      const extendedArmBounds = lowerArmBounds.get(
-        `m${String(row).padStart(2, "0")}-a${column}.png`,
-      );
-      extendedArmBounds.forEach(([left, right], index) => {
-        const [approvedLeft, approvedRight] = approvedArmBounds[index];
+    const extremeArmMetrics = detachedArmMetrics.get(
+      `m${String(row).padStart(2, "0")}-a19.png`,
+    );
+    let approvedWidth = 0;
+    let extremeWidth = 0;
+    extremeArmMetrics.forEach((extreme, index) => {
+      const approved = approvedArmMetrics[index];
+      for (const side of ["left", "right"]) {
+        approvedWidth += approved[side].width;
+        extremeWidth += extreme[side].width;
         assert.ok(
-          left >= approvedLeft - 3 && right <= approvedRight + 3,
-          `${variant} extended lower arms must stay tucked at muscle row ${row}, column ${column}`,
+          extreme[side].width >= approved[side].width - 1,
+          `${variant} extreme ${side} arm must not become thinner at muscle row ${row}, sample ${index}`,
         );
-      });
-    }
+        assert.ok(
+          Math.abs(extreme[side].center - approved[side].center) <= 4,
+          `${variant} extreme ${side} arm must preserve its centerline at muscle row ${row}, sample ${index}`,
+        );
+      }
+    });
+    assert.ok(
+      extremeWidth >= approvedWidth * 1.055,
+      `${variant} extreme arms must gain proportional volume at muscle row ${row}`,
+    );
   }
   const manifestRequires = [
     ...spriteManifestSource.matchAll(
@@ -708,10 +748,83 @@ assert.ok(
     contradictoryComposition.adiposity <= 1,
   "inconsistent composition inputs must remain bounded",
 );
+const extremeAppearanceFixtures = [
+  statusBodyAppearance(135, 35, -Infinity, {
+    bodyFatPercent: 1,
+    leanBodyMassKg: 10,
+    sex: "female",
+  }),
+  statusBodyAppearance(135, 250, Infinity, {
+    bodyFatPercent: 75,
+    leanBodyMassKg: 250,
+    sex: "female",
+  }),
+  statusBodyAppearance(215, 35, Number.NaN, {
+    bodyFatPercent: 1,
+    leanBodyMassKg: 10,
+    sex: "male",
+  }),
+  statusBodyAppearance(135, 250, 1, {
+    bodyFatPercent: 75,
+    leanBodyMassKg: 250,
+    sex: "male",
+  }),
+];
+for (const appearance of extremeAppearanceFixtures) {
+  assert.ok(
+    Object.values(appearance).every((value) =>
+      typeof value === "number" ? Number.isFinite(value) : true,
+    ),
+    "extreme body-profile appearance values must remain finite",
+  );
+  assert.ok(
+    appearance.bodyMass >= -1 &&
+      appearance.bodyMass <= 1 &&
+      appearance.adiposity >= -1 &&
+      appearance.adiposity <= 1 &&
+      appearance.muscleProgress >= 0 &&
+      appearance.muscleProgress <= 1,
+    "extreme body-profile appearance values must remain within renderer bounds",
+  );
+}
 const muscleCheckpoints = Array.from(
   { length: 10 },
   (_, index) => index / 9,
 );
+
+for (const sex of ["female", "male", "unspecified"]) {
+  for (const fixture of [
+    { adiposity: -1, bodyMass: -1, muscle: 0 },
+    { adiposity: 1, bodyMass: 1, muscle: 0 },
+    { adiposity: -1, bodyMass: 1, muscle: 1 },
+    { adiposity: 1, bodyMass: -1, muscle: 1 },
+    { adiposity: Number.NaN, bodyMass: Infinity, muscle: -Infinity },
+  ]) {
+    const geometry = statusAvatarGeometry(
+      sex,
+      fixture.bodyMass,
+      fixture.muscle,
+      fixture.adiposity,
+    );
+    const bodyValues = Object.values(geometry.body);
+    const accessoryValues = Object.values(geometry.accessory);
+    assert.ok(
+      [...bodyValues, ...accessoryValues].every(Number.isFinite),
+      `${sex} extreme geometry must remain finite`,
+    );
+    assert.ok(
+      bodyValues.every((value) => value > 0 && value < 80),
+      `${sex} extreme body landmarks must remain positive and inside the viewBox`,
+    );
+    for (const segment of ["upperArm", "elbow", "wrist"]) {
+      assert.ok(
+        geometry.body[`${segment}OuterHalf`] >
+          geometry.body[`${segment}InnerHalf`],
+        `${sex} ${segment} must retain positive anatomical thickness`,
+      );
+    }
+  }
+}
 
 for (const sex of ["male", "female"]) {
   // Ten QA checkpoints on the thin-to-full axis. These are calibration points,

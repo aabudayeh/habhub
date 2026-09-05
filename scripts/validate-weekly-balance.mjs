@@ -133,7 +133,7 @@ const month = weeklyBalancePeriodReport(
   "2026-08-18",
 );
 assert.equal(month.startDate, "2026-08-01");
-assert.equal(month.endDate, dateKey());
+assert.equal(month.endDate, "2026-08-31");
 assert.equal(month.bucketKind, "week");
 assert.equal(month.days, 4);
 assert.equal(month.dailyBalances.length, 4);

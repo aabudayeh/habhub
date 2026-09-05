@@ -25,6 +25,7 @@ import {
   SectionHeader,
 } from "@/src/components/ui";
 import { friendlyHealthOrigin } from "@/src/domain/health";
+import { normalizeHealthHistoryDays } from "@/src/domain/healthHistory";
 import {
   LIVE_STEP_SOURCES,
   normalizeLiveStepSources,
@@ -40,6 +41,7 @@ import { ScreenTimeAccessCard } from "@/src/screenTime/ScreenTimeAccessCard";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import {
   HealthDataType,
+  HealthHistoryDays,
   LiveStepCombination,
   LiveStepSource,
   SyncMode,
@@ -454,7 +456,14 @@ export default function SettingsScreen() {
   const colors = useAppColors();
   const locale = useLocale();
   const [busy, setBusy] = useState<
-    "sync" | "pull" | "health" | "history" | "signout" | "delete" | null
+    | "sync"
+    | "pull"
+    | "health"
+    | "history"
+    | "history-window"
+    | "signout"
+    | "delete"
+    | null
   >(null);
   const [showDevices, setShowDevices] = useState(false);
   const [showHealthTypes, setShowHealthTypes] = useState(false);
@@ -488,6 +497,9 @@ export default function SettingsScreen() {
   }, [state.settings.healthSync.liveStepSources]);
   const selectedLiveStepCombination =
     state.settings.healthSync.liveStepCombination ?? "highest";
+  const selectedHealthHistoryDays = normalizeHealthHistoryDays(
+    state.settings.healthHistoryDays,
+  );
 
   async function run(
     kind: typeof busy,
@@ -868,6 +880,46 @@ export default function SettingsScreen() {
           </View>
         ) : null}
         {!isWebHealthBridge ? (
+          <View style={styles.origins}>
+            <Text style={[styles.modeTitle, { color: colors.ink }]}>Import starting point</Text>
+            <Text style={[styles.meta, styles.sourceNote, { color: colors.muted }]}>
+              Today only always reads the current local day. A past day missed
+              while HabHub was closed will not be imported later.
+            </Text>
+            <View style={styles.originChips}>
+              {(
+                [
+                  [0, "Today only"],
+                  [30, "30 days"],
+                  [90, "90 days"],
+                  [365, "1 year"],
+                  [730, "2 years"],
+                ] as const satisfies readonly (readonly [HealthHistoryDays, string])[]
+              ).map(([days, label]) => (
+                <Chip
+                  key={days}
+                  label={label}
+                  selected={selectedHealthHistoryDays === days}
+                  onPress={() =>
+                    void run(
+                      "history-window",
+                      () => health.setHealthHistoryDays(days),
+                      "Health history choice was not saved",
+                    )
+                  }
+                />
+              ))}
+            </View>
+            {selectedHealthHistoryDays === 0 && hasSyncedPhoneHealth ? (
+              <Text style={[styles.meta, styles.sourceNote, { color: colors.muted }]}>
+                Existing imported entries stay in your account unless you
+                delete them; this choice prevents all prior dates being read
+                again.
+              </Text>
+            ) : null}
+          </View>
+        ) : null}
+        {!isWebHealthBridge ? (
           <View style={styles.buttons}>
             <View style={styles.grow}>
               <Button
@@ -935,12 +987,19 @@ export default function SettingsScreen() {
               disabled={busy === "history" || health.status === "syncing"}
               onPress={() =>
                 Alert.alert(
-                  "Repair health history?",
-                  `This rechecks ${state.settings.healthHistoryDays ?? 90} days in small batches. Normal syncing only checks recent changes.`,
+                  selectedHealthHistoryDays === 0
+                    ? "Refresh today's health data?"
+                    : "Repair health history?",
+                  selectedHealthHistoryDays === 0
+                    ? "This reads the current local day only and will not import any prior date."
+                    : `This rechecks ${selectedHealthHistoryDays} days in small batches. Normal syncing only checks recent changes.`,
                   [
                     { text: "Cancel", style: "cancel" },
                     {
-                      text: "Repair history",
+                      text:
+                        selectedHealthHistoryDays === 0
+                          ? "Refresh today"
+                          : "Repair history",
                       onPress: () =>
                         run(
                           "history",
@@ -963,32 +1022,20 @@ export default function SettingsScreen() {
               <View style={styles.copy}>
                 <Text style={[styles.modeTitle, { color: colors.ink }]}>
                   {busy === "history"
-                    ? "Repairing history…"
-                    : "Repair health history"}
+                    ? selectedHealthHistoryDays === 0
+                      ? "Refreshing today…"
+                      : "Repairing history…"
+                    : selectedHealthHistoryDays === 0
+                      ? "Refresh today's health data"
+                      : "Repair health history"}
                 </Text>
                 <Text style={[styles.meta, { color: colors.muted }]}>
-                  Re-import missing or edited history in 30-day batches.
+                  {selectedHealthHistoryDays === 0
+                    ? "Re-import only readings dated today."
+                    : "Re-import missing or edited history in 30-day batches."}
                 </Text>
               </View>
             </Pressable>
-            <View style={styles.originChips}>
-              {([30, 90, 365, 730] as const).map((days) => (
-                <Chip
-                  key={days}
-                  label={
-                    days === 30
-                      ? "30 days"
-                      : days === 90
-                        ? "90 days"
-                        : days === 365
-                          ? "1 year"
-                          : "2 years"
-                  }
-                  selected={(state.settings.healthHistoryDays ?? 90) === days}
-                  onPress={() => updateSettings({ healthHistoryDays: days })}
-                />
-              ))}
-            </View>
           </>
         ) : null}
         {Platform.OS === "android" &&
@@ -1543,7 +1590,7 @@ export default function SettingsScreen() {
             onPress={() =>
               Alert.alert(
                 "Permanently delete account?",
-                "This removes the account, cloud snapshot, and uploaded media. This cannot be undone.",
+                "This removes your account, cloud data, uploads, sent messages, and content you created for groups. This cannot be undone.",
                 [
                   { text: "Cancel", style: "cancel" },
                   {
@@ -1569,6 +1616,54 @@ export default function SettingsScreen() {
             </Text>
           </Pressable>
         ) : null}
+      </Card>
+
+      <SectionHeader title="Legal & support" />
+      <Card>
+        <Text style={[styles.title, { color: colors.ink }]}>
+          Policies and help
+        </Text>
+        <Text style={[styles.text, { color: colors.muted }]}>
+          Review how HabHub handles data, read the current terms and community
+          rules, contact support, or use the public account-deletion path.
+        </Text>
+        <View style={styles.legalActions}>
+          <Button
+            label="Privacy & Health Data Policy"
+            translate={false}
+            icon="shield-checkmark-outline"
+            variant="ghost"
+            onPress={() => router.push("/privacy" as never)}
+          />
+          <Button
+            label="Terms of Use"
+            translate={false}
+            icon="reader-outline"
+            variant="ghost"
+            onPress={() => router.push("/terms" as never)}
+          />
+          <Button
+            label="Community Guidelines"
+            translate={false}
+            icon="people-circle-outline"
+            variant="ghost"
+            onPress={() => router.push("/community-guidelines" as never)}
+          />
+          <Button
+            label="HabHub Support"
+            translate={false}
+            icon="help-buoy-outline"
+            variant="ghost"
+            onPress={() => router.push("/support" as never)}
+          />
+          <Button
+            label="Account deletion help"
+            translate={false}
+            icon="trash-outline"
+            variant="ghost"
+            onPress={() => router.push("/delete-account" as never)}
+          />
+        </View>
       </Card>
     </Screen>
   );
@@ -1715,6 +1810,7 @@ const styles = StyleSheet.create({
     backgroundColor: palette.border,
     marginVertical: 15,
   },
+  legalActions: { gap: 8 },
   collapseRow: {
     height: 42,
     flexDirection: "row",

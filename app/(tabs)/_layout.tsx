@@ -22,6 +22,8 @@ import {
 } from "@/src/storage/workoutTimerPresence";
 import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import { requestLogDraftExit } from "@/src/components/logDraftNavigationGuard";
+import { useUserSafety } from "@/src/safety/userSafety";
+import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 import {
   compactTabBarForCount,
   normalizeTabOrder,
@@ -66,6 +68,8 @@ function WebTabFreeze({ children }: React.PropsWithChildren) {
 export default function TabLayout() {
   const accent = useGroupAccent();
   const { state } = useApp();
+  const tutorialSandbox = useTutorialSandboxActive();
+  const safety = useUserSafety(state.currentUserId, tutorialSandbox);
   const colors = useAppColors();
   const t = useTranslation();
   const insets = useSafeAreaInsets();
@@ -117,6 +121,7 @@ export default function TabLayout() {
     void hydrateWorkoutTimerPresence(state.currentUserId);
   }, [state.currentUserId]);
   const hasUnreadChat = useMemo(() => {
+    if (!safety.hydrated) return false;
     const readAt =
       state.settings.notifications.chatReadAtByConversation ?? {};
     const groupConversationId = `group:${state.group.id}`;
@@ -124,6 +129,7 @@ export default function TabLayout() {
       if (
         message.senderId === state.currentUserId ||
         message.senderId === "system" ||
+        safety.blockedUserIds.has(message.senderId) ||
         (message.groupId && message.groupId !== state.group.id)
       )
         return false;
@@ -147,6 +153,8 @@ export default function TabLayout() {
       return message.createdAt > cursor;
     });
   }, [
+    safety.blockedUserIds,
+    safety.hydrated,
     state.currentUserId,
     state.group.id,
     state.messages,

@@ -333,6 +333,9 @@ export function historicalStepRepairStart(
   if (!Number.isFinite(today.getTime()))
     throw new Error("A valid repair time is required.");
   today.setHours(0, 0, 0, 0);
+  // Today-only deliberately ignores older stored rows. They may remain
+  // visible until explicitly deleted, but this repair must not read them.
+  if (configuredHistoryDays <= 0) return today;
   const maximumDays = Math.max(1, Math.floor(maximumHistoryDays));
   const earliestAllowed = new Date(today);
   earliestAllowed.setDate(earliestAllowed.getDate() - maximumDays);

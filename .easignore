@@ -43,6 +43,13 @@ browser-extension/
 /invite-site/
 app-example/
 
+# Release operations, policies, and generated marketing media are not native
+# runtime inputs. Keeping them out of the EAS upload avoids shipping large MP4
+# masters and local Supabase CLI state with every Android/iOS build request.
+/docs/
+/store/
+/supabase/
+
 # Editor/OS/debug noise
 .DS_Store
 *.orig.*
