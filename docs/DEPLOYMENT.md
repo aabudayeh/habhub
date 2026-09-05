@@ -348,6 +348,15 @@ pnpm.cmd dlx eas-cli@latest build --profile preview --platform ios
 
 Production store binaries:
 
+The production Android profile intentionally builds the paired ARM phone ABIs
+`arm64-v8a` and `armeabi-v7a`. This satisfies Play's 64-bit requirement while
+retaining supported 32-bit ARM phones. React Native is compiled from source to
+ship HabHub's keyboard/inset backport; compiling the two x86 emulator/ChromeOS
+ABIs as well exceeds this EAS account's 45-minute worker limit. Google Play will
+therefore exclude x86-only devices from this phone release. Re-enable
+`x86,x86_64` only after moving the production build to a worker with a longer
+deadline and completing device-specific testing.
+
 ```powershell
 pnpm.cmd dlx eas-cli@latest build --profile production --platform all
 pnpm.cmd dlx eas-cli@latest submit --profile production --platform android

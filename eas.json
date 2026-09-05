@@ -31,7 +31,10 @@
       "node": "22.13.0",
       "autoIncrement": true,
       "environment": "production",
-      "channel": "production"
+      "channel": "production",
+      "env": {
+        "ORG_GRADLE_PROJECT_reactNativeArchitectures": "arm64-v8a,armeabi-v7a"
+      }
     }
   },
   "submit": {

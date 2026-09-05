@@ -53,8 +53,8 @@ assert.equal(
 );
 assert.equal(
   easConfig.build?.production?.env?.ORG_GRADLE_PROJECT_reactNativeArchitectures,
-  undefined,
-  "The internal preview ABI limit must not silently narrow production builds",
+  "arm64-v8a,armeabi-v7a",
+  "Production source builds must cover 64-bit and legacy ARM phones without compiling non-phone ABIs past the EAS deadline",
 );
 assert.match(
   lockfile,
