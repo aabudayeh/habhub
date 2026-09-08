@@ -2,6 +2,17 @@
 
 Base: `b4a19cf`, branch `codex/usability-polish-20260908`.
 
+## Delivered candidate
+
+- App version **1.0.20**, runtime commit `632bdffe3d61d67e3c57e64e002cdc403dbfb351`.
+- Production web: https://habhub.expo.app
+- Immutable deployment: https://habhub--eke7fbuix9.expo.app (deployment `eke7fbuix9`).
+- Android internal APK build: https://expo.dev/accounts/sethpapa/projects/metrally/builds/c1fff2cc-d5fe-4539-8a65-4fb53858927c
+- The APK request was independently confirmed **IN_QUEUE**, version **1.0.20 (72)**, on September 8, 2026 at approximately 20:47 UTC. It was submitted without waiting for queue/build completion, as requested; no APK download artifact existed at handoff.
+- Production, immutable, onboarding and Quick Guide HTTP checks returned 200 and referenced the current exported common bundle. The isolated branch is pushed to GitHub; no merge was made.
+- Generated marketing handoff: `store/exports/habhub-1.0.20-marketing.zip` (214,858,285 bytes), containing source captures, store artwork, four video masters and audit metadata. Media remains intentionally silent/captions-first, with synthetic progress photographs identified.
+- This is a tested release candidate, not store approval. The signed-device health/push/widget/media/accessibility checks and legal/operator/moderation sign-offs below remain necessary before public store submission.
+
 ## Findings and implementation plan
 
 1. **First value takes too long.** Guided setup still traverses five configuration pages and a generic choice adds eleven trackers. Move guided setup into the real Today page after name and interest cards, keep detailed/classic setup available, and start with a small goal-relevant dashboard. Keep advanced controls discoverable after setup.
