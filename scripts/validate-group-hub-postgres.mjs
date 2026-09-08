@@ -1,3 +1,6 @@
+/* global Deno */
+// Deno resolves this pinned npm import; Node/Expo's resolver does not.
+// eslint-disable-next-line import/no-unresolved
 import { PGlite } from "npm:@electric-sql/pglite@0.3.10";
 
 const migration = await Deno.readTextFile(
@@ -648,3 +651,159 @@ if (todoPushCount.rows[0]?.count !== 8)
   throw new Error("every group todo recipient needs a durable push row");
 
 console.log("Group hub SQL, RLS/RPC, social-target, workspace/todo notification, and orphan-cleanup validation passed.");
+
+// Execute the follow-on migration on real PostgreSQL semantics. Network/cron
+// are narrow record-only fixtures: this never invokes a production worker.
+await db.exec(`
+  create role service_role;
+  create table realtime.calls (payload jsonb, event_name text);
+  create or replace function realtime.send(payload jsonb, event_name text, topic text, private boolean)
+  returns void language plpgsql as $$ begin
+    insert into realtime.calls values (payload, event_name); end $$;
+  create table public.user_snapshots (user_id uuid primary key, payload jsonb not null);
+  create table public.push_dispatch_configuration (singleton boolean primary key, emitters_active boolean);
+  insert into public.push_dispatch_configuration values (true, true);
+  alter table public.push_dispatch_events
+    add column created_at timestamptz not null default now(),
+    add column dispatched_at timestamptz,
+    add constraint push_dispatch_events_event_key_key unique(event_key);
+  create table public.user_blocks (blocker_id uuid, blocked_user_id uuid);
+  create or replace function public.habhub_users_blocked_either_way(a uuid, b uuid)
+  returns boolean language sql stable as $$
+    select exists (select 1 from public.user_blocks
+      where (blocker_id = a and blocked_user_id = b)
+        or (blocker_id = b and blocked_user_id = a))
+  $$;
+  create schema cron;
+  create table cron.job (jobid bigint, jobname text);
+  create function cron.unschedule(bigint) returns boolean language sql as $$ select true $$;
+  create function cron.schedule(text, text, text) returns bigint language sql as $$ select 1::bigint $$;
+  create schema vault;
+  create table vault.decrypted_secrets (name text, decrypted_secret text, created_at timestamptz default now());
+  insert into vault.decrypted_secrets(name, decrypted_secret) values
+    ('challenge_notification_worker_url', 'https://fixture.supabase.co/functions/v1/challenge-notifications'),
+    ('challenge_notification_worker_secret', repeat('fixture-only-', 4));
+  create schema net;
+  create table net.calls (url text, body jsonb);
+  create function net.http_post(url text, headers jsonb, body jsonb, timeout_milliseconds integer)
+  returns bigint language plpgsql as $$ begin
+    insert into net.calls values (url, body); return 1; end $$;
+`);
+const reminderMigration = await Deno.readTextFile(new URL(
+  "../supabase/migrations/202609080006_group_schedule_reminders.sql", import.meta.url,
+));
+for (const [index, statement] of sqlStatements(reminderMigration).entries()) {
+  try { await db.exec(statement); }
+  catch (error) { throw new Error(`Reminder migration statement ${index + 1}: ${error}`); }
+}
+function ensure(value, message) { if (!value) throw new Error(message); }
+async function sqlError(source, code) {
+  try { await db.exec(source); }
+  catch (error) {
+    ensure(error.code === code, `Expected SQLSTATE ${code}, got ${error.code}: ${error}`);
+    return;
+  }
+  throw new Error(`Expected SQLSTATE ${code}, but statement succeeded`);
+}
+async function reminderEvent(startExpression, offset = "15", allDay = false) {
+  return (await db.query(`select * from public.save_group_schedule_item(
+    null, '${groupId}', 'Shared walk', null, ${startExpression}, null, ${allDay}, null, ${offset}
+  )`)).rows[0];
+}
+async function stageReminders(limit = 100) {
+  // Cron/service work must not impersonate the last user's auth session.
+  await db.exec("set request.jwt.claim.sub = ''");
+  const staged = await db.query(`select * from public.stage_due_group_schedule_reminders(${limit})`);
+  await db.exec(`set request.jwt.claim.sub = '${ownerId}'`);
+  return staged.rows;
+}
+async function currentReminder(item, key) {
+  return (await db.query(`select public.group_schedule_reminder_is_current(
+    '${item.group_id}', '${item.id}', '${key}') as current`)).rows[0].current;
+}
+async function updateReminder(item, { start = `'${item.starts_at.toISOString()}'`, offset = item.reminder_minutes, title = "Updated walk" } = {}) {
+  return (await db.query(`select * from public.save_group_schedule_item(
+    '${item.id}', '${item.group_id}', '${title}', null, ${start}, null, false,
+    ${item.revision}, ${offset ?? "null"})`)).rows[0];
+}
+await db.exec(`
+  insert into public.user_snapshots values
+    ('${ownerId}', '{"settings":{"notifications":{"groupPreferencesByGroup":{"${groupId}":{"scheduleReminders":true}}}}}'),
+    ('${memberId}', '{"settings":{"notifications":{"groupPreferencesByGroup":{"${groupId}":{"scheduleReminders":true}}}}}'),
+    ('${thirdId}', '{"settings":{"notifications":{"groupPreferencesByGroup":{"${groupId}":{"scheduleReminders":false}}}}}');
+`);
+const oldClient = (await db.query(`select * from public.save_group_schedule_item(
+  null, '${groupId}', 'Old client event', null, now() + interval '1 hour', null, false, null
+)`)).rows[0];
+ensure(oldClient.reminder_minutes === null, "Old clients must default to no reminder");
+await sqlError(`select public.save_group_schedule_item(null, '${groupId}', 'Invalid offset', null, now(), null, false, null, 7)`, "22023");
+await sqlError(`select public.save_group_schedule_item(null, '${groupId}', 'All day', null, now(), null, true, null, 15)`, "22023");
+const future = await reminderEvent("now() + interval '2 hours'");
+const expired = await reminderEvent("now() - interval '20 minutes'", "0");
+let due = await reminderEvent("now() + interval '10 minutes'");
+ensure(due.reminder_due_at < new Date(), "Generated reminder due time is wrong");
+await db.exec("update public.push_dispatch_configuration set emitters_active = false");
+ensure((await stageReminders()).length === 0, "Rollout gate must prevent staging");
+await db.exec("select public.invoke_group_schedule_reminder_worker()");
+ensure((await db.query("select count(*)::integer as count from net.calls")).rows[0].count === 0, "Disabled rollout must not invoke worker");
+await db.exec("update public.push_dispatch_configuration set emitters_active = true; select public.invoke_group_schedule_reminder_worker()");
+ensure((await db.query("select body from net.calls")).rows[0]?.body?.mode === "group_schedule", "Due worker must use schedule-only mode");
+await db.exec("truncate realtime.calls");
+const firstStage = await stageReminders();
+ensure((await db.query("select count(*)::integer as count from realtime.calls where event_name = 'group_hub_updated'")).rows[0].count === 0, "Reminder delivery bookkeeping must not broadcast a calendar invalidation");
+ensure(firstStage.length === 1, "Only the due, unexpired event should be staged");
+const firstKey = firstStage[0].event_key;
+ensure(await currentReminder(due, firstKey), "Due instance must validate before dispatch");
+ensure(!(await currentReminder(future, firstKey)) && !(await currentReminder(expired, firstKey)), "Canonical ID and time must match");
+const recipients = (await db.query(`select recipient_id from public.group_notification_events where event_key = '${firstKey}' order by recipient_id`)).rows;
+ensure(JSON.stringify(recipients.map((r) => r.recipient_id)) === JSON.stringify([ownerId, memberId]), "Only opted-in members including creator should receive the reminder");
+const firstPush = (await db.query(`select * from public.push_dispatch_events where event_key = '${firstKey}'`)).rows[0];
+ensure(firstPush.audience === "group_including_sender" && firstPush.data.route === "/group-schedule" && firstPush.data.scheduleItemId === due.id, "Reminder canonical audience/deep link is incorrect");
+ensure((await stageReminders()).length === 0, "Repeated staging must be idempotent");
+await sqlError(`select public.save_group_schedule_item('${due.id}', '${groupId}', 'Stale', null, now(), null, false, 0, 15)`, "40001");
+await db.exec(`set request.jwt.claim.sub = '${memberId}'`);
+await sqlError(`select public.save_group_schedule_item('${due.id}', '${groupId}', 'Other owner', null, now(), null, false, ${due.revision}, 15)`, "42501");
+await db.exec(`set request.jwt.claim.sub = '${ownerId}'`);
+due = await updateReminder(due, { title: "Title-only change" });
+ensure((await db.query("select count(*)::integer as count from realtime.calls where event_name = 'group_hub_updated'")).rows[0].count === 1, "Real calendar edits must still broadcast once");
+ensure(await currentReminder(due, firstKey), "Title-only edit must preserve reminder identity");
+ensure((await stageReminders()).length === 0, "Title-only edits must not duplicate reminders");
+due = await updateReminder(due, { start: "now() + interval '1 day'" });
+ensure(!(await currentReminder(due, firstKey)), "Moved event must reject old reminder");
+ensure((await db.query(`select count(*)::integer as count from public.group_notification_events where event_key = '${firstKey}'`)).rows[0].count === 0, "Moved event must clear stale inbox reminder");
+ensure((await db.query(`select expires_at <= now() as expired from public.push_dispatch_events where event_key = '${firstKey}'`)).rows[0].expired, "Moved event must expire stale outbox row");
+ensure((await stageReminders()).length === 0, "Moved future event must not notify early");
+due = await updateReminder(due, { start: "now() + interval '7 minutes'" });
+const movedKey = (await stageReminders())[0]?.event_key;
+ensure(movedKey && movedKey !== firstKey && await currentReminder(due, movedKey), "New scheduled instance must stage exactly once");
+due = await updateReminder(due, { offset: null });
+ensure(!(await currentReminder(due, movedKey)), "Disabled reminder must invalidate pending delivery");
+ensure((await stageReminders()).length === 0, "Disabled reminder must not restage");
+
+await db.exec(`insert into public.user_blocks values ('${memberId}', '${ownerId}')`);
+const blocked = await reminderEvent("now() + interval '5 minutes'");
+const blockedKey = (await stageReminders())[0]?.event_key;
+ensure((await db.query(`select count(*)::integer as count from public.group_notification_events where event_key = '${blockedKey}' and recipient_id = '${memberId}'`)).rows[0].count === 0, "Bidirectional block must exclude reminder recipient");
+await db.exec(`update public.group_members set status = 'left' where group_id = '${groupId}' and user_id = '${ownerId}'`);
+ensure(!(await currentReminder(blocked, blockedKey)), "Former event creator membership must invalidate pending reminder");
+await db.exec(`update public.group_members set status = 'active' where group_id = '${groupId}' and user_id = '${ownerId}'; delete from public.user_blocks`);
+await db.exec(`select public.delete_group_schedule_item('${blocked.id}', ${blocked.revision})`);
+ensure(!(await currentReminder(blocked, blockedKey)), "Deleted events must invalidate canonical reminder");
+ensure((await db.query(`select count(*)::integer as count from public.push_dispatch_events where event_key = '${blockedKey}'`)).rows[0].count === 0, "Deleted event must clean up its pending outbox");
+const zeroOffset = await reminderEvent("now() - interval '1 minute'", "0");
+await reminderEvent("now() + interval '3 minutes'");
+ensure((await stageReminders(1)).length === 1 && (await stageReminders(1)).length === 1, "Bounded staging must leave remaining due work retryable");
+ensure((await stageReminders()).length === 0, "Completed batches must leave no duplicate work");
+await db.exec(`update public.group_schedule_items set starts_at = now() - interval '16 minutes' where id = '${zeroOffset.id}'`);
+const oldZeroKey = (await db.query(`select event_key from public.push_dispatch_events where data ->> 'scheduleItemId' = '${zeroOffset.id}'`)).rows[0].event_key;
+ensure(!(await currentReminder(zeroOffset, oldZeroKey)), "Expired reminder cannot be delivered");
+await db.exec("update public.push_dispatch_events set dispatched_at = now() where event_type = 'group_schedule_reminder'; truncate net.calls; select public.invoke_group_schedule_reminder_worker()");
+ensure((await db.query("select count(*)::integer as count from net.calls")).rows[0].count === 0, "Idle calendar must not invoke an Edge worker");
+const acl = (await db.query(`select
+  has_function_privilege('authenticated', 'public.stage_due_group_schedule_reminders(integer)', 'execute') as client_stage,
+  has_function_privilege('anon', 'public.group_schedule_reminder_is_current(uuid,uuid,text)', 'execute') as anon_read,
+  has_function_privilege('service_role', 'public.stage_due_group_schedule_reminders(integer)', 'execute') as worker_stage,
+  has_function_privilege('authenticated', 'public.save_group_schedule_item(uuid,uuid,text,text,timestamptz,timestamptz,boolean,bigint,integer)', 'execute') as client_save
+`)).rows[0];
+ensure(!acl.client_stage && !acl.anon_read && acl.worker_stage && acl.client_save, "Reminder RPC grants must keep staging/revalidation service-only");
+console.log("Group schedule reminders: real SQL migration, opt-in audience, timed offsets, CAS/access, idempotence, edit/move/disable/delete/expiry, blocks/membership, bounded retry, rollout/idle cron guards, and RPC ACL checks passed.");

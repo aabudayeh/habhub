@@ -344,7 +344,18 @@ const AVAILABLE_SOURCES = SOURCES.filter(
       source.platforms.includes(Platform.OS)),
 );
 
-export default function TrackerEditor() {
+export default function TrackerEditorRoute() {
+  const { id, scope, duplicate } = useLocalSearchParams<{
+    id?: string;
+    scope?: string;
+    duplicate?: string;
+  }>();
+  // Expo Router may reuse this screen when only query parameters change.
+  // A different tracker needs a fresh draft, not the previous tracker's fields.
+  return <TrackerEditor key={JSON.stringify([id ?? "new", scope ?? "personal", duplicate ?? "0"])} />;
+}
+
+function TrackerEditor() {
   const { id, scope, focus, duplicate } = useLocalSearchParams<{
     id?: string;
     scope?: string;
@@ -1768,7 +1779,9 @@ export default function TrackerEditor() {
     if (dataType !== "calculated") return null;
     return (
       <View style={styles.formulaEditor}>
-        <TutorialTarget id="metric-editor-formula">
+        <TutorialTarget id="metric-editor-formula" onTutorialActivate={() => {
+          if (tutorialSandbox) validate(true);
+        }}>
           <View style={styles.formulaPractice}>
             <TextInput
               value={formula}
@@ -2026,6 +2039,7 @@ export default function TrackerEditor() {
         <TextInput
           value={name}
           onChangeText={setName}
+          accessibilityLabel="What do you want to track?"
           placeholder="Reading, sleep, blood pressure…"
           placeholderTextColor={colors.faint}
           style={[
@@ -4615,6 +4629,7 @@ function Field({
       <TextInput
         value={value}
         onChangeText={set}
+        accessibilityLabel={label}
         keyboardType={keyboard ? "decimal-pad" : "default"}
         style={[
           styles.input,

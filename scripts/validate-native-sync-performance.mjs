@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { performance } from "node:perf_hooks";
+import "./validate-local-save-interleaving.mjs";
 
 import {
   cloudEntryNeedsItemDetail,
@@ -42,7 +43,7 @@ const replaceStateCalls = [
 ].map((match) => match[0]);
 assert.equal(
   replaceStateCalls.length,
-  37,
+  38,
   "update the source-classification fixture when replaceState calls change",
 );
 replaceStateCalls.forEach((call, index) =>

@@ -4,6 +4,8 @@ import {
   flushPendingGroupPushEvents,
 } from "@/src/cloud/groupCloud";
 import type { GroupNote, GroupScheduleItem } from "@/src/types";
+import { dateKey } from "@/src/domain/date";
+import { groupScheduleCalendarRange } from "@/src/domain/groupSchedule";
 
 type GroupNoteRow = {
   id: string;
@@ -25,6 +27,7 @@ type GroupScheduleRow = {
   starts_at: string;
   ends_at: string | null;
   all_day: boolean;
+  reminder_minutes: number | null;
   revision: number | string;
   created_at: string;
   updated_at: string;
@@ -46,6 +49,7 @@ export type SaveGroupScheduleInput = {
   startsAt: string;
   endsAt?: string;
   allDay: boolean;
+  reminderMinutes?: number;
   expectedRevision?: number;
 };
 
@@ -53,7 +57,9 @@ function cloudError(error: unknown) {
   if (error && typeof error === "object") {
     const row = error as Record<string, unknown>;
     const message = [row.message, row.details, row.hint]
-      .filter((value): value is string => typeof value === "string" && Boolean(value))
+      .filter(
+        (value): value is string => typeof value === "string" && Boolean(value),
+      )
       .join(" · ");
     if (message) return new Error(message);
   }
@@ -83,6 +89,7 @@ function scheduleFromRow(row: GroupScheduleRow): GroupScheduleItem {
     startsAt: row.starts_at,
     endsAt: row.ends_at ?? undefined,
     allDay: row.all_day,
+    reminderMinutes: row.reminder_minutes ?? undefined,
     revision: Number(row.revision),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -104,7 +111,9 @@ export async function loadGroupNotes(groupId: string) {
   if (!supabase) return [];
   const { data, error } = await supabase
     .from("group_notes")
-    .select("id, group_id, creator_id, title, body, revision, created_at, updated_at")
+    .select(
+      "id, group_id, creator_id, title, body, revision, created_at, updated_at",
+    )
     .eq("group_id", groupId)
     .order("updated_at", { ascending: false })
     .limit(250);
@@ -127,7 +136,10 @@ export async function saveGroupNote(input: SaveGroupNoteInput) {
   return saved;
 }
 
-export async function deleteGroupNote(noteId: string, expectedRevision: number) {
+export async function deleteGroupNote(
+  noteId: string,
+  expectedRevision: number,
+) {
   if (!supabase) throw new Error("Sign in to delete a group note.");
   const { error } = await supabase.rpc("delete_group_note", {
     p_note_id: noteId,
@@ -136,17 +148,63 @@ export async function deleteGroupNote(noteId: string, expectedRevision: number) 
   if (error) throw cloudError(error);
 }
 
-export async function loadGroupSchedule(groupId: string) {
+export async function loadGroupSchedule(
+  groupId: string,
+  range = groupScheduleCalendarRange(dateKey()),
+  signal?: AbortSignal,
+) {
   if (!supabase) return [];
-  const { data, error } = await supabase
+  const rows: GroupScheduleRow[] = [];
+  let cursor: GroupScheduleRow | undefined;
+  // Fixed-size keyset pages avoid silently dropping popular dates. Reads are
+  // calendar-window bounded and the guard reports an error instead of partial data.
+  for (let page = 0; page < 100; page += 1) {
+    let query = supabase
+      .from("group_schedule_items")
+      .select(
+        "id, group_id, creator_id, title, notes, starts_at, ends_at, all_day, reminder_minutes, revision, created_at, updated_at",
+      )
+      .eq("group_id", groupId)
+      .lt("starts_at", range.startsBefore)
+      .or(`starts_at.gte.${range.startsAfter},ends_at.gt.${range.startsAfter}`)
+      .order("starts_at", { ascending: true })
+      .order("id", { ascending: true })
+      .limit(250);
+    if (cursor)
+      query = query.or(
+        `starts_at.gt.${cursor.starts_at},and(starts_at.eq.${cursor.starts_at},id.gt.${cursor.id})`,
+      );
+    if (signal) query = query.abortSignal(signal);
+    const { data, error } = await query;
+    if (error) throw cloudError(error);
+    const pageRows = (data as GroupScheduleRow[] | null) ?? [];
+    rows.push(...pageRows);
+    if (pageRows.length < 250) return rows.map(scheduleFromRow);
+    cursor = pageRows[pageRows.length - 1];
+  }
+  throw new Error(
+    "This calendar window has too many events to load. Try again or ask an administrator to reduce duplicate events.",
+  );
+}
+
+/** Notification links may point outside the currently displayed month. RLS applies. */
+export async function loadGroupScheduleItem(
+  groupId: string,
+  itemId: string,
+  signal?: AbortSignal,
+) {
+  if (!supabase) return;
+  let query = supabase
     .from("group_schedule_items")
-    .select("id, group_id, creator_id, title, notes, starts_at, ends_at, all_day, revision, created_at, updated_at")
+    .select(
+      "id, group_id, creator_id, title, notes, starts_at, ends_at, all_day, reminder_minutes, revision, created_at, updated_at",
+    )
     .eq("group_id", groupId)
-    .gte("starts_at", new Date(Date.now() - 31 * 86_400_000).toISOString())
-    .order("starts_at", { ascending: true })
-    .limit(500);
+    .eq("id", itemId);
+  if (signal) query = query.abortSignal(signal);
+  const { data, error } = await query.maybeSingle();
   if (error) throw cloudError(error);
-  return ((data as GroupScheduleRow[] | null) ?? []).map(scheduleFromRow);
+  return data ? scheduleFromRow(data as GroupScheduleRow) : undefined;
 }
 
 export async function saveGroupScheduleItem(input: SaveGroupScheduleInput) {
@@ -159,6 +217,7 @@ export async function saveGroupScheduleItem(input: SaveGroupScheduleInput) {
     p_starts_at: input.startsAt,
     p_ends_at: input.endsAt ?? null,
     p_all_day: input.allDay,
+    p_reminder_minutes: input.allDay ? null : (input.reminderMinutes ?? null),
     p_expected_revision: input.expectedRevision ?? null,
   });
   if (error) throw cloudError(error);

@@ -16,6 +16,7 @@ import { useTodoLabelDoubleTap } from "@/src/components/useTodoDoubleTap";
 import { Card, Chip, IconButton, PageHeader, Screen } from "@/src/components/ui";
 import { useGroupTodos } from "@/src/cloud/useGroupTodos";
 import { dateKey } from "@/src/domain/date";
+import { canonicalGroupScheduleAllDayInstant } from "@/src/domain/groupHub";
 import {
   descendantTodoIds,
   removeTodoLabelFromText,
@@ -70,18 +71,18 @@ type GroupTodoEditorDraftPayload = {
   createdDuringDraft?: boolean;
 };
 
-const emptyDraft = (): Draft => ({
+const emptyDraft = (selectedDate?: string): Draft => ({
   title: "",
   description: "",
   priority: "normal",
   completionMode: "individual",
-  hasDeadline: false,
-  dueDate: dateKey(),
+  hasDeadline: Boolean(selectedDate),
+  dueDate: selectedDate ?? dateKey(),
   dueTime: "18:00",
   repeatMode: "none",
   repeatInterval: "3",
   reminderEnabled: false,
-  reminderDate: dateKey(),
+  reminderDate: selectedDate ?? dateKey(),
   reminderTime: "09:00",
 });
 
@@ -108,12 +109,14 @@ export default function GroupTodoEditor() {
     draftTreeId,
     draftId,
     draftParentId,
+    date,
   } = useLocalSearchParams<{
     id?: string;
     parentId?: string;
     draftTreeId?: string;
     draftId?: string;
     draftParentId?: string;
+    date?: string;
   }>();
   const {
     state,
@@ -149,7 +152,7 @@ export default function GroupTodoEditor() {
       reminder.groupId === state.group.id && reminder.groupTodoId === existing?.id,
   );
   const [draft, setDraft] = useState<Draft>(
-    () => stagedNode?.value.draft ?? emptyDraft(),
+    () => stagedNode?.value.draft ?? emptyDraft(date && canonicalGroupScheduleAllDayInstant(date) ? date : undefined),
   );
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [reminderCalendarOpen, setReminderCalendarOpen] = useState(false);

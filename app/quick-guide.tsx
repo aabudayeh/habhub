@@ -1,9 +1,12 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
 import React, { useState } from "react";
-import { Pressable, StyleSheet, View } from "react-native";
+import { Pressable, StyleSheet, Switch, View } from "react-native";
 
 import { AppText as Text } from "@/src/components/AppText";
+import { useApp } from "@/src/state/AppProvider";
+import { activeLiveSetupStep, skipAllTutorialsSettings } from "@/src/domain/tutorialUsability";
+import { readableTextColor } from "@/src/domain/colors";
 import { IconButton, PageHeader, Screen } from "@/src/components/ui";
 import { useLocalization } from "@/src/i18n";
 import { localizedTutorialGuides } from "@/src/i18n/tutorial";
@@ -74,6 +77,7 @@ const GUIDE_GROUPS = [
 ] as const;
 
 export default function QuickGuideScreen() {
+  const { state, updateSettings } = useApp();
   const {
     guides,
     progressByGuide,
@@ -83,13 +87,12 @@ export default function QuickGuideScreen() {
   } = useTutorial();
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const onAccent = readableTextColor(accent);
   const { language, t } = useLocalization();
   const localizedGuides = localizedTutorialGuides(guides, language);
   const params = useLocalSearchParams<{ completed?: string }>();
   const basicJustCompleted = params.completed === "essential";
-  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
-    core: true,
-  });
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
 
   function launch(
     guide: TutorialGuide,
@@ -149,12 +152,12 @@ export default function QuickGuideScreen() {
             <View style={styles.metaRow}>
               <Text style={[styles.meta, { color: colors.muted }]}>{meta}</Text>
               <Text style={[styles.meta, { color: accent }]}>
-                {active ? t("In progress") : progress?.completed ? t("Complete") : `${percent}%`}
+                {active ? t("In progress") : progress?.completed ? t("Complete") : completedCount ? `${percent}%` : null}
               </Text>
             </View>
-            <View style={[styles.progressTrack, { backgroundColor: colors.border }]}>
+            {completedCount > 0 ? <View style={[styles.progressTrack, { backgroundColor: colors.border }]}>
               <View style={[styles.progressFill, { backgroundColor: accent, width: `${percent}%` }]} />
-            </View>
+            </View> : null}
           </View>
         </View>
         <View style={styles.actions}>
@@ -175,8 +178,8 @@ export default function QuickGuideScreen() {
             onPress={() => launch(guide, false, "watch")}
             style={[styles.secondaryButton, { borderColor: accent }]}
           >
-            <Ionicons name="play" size={15} color={accent} />
-            <Text style={[styles.secondaryText, { color: accent }]}>{t("Watch")}</Text>
+            <Ionicons name="play" size={15} color={colors.ink} />
+            <Text preserveColor style={[styles.secondaryText, { color: colors.ink }]}>{t("Watch")}</Text>
           </Pressable>
           <Pressable
             accessibilityRole="button"
@@ -184,11 +187,12 @@ export default function QuickGuideScreen() {
             onPress={() => launch(guide, false, "practice")}
             style={[styles.primaryButton, { backgroundColor: accent }]}
           >
-            <Ionicons name={progress ? "refresh" : "hand-left"} size={15} color="#FFFFFF" />
-            <Text preserveColor style={styles.primaryText}>{progress ? t("Start over") : t("Practice")}</Text>
+            <Ionicons name={progress ? "refresh" : "hand-left"} size={15} color={onAccent} />
+            <Text preserveColor style={[styles.primaryText, { color: onAccent }]}>{progress ? t("Start over") : t("Practice")}</Text>
           </Pressable>
         </View>
       </View>
+
     );
   }
 
@@ -200,25 +204,60 @@ export default function QuickGuideScreen() {
 
   return (
     <Screen contentContainerStyle={styles.page}>
+      <View style={styles.content}>
       <PageHeader
         title={t("Guided tutorials")}
-        subtitle={t("Choose a short page tour, watch the pointer demonstrate it, or practice in a temporary demo that never changes your own entries.")}
+        subtitle={t("Learn at your pace. Watch a short tour or try it with safe demo data.")}
         showMenu={false}
         action={<IconButton icon="close" label="Close guide" onPress={() => router.back()} />}
       />
 
+      <View style={[styles.promptSettings, { backgroundColor: colors.card, borderColor: colors.border }]}>
+        <View style={styles.promptSettingCopy}>
+          <Text style={[styles.collectionTitle, { color: colors.ink }]}>{t("Automatic tutorial prompts")}</Text>
+          <Text style={[styles.collectionDetail, { color: colors.muted }]}>{t("Turn off to skip all automatic tutorials. You can still start any guide below.")}</Text>
+        </View>
+        <Switch testID="tutorial-prompts-toggle" accessibilityLabel={t("Automatic tutorial prompts")} value={!state.settings.tutorialPromptsDisabled} onValueChange={(enabled) => updateSettings(enabled ? { tutorialPromptsDisabled: false } : skipAllTutorialsSettings())} trackColor={{ false: colors.border, true: accent }} />
+      </View>
+
+      {!activeSession ? (
+        <Pressable
+          testID="quick-guide-live-setup"
+          accessibilityRole="button"
+          onPress={() => {
+            if (!state.settings.onboardingComplete) {
+              router.replace("/onboarding" as never);
+              return;
+            }
+            updateSettings({
+              guidedSetupStep: activeLiveSetupStep(state.settings) ?? "trackers",
+              tutorialPromptsDisabled: false,
+              tutorialComplete: true,
+              tutorialGuideId: undefined,
+              tutorialGuideRunId: undefined,
+            });
+            router.replace("/" as never);
+          }}
+          style={[styles.liveSetupAction, { backgroundColor: colors.primarySoft, borderColor: colors.border }]}
+        >
+          <Ionicons name="compass-outline" size={21} color={accent} />
+          <Text preserveColor style={[styles.liveSetupActionText, { color: colors.ink }]}>{state.settings.tutorialPromptsDisabled ? t("Turn on tutorials and set up Today") : t("Set up Today interactively")}</Text>
+          <Ionicons name="arrow-forward" size={17} color={accent} />
+        </Pressable>
+      ) : null}
+
       {basicJustCompleted ? (
         <View accessibilityRole="summary" style={[styles.completionHero, { backgroundColor: colors.primarySoft, borderColor: accent }]}>
           <View style={[styles.completionIcon, { backgroundColor: accent }]}>
-            <Ionicons name="checkmark" size={23} color="#FFFFFF" />
+            <Ionicons name="checkmark" size={23} color={onAccent} />
           </View>
           <View style={styles.completionCopy}>
             <Text accessibilityRole="header" style={[styles.completionTitle, { color: colors.ink }]}>{t("Basic guide complete")}</Text>
-            <Text style={[styles.detail, { color: colors.muted }]}>{t("You know the essentials. Explore freely: each page offers one short, skippable tour the first time you open it.")}</Text>
+            <Text style={[styles.detail, { color: colors.muted }]}>{state.settings.tutorialPromptsDisabled ? t("No automatic tips on any page. Guides stay available in Quick Guide.") : t("You know the essentials. Explore freely: each page offers one short, skippable tour the first time you open it.")}</Text>
           </View>
           <Pressable accessibilityRole="button" onPress={() => router.replace("/" as never)} style={[styles.primaryButton, { backgroundColor: accent }]}>
-            <Text preserveColor style={styles.primaryText}>{t("Use HabHub")}</Text>
-            <Ionicons name="arrow-forward" size={15} color="#FFFFFF" />
+            <Text preserveColor style={[styles.primaryText, { color: onAccent }]}>{t("Use HabHub")}</Text>
+            <Ionicons name="arrow-forward" size={15} color={onAccent} />
           </Pressable>
         </View>
       ) : null}
@@ -231,16 +270,9 @@ export default function QuickGuideScreen() {
         <>
           <View style={styles.sectionIntro}>
             <Text style={[styles.sectionTitle, { color: colors.ink }]}>{t("Start here")}</Text>
-            <Text style={[styles.sectionDetail, { color: colors.muted }]}>{t("Learn the daily loop first, or take the complete guided tour.")}</Text>
+            <Text style={[styles.sectionDetail, { color: colors.muted }]}>{t("A few everyday skills are enough to get started. Explore the rest whenever you need it.")}</Text>
           </View>
           {basicGuide ? guideCard(basicGuide, true) : null}
-          {fullGuide ? guideCard(fullGuide, true) : null}
-
-          <View style={styles.sectionIntro}>
-            <Text style={[styles.sectionTitle, { color: colors.ink }]}>{t("Advanced customization")}</Text>
-            <Text style={[styles.sectionDetail, { color: colors.muted }]}>{t("Master display settings and build reusable custom metrics, formulas and tracker styles.")}</Text>
-          </View>
-          {advancedGuides.map((guide) => guideCard(guide))}
 
           <View style={styles.sectionIntro}>
             <Text style={[styles.sectionTitle, { color: colors.ink }]}>{t("Browse focused guides")}</Text>
@@ -275,14 +307,59 @@ export default function QuickGuideScreen() {
               </View>
             );
           })}
+          <View style={[styles.collection, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ expanded: openGroups.advanced === true }}
+              onPress={() => setOpenGroups((current) => ({ ...current, advanced: !current.advanced }))}
+              style={styles.collectionHeader}
+            >
+              <View style={[styles.collectionIcon, { backgroundColor: colors.primarySoft }]}>
+                <Ionicons name="options-outline" size={18} color={accent} />
+              </View>
+              <View style={styles.collectionCopy}>
+                <Text style={[styles.collectionTitle, { color: colors.ink }]}>{t("Advanced customization")}</Text>
+                <Text style={[styles.collectionDetail, { color: colors.muted }]}>{t("Master display settings and build reusable custom metrics, formulas and tracker styles.")}</Text>
+              </View>
+              <Ionicons name={openGroups.advanced ? "chevron-up" : "chevron-down"} size={17} color={colors.muted} />
+            </Pressable>
+            {openGroups.advanced ? <View style={styles.collectionBody}>{advancedGuides.map((guide) => guideCard(guide))}</View> : null}
+          </View>
+          {fullGuide ? (
+            <View style={[styles.collection, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <Pressable
+                testID="quick-guide-full-course"
+                accessibilityRole="button"
+                accessibilityState={{ expanded: openGroups.complete === true }}
+                onPress={() => setOpenGroups((current) => ({ ...current, complete: !current.complete }))}
+                style={styles.collectionHeader}
+              >
+                <View style={[styles.collectionIcon, { backgroundColor: colors.primarySoft }]}>
+                  <Ionicons name="map-outline" size={18} color={accent} />
+                </View>
+                <View style={styles.collectionCopy}>
+                  <Text style={[styles.collectionTitle, { color: colors.ink }]}>{fullGuide.title}</Text>
+                  <Text style={[styles.collectionDetail, { color: colors.muted }]}>{t("Every feature, one guided journey. Pause and resume whenever you like.")}</Text>
+                </View>
+                <Ionicons name={openGroups.complete ? "chevron-up" : "chevron-down"} size={17} color={colors.muted} />
+              </Pressable>
+              {openGroups.complete ? <View style={styles.collectionBody}>{guideCard(fullGuide)}</View> : null}
+            </View>
+          ) : null}
         </>
       )}
+      </View>
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  page: { paddingBottom: 28, gap: 10 },
+  promptSettings: { borderWidth: 1, borderRadius: 16, padding: 12, flexDirection: "row", alignItems: "center", gap: 14 },
+  promptSettingCopy: { flex: 1, minWidth: 0, gap: 4 },
+  liveSetupAction: { minHeight: 52, borderWidth: 1, borderRadius: 16, padding: 12, flexDirection: "row", alignItems: "center", gap: 10 },
+  liveSetupActionText: { flex: 1, fontSize: 14, lineHeight: 20, fontWeight: "800" },
+  page: { paddingBottom: 28 },
+  content: { gap: 10 },
   completionHero: { borderWidth: 1, borderRadius: 20, padding: 14, gap: 10, alignItems: "flex-start" },
   completionIcon: { width: 42, height: 42, borderRadius: 15, alignItems: "center", justifyContent: "center" },
   completionCopy: { gap: 5 },
@@ -290,30 +367,30 @@ const styles = StyleSheet.create({
   loading: { minHeight: 72, borderRadius: 17, padding: 16, justifyContent: "center" },
   sectionIntro: { marginTop: 8, gap: 3, paddingHorizontal: 2 },
   sectionTitle: { fontSize: 15, lineHeight: 20, fontWeight: "900" },
-  sectionDetail: { fontSize: 10, lineHeight: 15 },
+  sectionDetail: { fontSize: 12, lineHeight: 18 },
   featuredCard: { borderWidth: 1, borderRadius: 20, padding: 14, gap: 12 },
   card: { borderWidth: 1, borderRadius: 16, padding: 12, gap: 11 },
   row: { flexDirection: "row", alignItems: "flex-start", gap: 10 },
   icon: { width: 40, height: 40, borderRadius: 13, alignItems: "center", justifyContent: "center" },
   copy: { flex: 1, gap: 4 },
   titleRow: { flexDirection: "row", alignItems: "center", gap: 6 },
-  title: { flex: 1, fontSize: 13, fontWeight: "900" },
-  detail: { fontSize: 10, lineHeight: 15 },
+  title: { flex: 1, fontSize: 15, lineHeight: 21, fontWeight: "900" },
+  detail: { fontSize: 12, lineHeight: 18 },
   metaRow: { flexDirection: "row", justifyContent: "space-between", gap: 8 },
-  meta: { fontSize: 9, lineHeight: 13, fontWeight: "800" },
+  meta: { fontSize: 11, lineHeight: 16, fontWeight: "800" },
   progressTrack: { height: 4, borderRadius: 2, overflow: "hidden", marginTop: 2 },
   progressFill: { height: 4, borderRadius: 2 },
   actions: { flexDirection: "row", flexWrap: "wrap", justifyContent: "flex-end", gap: 7 },
-  secondaryButton: { minHeight: 38, borderWidth: 1, borderRadius: 11, paddingHorizontal: 11, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5 },
-  secondaryText: { fontSize: 9, fontWeight: "900" },
-  primaryButton: { minHeight: 38, borderRadius: 11, paddingHorizontal: 12, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5 },
-  primaryText: { color: "#FFFFFF", fontSize: 9, fontWeight: "900" },
+  secondaryButton: { flexGrow: 1, minWidth: 100, minHeight: 44, borderWidth: 1, borderRadius: 11, paddingHorizontal: 11, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
+  secondaryText: { fontSize: 12, fontWeight: "900" },
+  primaryButton: { flexGrow: 1, minWidth: 100, minHeight: 44, borderRadius: 11, paddingHorizontal: 12, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
+  primaryText: { color: "#FFFFFF", fontSize: 12, fontWeight: "900" },
   collection: { borderWidth: 1, borderRadius: 17, overflow: "hidden" },
-  collectionHeader: { minHeight: 66, padding: 11, flexDirection: "row", alignItems: "center", gap: 9 },
+  collectionHeader: { minHeight: 80, padding: 14, flexDirection: "row", alignItems: "center", gap: 11 },
   collectionIcon: { width: 38, height: 38, borderRadius: 12, alignItems: "center", justifyContent: "center" },
   collectionCopy: { flex: 1, gap: 2 },
-  collectionTitle: { fontSize: 12, lineHeight: 17, fontWeight: "900" },
-  collectionDetail: { fontSize: 9, lineHeight: 13 },
+  collectionTitle: { fontSize: 14, lineHeight: 20, fontWeight: "900" },
+  collectionDetail: { fontSize: 11, lineHeight: 17 },
   countPill: { minWidth: 27, height: 27, borderRadius: 9, alignItems: "center", justifyContent: "center" },
   countText: { fontSize: 9, fontWeight: "900" },
   collectionBody: { padding: 9, paddingTop: 0, gap: 8 },

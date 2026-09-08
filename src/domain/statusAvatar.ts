@@ -26,6 +26,8 @@ export type StatusBodyAppearance = {
   /** A continuous -1..1 value so body changes do not jump between presets. */
   bodyMass: number;
   bodyShape: StatusBodyShape;
+  /** The preview bounded incompatible fat/lean inputs; logged values are untouched. */
+  compositionAdjusted: boolean;
   heightScale: number;
   /** Resolved lean-mass and resistance-training visual signal. */
   muscleProgress: number;
@@ -85,7 +87,7 @@ export const STATUS_AVATAR_VIEWBOX = {
  * adult heights instead of making every high-weight profile the same shape.
  */
 export const STATUS_BODY_MASS_BMI_KNOTS = [
-  { bmi: 17, bodyMass: -1 },
+  { bmi: 17, bodyMass: -0.88 },
   { bmi: 19, bodyMass: -0.78 },
   { bmi: 21, bodyMass: -0.5 },
   { bmi: 23, bodyMass: -0.25 },
@@ -94,7 +96,7 @@ export const STATUS_BODY_MASS_BMI_KNOTS = [
   { bmi: 32, bodyMass: 0.38 },
   { bmi: 37, bodyMass: 0.61 },
   { bmi: 44, bodyMass: 0.82 },
-  { bmi: 55, bodyMass: 1 },
+  { bmi: 55, bodyMass: 0.94 },
 ] as const;
 
 /** Ten review checkpoints per sex; runtime percentages interpolate smoothly. */
@@ -172,20 +174,32 @@ function interpolateCheckpoints(
   outputMaximum: number,
 ) {
   const safe = Number.isFinite(value) ? value : checkpoints[4];
-  if (safe <= checkpoints[0]) return outputMinimum;
-  if (safe >= checkpoints.at(-1)!) return outputMaximum;
+  // Reserve a small tail beyond the reviewed anchors. Extreme valid inputs
+  // continue to morph instead of abruptly becoming the same endpoint figure.
+  const span = outputMaximum - outputMinimum;
+  const inset = span * 0.025;
+  const low = outputMinimum + inset;
+  const high = outputMaximum - inset;
+  if (safe <= checkpoints[0]) {
+    const scale = Math.max(1, checkpoints[1] - checkpoints[0]);
+    return outputMinimum + inset / (1 + (checkpoints[0] - safe) / scale);
+  }
+  if (safe >= checkpoints.at(-1)!) {
+    const scale = Math.max(1, checkpoints.at(-1)! - checkpoints.at(-2)!);
+    return outputMaximum - inset / (1 + (safe - checkpoints.at(-1)!) / scale);
+  }
   for (let index = 1; index < checkpoints.length; index += 1) {
     const upper = checkpoints[index];
     if (safe > upper) continue;
     const lower = checkpoints[index - 1];
     const fraction = (safe - lower) / (upper - lower);
     const lowerOutput =
-      outputMinimum +
-      ((outputMaximum - outputMinimum) * (index - 1)) /
+      low +
+      ((high - low) * (index - 1)) /
         (checkpoints.length - 1);
     const upperOutput =
-      outputMinimum +
-      ((outputMaximum - outputMinimum) * index) /
+      low +
+      ((high - low) * index) /
         (checkpoints.length - 1);
     return lowerOutput + (upperOutput - lowerOutput) * fraction;
   }
@@ -252,8 +266,10 @@ export function statusBodyMassForBmi(bmi: number) {
   const safeBmi = Number.isFinite(bmi) ? bmi : 22;
   const first = STATUS_BODY_MASS_BMI_KNOTS[0];
   const last = STATUS_BODY_MASS_BMI_KNOTS.at(-1)!;
-  if (safeBmi <= first.bmi) return first.bodyMass;
-  if (safeBmi >= last.bmi) return last.bodyMass;
+  if (safeBmi <= first.bmi)
+    return -1 + (first.bodyMass + 1) * Math.exp((safeBmi - first.bmi) / 5);
+  if (safeBmi >= last.bmi)
+    return 1 - (1 - last.bodyMass) * Math.exp(-(safeBmi - last.bmi) / 35);
   for (let index = 1; index < STATUS_BODY_MASS_BMI_KNOTS.length; index += 1) {
     const upper = STATUS_BODY_MASS_BMI_KNOTS[index];
     if (safeBmi > upper.bmi) continue;
@@ -439,7 +455,19 @@ export function statusBodyAppearance(
   // skeletal muscle. Use only explicitly supplied lean mass for this axis;
   // otherwise completed resistance history and recent gym frequency provide
   // the conservative muscle fallback requested by the user.
-  const resolvedLeanMass = explicitLeanMass;
+  // FFM is the non-fat compartment, not skeletal muscle. A profile can contain
+  // measurements from different dates or devices, and simulator sliders remain
+  // independently editable. Bound only the rendered compartment so fat + lean
+  // mass never exceeds the selected total; never rewrite measurements/sliders.
+  // Kyle et al. supports compartment separation, not these visual coefficients.
+  const availableLeanMass = safeWeightKg * (1 - (measuredBodyFat ?? 0) / 100);
+  const resolvedLeanMass = explicitLeanMass === undefined
+    ? undefined
+    : Math.min(explicitLeanMass, availableLeanMass);
+  const compositionAdjusted = explicitLeanMass !== undefined && (
+    Number(composition.leanBodyMassKg) > safeWeightKg ||
+    explicitLeanMass > availableLeanMass + 0.01
+  );
   const leanMassProgress =
     resolvedLeanMass === undefined
       ? undefined
@@ -479,6 +507,7 @@ export function statusBodyAppearance(
     adiposity,
     bodyMass,
     bodyShape,
+    compositionAdjusted,
     // Height changes presentation scale without distorting the fixed pose or
     // limb ratios. The restrained range keeps every figure inside the same
     // Status layout while still distinguishing short and tall profiles.
@@ -521,42 +550,42 @@ export function statusAvatarGeometry(
     size * 2.8 -
     thin * 1.8;
   const chestHalf =
-    (female ? 34 : male ? 38 : 36) +
+    (female ? 34 : male ? 37 : 35.5) +
     muscle * (female ? 6.5 : 9) +
     size * 3.5 +
     fatFull * 6 -
     thin * 3.5;
   const waistHalf =
-    (female ? 25 : male ? 27.5 : 26.5) +
+    (female ? 27.5 : male ? 30 : 28.8) +
     size * 4 +
-    fatFull * (female ? 16 : 17.5) -
+    fatFull * (female ? 28 : 31.5) -
     fatLean * 3 -
-    thin * 2.3 -
+    thin * 1.5 -
     muscle;
   const hipHalf =
     (female ? 38 : male ? 32 : 35) +
     size * 4.5 +
-    fatFull * (female ? 11.5 : 10.5) -
+    fatFull * (female ? 20 : 18) -
     fatLean * 2 -
     thin * 1.8 +
     muscle * (female ? 1.8 : 1.3);
   const thighHalf =
     (female ? 31.5 : male ? 29.5 : 30.5) +
     size * 3.8 +
-    fatFull * (female ? 8.5 : 7.5) -
+    fatFull * (female ? 14 : 13) -
     fatLean * 1.4 -
     thin * 2.2 +
     muscle * 3.5;
   const kneeHalf =
     (female ? 20 : male ? 21 : 20.5) +
     size +
-    fatFull * 2.8 -
+    fatFull * 4.8 -
     thin * 1.5 +
     muscle;
   const calfHalf =
     (female ? 21.5 : male ? 23 : 22.2) +
     size +
-    fatFull * 3 -
+    fatFull * 5 -
     thin * 1.5 +
     muscle * 2;
   const ankleHalf =
@@ -566,18 +595,24 @@ export function statusAvatarGeometry(
   // made high-adiposity bodies look as if thin arms were attached to a much
   // larger torso. Widen around each limb's centerline: inner landmarks move
   // inward and outer landmarks move outward, with a restrained wrist gain.
-  const upperArmInnerHalf =
-    shoulderHalf - 9 + muscle * 1.4 + size - fatFull * 2.5;
+  const upperArmInnerHalf = Math.max(
+    shoulderHalf - 9 + muscle * 1.4 + size - fatFull * 2.5,
+    chestHalf - 2,
+  );
   const upperArmOuterHalf =
-    shoulderHalf + 8 + muscle * 3.8 + size * 1.5 + fatFull * 6.5;
-  const elbowInnerHalf =
-    shoulderHalf - 1 + muscle * 1.2 + size - fatFull * 2.2;
+    upperArmInnerHalf + 17 + muscle * 2.4 + size * 0.5 + fatFull * 9;
+  const elbowInnerHalf = Math.max(
+    shoulderHalf - 1 + muscle * 1.2 + size - fatFull * 2.2,
+    waistHalf + 3,
+  );
   const elbowOuterHalf =
-    shoulderHalf + 10 + muscle * 3.5 + size * 1.5 + fatFull * 6;
-  const wristInnerHalf =
-    shoulderHalf - 4 + size * 0.25 - fatFull * 1.2;
+    elbowInnerHalf + 11 + muscle * 2.3 + size * 0.5 + fatFull * 8.2;
+  const wristInnerHalf = Math.max(
+    shoulderHalf - 4 + size * 0.25 - fatFull * 1.2,
+    hipHalf + 3,
+  );
   const wristOuterHalf =
-    shoulderHalf + 4 + muscle * 1.2 + size * 0.55 + fatFull * 3;
+    wristInnerHalf + 8 + muscle * 1.2 + size * 0.3 + fatFull * 4.2;
 
   return {
     accessory: {

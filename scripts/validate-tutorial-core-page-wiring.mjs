@@ -195,7 +195,7 @@ const actionWiring = {
   },
   "tutorial.log.visibility": {
     file: "app/(tabs)/log.tsx",
-    prerequisite: "setVisibility(option.value)",
+    prerequisite: "updateMetric(selected.id, { defaultVisibility: \"status\" })",
   },
   "tutorial.timer.start": {
     file: "app/timer.tsx",
@@ -255,6 +255,10 @@ assert(
 
 const demo = read("src/data/tutorialDemo.ts");
 assert(
+  /function TrackerEditorRoute\(\)[\s\S]*?<TrackerEditor key=\{JSON\.stringify\(\[id \?\? "new", scope \?\? "personal", duplicate \?\? "0"\]\)\}/.test(read("app/metric-editor.tsx")),
+  "Changing tracker route identity must initialize a new draft rather than reuse stale form fields.",
+);
+assert(
   demo.includes('id: "tutorial-todo-groceries"') &&
     /id: "tutorial-todo-groceries"[\s\S]{0,500}completedDates: \[\]/.test(demo),
   "The grocery practice to-do must begin incomplete.",
@@ -266,7 +270,7 @@ assert(
 
 const todaySource = read("app/(tabs)/index.tsx");
 assert(
-  /item\.id === "steps" && tutorial\.activeSession[\s\S]{0,120}<TutorialTarget id="today-steps-tracker">/.test(
+  /item\.id === "steps" && tutorial\.activeSession[\s\S]{0,120}<TutorialTarget id="today-steps-tracker"/.test(
     todaySource,
   ),
   "The essential tracker practice must spotlight the real Steps row only while a guide is active.",
@@ -278,13 +282,13 @@ assert(
   "Opening the real Steps row must report the isolated practice action after navigating to tracker detail.",
 );
 assert(
-  /<TutorialTarget id="today-edit">\s*<Pressable[\s\S]{0,220}onPress=\{\(\) => \{[\s\S]{0,100}beginEditing\(\)/.test(
+  /<TutorialTarget id="today-edit"[\s\S]{0,140}<Pressable[\s\S]{0,220}onPress=\{\(\) => \{[\s\S]{0,100}beginEditing\(\)/.test(
     todaySource,
   ),
   "The Today edit spotlight must expose the real edit-mode Pressable rather than a non-interactive whole row.",
 );
 assert(
-  /const trackedToggle = canBeTrackedGoal\(item\)[\s\S]{0,220}onPress=\{onTrackedToggle\}[\s\S]*?<TutorialTarget id="today-goal-flag">\s*\{trackedToggle\}/.test(
+  /const trackedToggle = canBeTrackedGoal\(item\)[\s\S]{0,220}onPress=\{onTrackedToggle\}[\s\S]*?<TutorialTarget id="today-goal-flag"[\s\S]{0,140}\{trackedToggle\}/.test(
     todaySource,
   ),
   "The Meditation flag spotlight must expose the real tracked-goal Pressable.",

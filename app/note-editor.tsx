@@ -56,6 +56,7 @@ const DRAWING_WIDTH_LABELS = ["Thin pen", "Medium pen", "Thick pen"] as const;
 export default function NoteEditor() {
   const tutorialSandbox = useTutorialSandboxActive();
   const tutorial = useTutorial();
+  const reportTutorialEvent = tutorial.reportEvent;
   const { id } = useLocalSearchParams<{ id?: string }>();
   const navigation = useNavigation();
   const { state, saveJournalNote, deleteJournalNote } = useApp();
@@ -85,6 +86,8 @@ export default function NoteEditor() {
   const [linkText, setLinkText] = useState("");
   const [linkUrl, setLinkUrl] = useState("https://");
   const composer = useRef<RichNoteComposerHandle>(null);
+  const watchFormatTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const watchFormatPending = useRef(false);
   const composerBlurTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeTutorialTarget = tutorial.activeStep?.target;
   const tutorialFormatting = activeTutorialTarget === "note-formatting";
@@ -165,7 +168,11 @@ export default function NoteEditor() {
   const change = useCallback((next: string) => {
     if (next === body.current) return;
     body.current = next;
-  }, []);
+    if (watchFormatPending.current && /\*\*[^*]+\*\*/.test(next)) {
+      watchFormatPending.current = false;
+      reportTutorialEvent({ actionId: "tutorial.journal.format", scope: "isolated-preview" });
+    }
+  }, [reportTutorialEvent]);
 
   const handleComposerEditingChange = useCallback((editing: boolean) => {
     if (composerBlurTimer.current) {
@@ -650,7 +657,21 @@ export default function NoteEditor() {
               { color: colors.ink, borderColor: colors.border },
             ]}
           />
-          <TutorialTarget id="note-formatting">
+          <TutorialTarget id="note-formatting"
+            onTutorialActivate={() => {
+              if (!tutorialSandbox || !composer.current) return;
+              watchFormatPending.current = true;
+              composer.current.replaceValue("Small steps make a good day.");
+              watchFormatTimer.current = setTimeout(() => {
+                composer.current?.formatAll("bold");
+              }, 750);
+            }}
+            onTutorialDeactivate={() => {
+              if (watchFormatTimer.current) clearTimeout(watchFormatTimer.current);
+              watchFormatPending.current = false;
+              Keyboard.dismiss();
+            }}
+          >
           {tutorialFormatting ? toolbar : null}
           <TutorialTarget id="note-drawing">
           <View style={styles.noteCanvas}>

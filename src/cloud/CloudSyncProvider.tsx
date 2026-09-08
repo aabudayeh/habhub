@@ -52,6 +52,16 @@ import {
 } from "@/src/domain/accountProfile";
 import { metricEntryKey } from "@/src/domain/metricEntry";
 import {
+  acknowledgeGroupPublication,
+  cloudPublicationGroups,
+  groupPublicationDigest,
+  MAX_ADDITIONAL_GROUP_PUBLICATIONS_PER_PASS,
+  mergeGroupProjectionRepairGeneration,
+  pendingGroupPublications,
+  repeatedGroupProjectionRepair,
+  stateForGroupPublication,
+} from "@/src/domain/groupPublication";
+import {
   mergeGroupActivityEntries,
   mergeGroupActivityStatuses,
 } from "@/src/domain/groupActivityMerge";
@@ -1377,6 +1387,7 @@ function snapshotPayload(state: AppState): AppState {
       pendingGroupConfigurationIds: undefined,
       // Privacy fence publication is also a device-local relational outbox.
       pendingMetricPrivacyFenceIdsByGroup: undefined,
+      pendingGroupProjectionRepairIdsByGroup: undefined,
       // Disclosure state follows this device and must not create an account
       // sync just because another screen size uses a different layout.
       progressGridDateNavigatorCollapsed: undefined,
@@ -1590,7 +1601,6 @@ async function createCloudMergeBaseResponsively(
 }
 
 const stableHashCache = new WeakMap<AppState, string>();
-const workspaceHashCache = new WeakMap<AppState, string>();
 const accountMetadataHashCache = new WeakMap<AppState, string>();
 // Bump when the relational group projection needs a one-time rebuild even if
 // the underlying account data did not change. Version 2 backfilled item-level
@@ -1703,33 +1713,7 @@ function accountMetadataHash(state: AppState) {
 
 /** Only data represented by relational group tables belongs in a group push. */
 function workspaceHash(state: AppState) {
-  const cached = workspaceHashCache.get(state);
-  if (cached) return cached;
-  const owned = accountOwnedCollections(state);
-  const hash = stableValueHash({
-    sharedEntryDetailProjectionVersion:
-      SHARED_ENTRY_DETAIL_PROJECTION_VERSION,
-    currentUserId: state.currentUserId,
-    groupId: state.group.id,
-    // Profile and energy data use their own small global projection. Keeping
-    // them out of this hash prevents a rename from uploading a year of group
-    // activity or reopening the outbox once for every joined group.
-    aliases:
-      state.settings.memberNicknamesByGroup[state.group.id] ?? {},
-    // Realtime/group hydration appends peers' authorized history to AppState.
-    // That history is read-only for this account and must never reopen its
-    // relational outbox: otherwise one member's log wakes every peer, whose
-    // no-op publication wakes the first member again. Keep the digest exactly
-    // aligned with pushCloudWorkspace's account-owned write boundary.
-    entries: orderedValueHash(owned.entries),
-    photos: orderedValueHash(owned.photos),
-    pendingPrivacyFences:
-      state.settings.pendingMetricPrivacyFenceIdsByGroup?.[
-        state.group.id
-      ] ?? [],
-  });
-  workspaceHashCache.set(state, hash);
-  return hash;
+  return groupPublicationDigest(state, SHARED_ENTRY_DETAIL_PROJECTION_VERSION);
 }
 
 async function resolvePrivateMedia(state: AppState): Promise<AppState> {
@@ -2149,6 +2133,12 @@ function mergeStates(
   settings.advancedTutorialComplete = advancedTutorialComplete;
   settings.progressGridDateNavigatorCollapsed =
     local.settings.progressGridDateNavigatorCollapsed;
+  settings.pendingGroupProjectionRepairIdsByGroup =
+    local.settings.pendingGroupProjectionRepairIdsByGroup;
+  settings.groupProjectionRepairGeneration = mergeGroupProjectionRepairGeneration(
+    remote.settings.groupProjectionRepairGeneration,
+    local.settings.groupProjectionRepairGeneration,
+  );
   // Workout/source decisions are private account settings. Merge each dated
   // choice independently so a save on one device cannot erase another
   // device's unrelated Step-coverage edit.
@@ -2350,6 +2340,12 @@ function preserveDeviceSettings(
       syncMode: local.settings.syncMode,
       progressGridDateNavigatorCollapsed:
         local.settings.progressGridDateNavigatorCollapsed,
+      pendingGroupProjectionRepairIdsByGroup:
+        local.settings.pendingGroupProjectionRepairIdsByGroup,
+      groupProjectionRepairGeneration: mergeGroupProjectionRepairGeneration(
+        remote.settings.groupProjectionRepairGeneration,
+        local.settings.groupProjectionRepairGeneration,
+      ),
     },
   };
 }
@@ -3311,19 +3307,25 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     return true;
   }, []);
 
+  const pendingActivityPublications = useCallback((current: AppState) =>
+    pendingGroupPublications(
+      current,
+      workspaceSessionAckHashesRef.current,
+      workspaceUploadRequiredGroupsRef.current,
+      workspaceHash,
+    ), []);
+
   const hasUnsyncedLocalChanges = useCallback(() => {
     const live = stateRef.current;
     if (stableHash(live) !== hashRef.current) return true;
     if (accountMetadataHash(live) !== accountMetadataHashRef.current)
       return true;
-    if (!isCloudGroupId(live.group.id)) return false;
     return (
       live.settings.pendingGroupConfigurationIds?.includes(live.group.id) ===
         true ||
-      workspaceUploadRequiredGroupsRef.current.has(live.group.id) ||
-      workspaceHash(live) !== workspaceHashRef.current
+      pendingActivityPublications(live).length > 0
     );
-  }, []);
+  }, [pendingActivityPublications]);
 
   const mergeRemoteWorkspace = useCallback(
     (remote: AppState, live: AppState) => {
@@ -4627,6 +4629,12 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
                 },
                 revisionRef.current,
                 yieldCloudMaintenanceToUi,
+                {
+                  operationIsCurrent: () => operationIsCurrent() &&
+                    cloudPublicationGroups(stateRef.current).some(
+                      (group) => group.id === pushedGroupId,
+                    ),
+                },
               );
             let workspaceResult;
             try {
@@ -4662,6 +4670,8 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             if (!operationIsCurrent()) return;
             if (!workspaceResult.workspacePushed)
               throw new Error("Group workspace is not active yet.");
+            if (repeatedGroupProjectionRepair(candidate, pushedGroupId, workspaceResult.projectionRepairEntryIds))
+              throw new Error("Group privacy repair is waiting for a newer server revision.");
             if (
               shouldPushGroupConfiguration &&
               !workspaceResult.groupConfigurationPushed
@@ -4682,6 +4692,11 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             // the acknowledgements to the latest live state; never replace it
             // with the older state captured when this request began.
             const liveAfterWorkspacePush = stateRef.current;
+            const publishedDestination = cloudPublicationGroups(liveAfterWorkspacePush).find(
+              (group) => group.id === pushedGroupId,
+            );
+            const pushedSourceIsStillCurrent = Boolean(publishedDestination &&
+              workspaceHash(stateForGroupPublication(liveAfterWorkspacePush, publishedDestination)) === pushedWorkspaceHash);
             let acknowledgedState = liveAfterWorkspacePush;
             const publishedGroupConfigurationRevision = Number(
               workspaceResult.groupConfigurationRevision,
@@ -4752,7 +4767,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
                 },
               };
             }
-            if (workspaceResult.acknowledgedPrivacyFenceMetricIds.length) {
+            if (pushedSourceIsStillCurrent && workspaceResult.acknowledgedPrivacyFenceMetricIds.length) {
               const acknowledged = new Set(
                 workspaceResult.acknowledgedPrivacyFenceMetricIds,
               );
@@ -4792,6 +4807,14 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
                 },
               };
             }
+            acknowledgedState = acknowledgeGroupPublication(acknowledgedState, pushedGroupId, {
+              deletedEntryIds: [],
+              deletedPhotoIds: [],
+              acknowledgedPrivacyFenceMetricIds: [],
+              projectionRepairEntryIds: workspaceResult.projectionRepairEntryIds ?? [],
+            }, pushedSourceIsStillCurrent);
+            if (pushedSourceIsStillCurrent && publishedDestination)
+              pushedWorkspaceHash = workspaceHash(stateForGroupPublication(acknowledgedState, publishedDestination));
             candidate = acknowledgedState;
             candidateHash = stableHash(candidate);
             nextWorkspaceHash = workspaceHash(candidate);
@@ -4802,6 +4825,9 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             workspaceUploadRequiredGroupsRef.current.delete(
               pushedGroupId,
             );
+            // Any exact projections held behind a privacy fence remain pending
+            // through their local repair marker. Its value-free generation is
+            // committed to the private snapshot before that bounded retry.
             workspaceSessionAckHashesRef.current.set(
               pushedGroupId,
               pushedWorkspaceHash,
@@ -4962,6 +4988,105 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         if (!operationIsCurrent()) return;
         await persistPrivateSnapshot();
         if (!operationIsCurrent()) return;
+        // Personal logs belong to the account, not to the currently viewed
+        // leaderboard. Drain a bounded number of OTHER authorized destinations
+        // from this committed snapshot. Only an explicit admin outbox marker
+        // allows configuration; chat/aliases and UI selection stay untouched.
+        const otherDestinations = deferGroupRetry ? [] : pendingActivityPublications(candidate)
+          .filter(({ group }) => group.id !== pushedGroupId)
+          .slice(0, MAX_ADDITIONAL_GROUP_PUBLICATIONS_PER_PASS);
+        for (const destination of otherDestinations) {
+          if (!operationIsCurrent()) return;
+          const pendingConfiguration = candidate.settings.pendingGroupConfigurationIds?.includes(destination.group.id) === true;
+          const destinationConfigurationHash = groupConfigurationHash(destination.state);
+          const destinationIsCurrent = () => {
+            if (!operationIsCurrent()) return false;
+            const live = stateRef.current;
+            const group = cloudPublicationGroups(live).find(
+              (item) => item.id === destination.group.id,
+            );
+            if (!group) return false;
+            const projected = stateForGroupPublication(live, group);
+            return workspaceHash(projected) === destination.hash &&
+              (!pendingConfiguration || (
+                live.settings.pendingGroupConfigurationIds?.includes(group.id) === true &&
+                groupConfigurationHash(projected) === destinationConfigurationHash
+              ));
+          };
+          if (!destinationIsCurrent()) continue;
+          try {
+            const result = await pushCloudWorkspace(
+              destination.state,
+              pendingConfiguration,
+              undefined,
+              revisionRef.current,
+              yieldCloudMaintenanceToUi,
+              { activityOnly: true, operationIsCurrent: destinationIsCurrent },
+            );
+            if (!operationIsCurrent()) return;
+            if (!result.workspacePushed) {
+              // The guarded membership read proved this destination inactive.
+              // Remove its local shell/cache instead of retrying it forever.
+              await evictUnavailableGroup(destination.group.id);
+              if (!operationIsCurrent()) return;
+              candidate = stateRef.current;
+              candidateHash = stableHash(candidate);
+              continue;
+            }
+            if (pendingConfiguration && !result.groupConfigurationPushed)
+              throw new Error("Group settings are waiting for administrator access.");
+            if (repeatedGroupProjectionRepair(destination.state, destination.group.id, result.projectionRepairEntryIds))
+              throw new Error("Group privacy repair is waiting for a newer server revision.");
+            const live = stateRef.current;
+            const group = cloudPublicationGroups(live).find(
+              (item) => item.id === destination.group.id,
+            );
+            if (!group) continue;
+            const publicationStillCurrent = destinationIsCurrent();
+            const acknowledged = acknowledgeGroupPublication(
+              live, group.id, result, publicationStillCurrent,
+            );
+            if (acknowledged !== live) {
+              stateRef.current = acknowledged;
+              replaceState(acknowledged, { source: "cloud" });
+            }
+            const acknowledgedHash = publicationStillCurrent
+              ? workspaceHash(stateForGroupPublication(acknowledged, group))
+              : destination.hash;
+            workspaceSessionAckHashesRef.current.set(group.id, acknowledgedHash);
+            // Device-local repair markers keep fenced exact data pending;
+            // only their value-free generation advances the snapshot revision.
+            workspaceUploadRequiredGroupsRef.current.delete(group.id);
+            if (workspaceAckMayPersist(acknowledged))
+              workspaceAckHashesRef.current.set(group.id, acknowledgedHash);
+            else workspaceAckHashesRef.current.delete(group.id);
+            workspaceAcksPending = true;
+            if (result.groupConfigurationPushed) {
+              groupConfigurationAckHashesRef.current.set(group.id, destinationConfigurationHash);
+              groupConfigurationAcksPending = true;
+              if (stateRef.current.group.id === group.id && publicationStillCurrent)
+                groupConfigurationHashRef.current = destinationConfigurationHash;
+            }
+            if (result.activityVersion !== undefined)
+              activityVersionByGroupRef.current.set(group.id, result.activityVersion);
+            // Fence acknowledgements are local outbox changes and must survive
+            // a restart before their durable group hash is persisted below.
+            candidate = acknowledged;
+            candidateHash = stableHash(candidate);
+          } catch (publicationError) {
+            if (!operationIsCurrent()) return;
+            if (/group_publication_superseded/.test(errorText(publicationError))) continue;
+            workspaceSynced = false;
+            workspaceWarning = `Some group updates will retry: ${errorText(publicationError)}`;
+            const attempt = Math.min(8, cloudRetryAttemptRef.current + 1);
+            cloudRetryAttemptRef.current = attempt;
+            const retryAt = Date.now() + Math.min(MAX_CLOUD_RETRY_MS, 5_000 * 2 ** (attempt - 1));
+            nextRetryAtRef.current = retryAt;
+            setNextRetryAt(retryAt);
+          }
+        }
+        await persistPrivateSnapshot();
+        if (!operationIsCurrent()) return;
         const projectionCheckpoint = publicChallengeProjectionRef.current;
         if (
           forceAttempt ||
@@ -5040,11 +5165,10 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           accountMetadataHash(latestState) !==
           accountMetadataHashRef.current;
         const hasPendingWorkspace =
-          isCloudGroupId(latestState.group.id) &&
           (latestState.settings.pendingGroupConfigurationIds?.includes(
             latestState.group.id,
           ) === true ||
-            workspaceHash(latestState) !== workspaceHashRef.current);
+            pendingActivityPublications(latestState).length > 0);
         const needsFollowUpSync =
           hasNewerLocalState ||
           hasPendingAccountMetadata ||
@@ -5055,7 +5179,8 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         const workspaceConflictPending =
           !workspaceSynced &&
           workspaceConflictGateRef.current?.userId === operationUserId;
-        setStatus(workspaceConflictPending ? "conflict" : "synced");
+        setStatus(workspaceConflictPending ? "conflict" :
+          !workspaceSynced && workspaceWarning ? "error" : "synced");
         if (!deferGroupRetry) setErrorMessage(workspaceWarning);
         if (workspaceSynced && accountMetadataSynced) {
           workspaceConflictGateRef.current = null;
@@ -5156,9 +5281,11 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   }, [
     auth.user,
     ensureLatestCloudMergeBase,
+    evictUnavailableGroup,
     fetchConflictSnapshot,
     flushLocalPersistence,
     hasUnsyncedLocalChanges,
+    pendingActivityPublications,
     mergeRemoteWorkspace,
     recordServerSyncedAt,
     rememberCloudMergeBase,
@@ -5857,6 +5984,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     ensureLatestCloudMergeBase,
     hydrated,
     hasUnsyncedLocalChanges,
+    pendingActivityPublications,
     hydrateCachedGroupActivity,
     initializationAttempt,
     loadDevices,
@@ -5953,12 +6081,10 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         const accountMetadataChanged =
           accountMetadataHash(live) !== accountMetadataHashRef.current;
         const groupWorkspaceChanged =
-          isCloudGroupId(live.group.id) &&
           (live.settings.pendingGroupConfigurationIds?.includes(
             live.group.id,
           ) === true ||
-            workspaceUploadRequiredGroupsRef.current.has(live.group.id) ||
-            workspaceHash(live) !== workspaceHashRef.current);
+            pendingActivityPublications(live).length > 0);
         if (
           !privateSnapshotChanged &&
           !accountMetadataChanged &&
@@ -5990,6 +6116,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     hasUnsyncedLocalChanges,
     performSync,
     localMutationRevision,
+    pendingActivityPublications,
   ]);
 
   useEffect(

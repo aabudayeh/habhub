@@ -46,9 +46,11 @@ Recommended first capture configuration:
 
 The scene definitions live in `capture-plan.json`; the exact generated sequence
 lives in `video/storyboard.md`, and `video/capture-runbook.md` separates
-repeatable web capture from signed-device evidence. The small source captures in
-`source-captures/iphone-420x911/` are JPEGs captured from the real running web
-app with the synthetic Ahmad demo profile. They are tracked so the store
+repeatable web capture from signed-device evidence. The source captures in
+`source-captures/iphone-420x911/` are 840 × 1822 JPEGs: the directory names the
+420 × 911 CSS viewport, captured at 2× density for crisp store artwork. They
+come from the real running web app with the synthetic Ahmad demo profile and
+are tracked so the store
 compositions can be reproduced and audited without inventing feature UI.
 
 ## Generated deliverables
@@ -58,17 +60,36 @@ From the repository root on Windows:
 ```powershell
 pnpm.cmd capture:marketing:web
 # Inspect store/exports/capture-candidates/web-420x911, then:
-pnpm.cmd capture:marketing:web -- --promote
+pnpm.cmd capture:marketing:web -- --promote-reviewed
 & .\scripts\build-store-marketing-assets.ps1
 pnpm.cmd capture:interactive-guide:web
 pnpm.cmd validate:marketing
 ```
 
 Set `HABHUB_FFMPEG` to an FFmpeg 6+ executable if `ffmpeg` is not on `PATH`.
+The capture harness uses bounded, surface-only retries and rejects wrong-size,
+blank or near-solid frames by decoding their pixels. Reviewed promotion validates
+the whole selected set before replacing any source; `--promote` instead performs
+a fresh capture directly into the source folder and is intended for supervised use.
 The builder uses only the real source captures, HabHub brand assets, captions,
 crops, and backgrounds. Generated binaries stay under the ignored
 `store/exports/` directory; `manifest.json` records their dimensions, byte
 sizes, durations, codecs, and SHA-256 hashes.
+
+To compare a design revision before replacing the current exports:
+
+```powershell
+& .\scripts\build-store-marketing-assets.ps1 -SkipVideo -OutputDirectory store/exports/visual-polish-candidate
+```
+
+The builder measures every headline and caption before placing screenshots.
+Both are limited to two lines; layouts reserve their real height across Apple,
+Google and 4:5 social formats. Social cards use deliberate real-app detail
+crops. Photo compositions carry a readable synthetic-photo disclosure.
+Source crops use 420 × 911 reference coordinates and scale to the 2× capture.
+Dedicated 886 × 1920 video frames keep Apple app previews in proportion.
+`-SkipVideo` preserves existing MP4s while refreshing only the still artwork;
+rebuild without it before validating or publishing a revised export set.
 
 The current export set contains:
 
@@ -79,7 +100,7 @@ The current export set contains:
 - 1 Apple 886 × 1920 H.264/AAC master at 29.9 seconds and 30 fps.
 - 1 Google 1080 × 1920 H.264/AAC master at 44.9 seconds.
 - 1 still-screen long-form 1080 × 1920 H.264/AAC feature-tour montage
-  at 99 seconds.
+  at 102 seconds, including live Today setup.
 - 1 continuous 1080 × 1920 H.264/AAC interactive guide recorded from the
   real full-app Watch tutorial.
 
@@ -90,14 +111,23 @@ intentionally silent AAC track. No music or voiceover license is implied. If
 approved licensed audio is added later, rebuild and revalidate the exact
 submission files and update their manifest hashes.
 
-For this release-candidate set, `pnpm.cmd validate:marketing` must report 28 JPEG
-source captures, 55 PNG deliverables, and 4 H.264/AAC MP4 masters, then write
+For this release-candidate set, `pnpm.cmd validate:marketing` must report 29 JPEG
+source captures, 56 PNG deliverables, and 4 H.264/AAC MP4 masters, then write
 `store/exports/manifest.json`. That pass verifies source presence, dimensions,
 flattened PNG output, codecs, frame rate, duration, hashes, and full video
 decode. It does not prove App Store Connect/Play Console acceptance, signed
 native behavior, notification delivery, background execution, or claim
 substantiation. Re-run it after any capture, caption, audio, timing, or release
 commit changes.
+
+The full 98-step Watch course uses readable pacing; the verified master is 19 minutes 24 seconds.
+Its 30-minute recording watchdog is deliberately bounded: enough room for normal
+route transitions, but not permission to record indefinitely if a step stalls.
+This long support walkthrough is separate from the 30-second Apple preview.
+While that recording is still running, `node scripts/validate-marketing-assets.mjs --static-masters`
+validates the stills and three montage videos only. It writes
+`manifest-static-candidate.json`, never the complete `manifest.json`; the default
+four-master validation is still required before handoff.
 
 The remaining native media truth gates are deliberately blocking:
 
@@ -141,7 +171,7 @@ video through a public or unlisted YouTube URL with ads disabled.
 
 Apple app previews are optional and limited to 30 seconds. Export a
 device-compatible H.264 MP4 and validate it in App Store Connect. Google may use
-the longer 45-second cut described in the storyboard. The 99-second feature
+the longer 45-second cut described in the storyboard. The 102-second feature
 tour and continuous interactive Watch guide are for a product page, support
 page or organic campaign; neither is an Apple preview asset.
 

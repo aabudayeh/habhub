@@ -12,8 +12,9 @@ import {
 } from "@/src/cloud/groupHubContent";
 import { subscribePrivateBroadcast } from "@/src/cloud/privateBroadcast";
 import { isCloudGroupId } from "@/src/cloud/groupCloud";
-import { dateKeyWithOffset } from "@/src/domain/date";
+import { dateKey, dateKeyWithOffset } from "@/src/domain/date";
 import { canonicalGroupScheduleAllDayInstant } from "@/src/domain/groupHub";
+import { groupScheduleCalendarRange } from "@/src/domain/groupSchedule";
 import { supabase } from "@/src/lib/supabase";
 import { useUserSafety } from "@/src/safety/userSafety";
 import { useApp } from "@/src/state/AppProvider";
@@ -35,12 +36,19 @@ const requestsByScope = {
   notes: new Map<string, Promise<GroupNote[]>>(),
   schedule: new Map<string, Promise<GroupScheduleItem[]>>(),
 };
+const scheduleRequestControllers = new Map<string, AbortController>();
+const scheduleWriteVersions = new Map<string, number>();
+const schedulePendingWrites = new Set<string>();
 
 function accountGroupScopeKey(currentUserId: string, groupId: string) {
   return `${currentUserId}\u0000${groupId}`;
 }
 
-function emit<K extends HubKind>(kind: K, scopeKey: string, rows: HubRows[K][]) {
+function emit<K extends HubKind>(
+  kind: K,
+  scopeKey: string,
+  rows: HubRows[K][],
+) {
   rowsByScope[kind].set(scopeKey, rows as never);
   const listeners = listenersByScope[kind].get(scopeKey) as
     | Set<(rows: HubRows[K][]) => void>
@@ -58,100 +66,113 @@ function localSeed<K extends HubKind>(
   const cached = rowsByScope[kind].get(scopeKey) as HubRows[K][] | undefined;
   if (cached) return cached;
   const now = new Date();
-  const creators = [
-    ...new Set([currentUserId, ...memberIds.filter(Boolean)]),
-  ];
+  const creators = [...new Set([currentUserId, ...memberIds.filter(Boolean)])];
   const creatorAt = (index: number) =>
     creators[index % creators.length] ?? currentUserId;
   const timestampMinutesAgo = (minutes: number) =>
     new Date(now.getTime() - minutes * 60_000).toISOString();
-  const rows = (kind === "notes"
-    ? [
-        {
-          id: `demo-group-note-${groupId}`,
-          groupId,
-          creatorId: creatorAt(0),
-          title: "Weekend game plan",
-          body: "Saturday · Trail walk at 10:00\nSunday · Meal prep and weekly check-in\nBring water and choose an easy pace.",
-          revision: 1,
-          createdAt: timestampMinutesAgo(190),
-          updatedAt: timestampMinutesAgo(24),
-        },
-        {
-          id: `demo-group-note-meals-${groupId}`,
-          groupId,
-          creatorId: creatorAt(1),
-          title: "Meal-prep swap list",
-          body: "Protein: lemon chicken or crispy tofu\nCarbs: herbed rice or roast potatoes\nSnack: Greek yogurt, berries, and walnuts",
-          revision: 2,
-          createdAt: timestampMinutesAgo(1_860),
-          updatedAt: timestampMinutesAgo(95),
-        },
-        {
-          id: `demo-group-note-challenge-${groupId}`,
-          groupId,
-          creatorId: creatorAt(2),
-          title: "September challenge tips",
-          body: "Log the small wins too. A ten-minute walk keeps momentum alive, and cheering somebody else counts as showing up for the team.",
-          revision: 1,
-          createdAt: timestampMinutesAgo(720),
-          updatedAt: timestampMinutesAgo(340),
-        },
-      ]
-    : [
-        {
-          id: `demo-group-event-${groupId}`,
-          groupId,
-          creatorId: creatorAt(0),
-          title: "Sunrise group walk",
-          notes: "Easy pace · meet by the park entrance.",
-          startsAt: `${dateKeyWithOffset(1)}T10:00:00`,
-          endsAt: `${dateKeyWithOffset(1)}T11:00:00`,
-          allDay: false,
-          revision: 1,
-          createdAt: timestampMinutesAgo(140),
-          updatedAt: timestampMinutesAgo(20),
-        },
-        {
-          id: `demo-group-event-prep-${groupId}`,
-          groupId,
-          creatorId: creatorAt(1),
-          title: "Meal-prep Sunday",
-          notes: "Share one reliable recipe in Group Notes.",
-          startsAt: canonicalGroupScheduleAllDayInstant(dateKeyWithOffset(3))!,
-          allDay: true,
-          revision: 1,
-          createdAt: timestampMinutesAgo(980),
-          updatedAt: timestampMinutesAgo(260),
-        },
-        {
-          id: `demo-group-event-strength-${groupId}`,
-          groupId,
-          creatorId: creatorAt(2),
-          title: "Full-body circuit",
-          notes: "Three friendly rounds; every movement has a low-impact option.",
-          startsAt: `${dateKeyWithOffset(5)}T18:30:00`,
-          endsAt: `${dateKeyWithOffset(5)}T19:20:00`,
-          allDay: false,
-          revision: 2,
-          createdAt: timestampMinutesAgo(2_400),
-          updatedAt: timestampMinutesAgo(420),
-        },
-      ]) as HubRows[K][];
+  const rows = (
+    kind === "notes"
+      ? [
+          {
+            id: `demo-group-note-${groupId}`,
+            groupId,
+            creatorId: creatorAt(0),
+            title: "Weekend game plan",
+            body: "Saturday · Trail walk at 10:00\nSunday · Meal prep and weekly check-in\nBring water and choose an easy pace.",
+            revision: 1,
+            createdAt: timestampMinutesAgo(190),
+            updatedAt: timestampMinutesAgo(24),
+          },
+          {
+            id: `demo-group-note-meals-${groupId}`,
+            groupId,
+            creatorId: creatorAt(1),
+            title: "Meal-prep swap list",
+            body: "Protein: lemon chicken or crispy tofu\nCarbs: herbed rice or roast potatoes\nSnack: Greek yogurt, berries, and walnuts",
+            revision: 2,
+            createdAt: timestampMinutesAgo(1_860),
+            updatedAt: timestampMinutesAgo(95),
+          },
+          {
+            id: `demo-group-note-challenge-${groupId}`,
+            groupId,
+            creatorId: creatorAt(2),
+            title: "September challenge tips",
+            body: "Log the small wins too. A ten-minute walk keeps momentum alive, and cheering somebody else counts as showing up for the team.",
+            revision: 1,
+            createdAt: timestampMinutesAgo(720),
+            updatedAt: timestampMinutesAgo(340),
+          },
+        ]
+      : [
+          {
+            id: `demo-group-event-${groupId}`,
+            groupId,
+            creatorId: creatorAt(0),
+            title: "Sunrise group walk",
+            notes: "Easy pace · meet by the park entrance.",
+            startsAt: `${dateKeyWithOffset(1)}T10:00:00`,
+            endsAt: `${dateKeyWithOffset(1)}T11:00:00`,
+            allDay: false,
+            revision: 1,
+            createdAt: timestampMinutesAgo(140),
+            updatedAt: timestampMinutesAgo(20),
+          },
+          {
+            id: `demo-group-event-prep-${groupId}`,
+            groupId,
+            creatorId: creatorAt(1),
+            title: "Meal-prep Sunday",
+            notes: "Share one reliable recipe in Group Notes.",
+            startsAt: canonicalGroupScheduleAllDayInstant(
+              dateKeyWithOffset(3),
+            )!,
+            allDay: true,
+            revision: 1,
+            createdAt: timestampMinutesAgo(980),
+            updatedAt: timestampMinutesAgo(260),
+          },
+          {
+            id: `demo-group-event-strength-${groupId}`,
+            groupId,
+            creatorId: creatorAt(2),
+            title: "Full-body circuit",
+            notes:
+              "Three friendly rounds; every movement has a low-impact option.",
+            startsAt: `${dateKeyWithOffset(5)}T18:30:00`,
+            endsAt: `${dateKeyWithOffset(5)}T19:20:00`,
+            allDay: false,
+            revision: 2,
+            createdAt: timestampMinutesAgo(2_400),
+            updatedAt: timestampMinutesAgo(420),
+          },
+        ]
+  ) as HubRows[K][];
   rowsByScope[kind].set(scopeKey, rows as never);
   return rows;
 }
 
-function useGroupHubRows<K extends HubKind>(kind: K, groupId: string) {
+function useGroupHubRows<K extends HubKind>(
+  kind: K,
+  groupId: string,
+  anchor = dateKey(),
+) {
   const { state } = useApp();
   const tutorial = useTutorialSandbox();
   const safety = useUserSafety(state.currentUserId, tutorial.active);
-  const scopeKey = accountGroupScopeKey(state.currentUserId, groupId);
+  const monthAnchor = `${anchor.slice(0, 7)}-01`;
+  const range = useMemo(
+    () => groupScheduleCalendarRange(monthAnchor),
+    [monthAnchor],
+  );
+  const cloudEnabled =
+    !tutorial.active && Boolean(supabase) && isCloudGroupId(groupId);
+  const scopeKey = `${accountGroupScopeKey(state.currentUserId, groupId)}${tutorial.active ? "\u0000tutorial" : ""}${kind === "schedule" && cloudEnabled ? `\u0000${range.from}` : ""}`;
   const memberIds = useMemo(
     () => state.group.members.map((member) => member.id),
     [state.group.members],
   );
-  const cloudEnabled = !tutorial.active && Boolean(supabase) && isCloudGroupId(groupId);
   const [snapshot, setSnapshot] = useState<{
     scopeKey: string;
     rows: HubRows[K][];
@@ -167,14 +188,16 @@ function useGroupHubRows<K extends HubKind>(kind: K, groupId: string) {
         ? snapshot.rows
         : cloudEnabled
           ? ((rowsByScope[kind].get(scopeKey) ?? []) as HubRows[K][])
-          : localSeed(
-              kind,
-              scopeKey,
-              groupId,
-              state.currentUserId,
-              memberIds,
-            ),
-    [cloudEnabled, groupId, kind, memberIds, scopeKey, snapshot, state.currentUserId],
+          : localSeed(kind, scopeKey, groupId, state.currentUserId, memberIds),
+    [
+      cloudEnabled,
+      groupId,
+      kind,
+      memberIds,
+      scopeKey,
+      snapshot,
+      state.currentUserId,
+    ],
   );
   const setRows = useCallback(
     (next: HubRows[K][]) => setSnapshot({ scopeKey, rows: next }),
@@ -203,17 +226,13 @@ function useGroupHubRows<K extends HubKind>(kind: K, groupId: string) {
   );
   const scopeRef = useRef(scopeKey);
   scopeRef.current = scopeKey;
+  const refreshRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
   const refresh = useCallback(() => {
+    if (kind === "schedule" && schedulePendingWrites.has(scopeKey)) return Promise.resolve();
     if (!cloudEnabled) {
       setRows(
-        localSeed(
-          kind,
-          scopeKey,
-          groupId,
-          state.currentUserId,
-          memberIds,
-        ),
+        localSeed(kind, scopeKey, groupId, state.currentUserId, memberIds),
       );
       setLoading(false);
       errorScopeRef.current = scopeKey;
@@ -223,14 +242,29 @@ function useGroupHubRows<K extends HubKind>(kind: K, groupId: string) {
     const existing = requestsByScope[kind].get(scopeKey) as
       | Promise<HubRows[K][]>
       | undefined;
-    if (existing) return existing.then(() => undefined);
+    if (existing)
+      return existing.then(
+        () => undefined,
+        () => undefined,
+      );
     setLoading(true);
-    const request = (kind === "notes"
-      ? loadGroupNotes(groupId)
-      : loadGroupSchedule(groupId)) as Promise<HubRows[K][]>;
+    const version = scheduleWriteVersions.get(scopeKey) ?? 0;
+    const controller = kind === "schedule" ? new AbortController() : undefined;
+    if (controller) scheduleRequestControllers.set(scopeKey, controller);
+    const request = (
+      kind === "notes"
+        ? loadGroupNotes(groupId)
+        : loadGroupSchedule(groupId, range, controller?.signal)
+    ) as Promise<HubRows[K][]>;
     requestsByScope[kind].set(scopeKey, request as never);
     return request
       .then((next) => {
+        if (
+          controller?.signal.aborted ||
+          (kind === "schedule" &&
+            version !== (scheduleWriteVersions.get(scopeKey) ?? 0))
+        )
+          return;
         emit(kind, scopeKey, next);
         if (scopeRef.current === scopeKey) {
           setRows(next);
@@ -239,7 +273,7 @@ function useGroupHubRows<K extends HubKind>(kind: K, groupId: string) {
         }
       })
       .catch((reason) => {
-        if (scopeRef.current === scopeKey) {
+        if (!controller?.signal.aborted && scopeRef.current === scopeKey) {
           errorScopeRef.current = scopeKey;
           setError(reason instanceof Error ? reason.message : String(reason));
         }
@@ -247,9 +281,29 @@ function useGroupHubRows<K extends HubKind>(kind: K, groupId: string) {
       .finally(() => {
         if (requestsByScope[kind].get(scopeKey) === request)
           requestsByScope[kind].delete(scopeKey);
-        if (scopeRef.current === scopeKey) setLoading(false);
+        if (scheduleRequestControllers.get(scopeKey) === controller)
+          scheduleRequestControllers.delete(scopeKey);
+        if (!controller?.signal.aborted && scopeRef.current === scopeKey)
+          setLoading(false);
+        if (
+          !controller?.signal.aborted &&
+          kind === "schedule" &&
+          version !== (scheduleWriteVersions.get(scopeKey) ?? 0) &&
+          scopeRef.current === scopeKey
+        )
+          void refreshRef.current();
       });
-  }, [cloudEnabled, groupId, kind, memberIds, scopeKey, setRows, state.currentUserId]);
+  }, [
+    cloudEnabled,
+    groupId,
+    kind,
+    memberIds,
+    range,
+    scopeKey,
+    setRows,
+    state.currentUserId,
+  ]);
+  refreshRef.current = refresh;
 
   useEffect(() => {
     const map = listenersByScope[kind] as Map<
@@ -257,15 +311,28 @@ function useGroupHubRows<K extends HubKind>(kind: K, groupId: string) {
       Set<(rows: HubRows[K][]) => void>
     >;
     const listeners = map.get(scopeKey) ?? new Set();
-    const listener = (next: HubRows[K][]) => setRows(next);
+    const listener = (next: HubRows[K][]) => {
+      setRows(next);
+      setLoading(false);
+    };
     listeners.add(listener);
     map.set(scopeKey, listeners);
     void refresh();
     return () => {
       listeners.delete(listener);
-      if (!listeners.size) map.delete(scopeKey);
+      if (!listeners.size) {
+        map.delete(scopeKey);
+        if (kind === "schedule") {
+          scheduleRequestControllers.get(scopeKey)?.abort();
+          scheduleRequestControllers.delete(scopeKey);
+          requestsByScope.schedule.delete(scopeKey);
+          // Cloud month windows are view-scoped, never an unbounded history cache.
+          if (cloudEnabled) rowsByScope.schedule.delete(scopeKey);
+          scheduleWriteVersions.delete(scopeKey);
+        }
+      }
     };
-  }, [kind, refresh, scopeKey, setRows]);
+  }, [cloudEnabled, kind, refresh, scopeKey, setRows]);
 
   useEffect(() => {
     if (!cloudEnabled) return;
@@ -274,20 +341,49 @@ function useGroupHubRows<K extends HubKind>(kind: K, groupId: string) {
       `group:${groupId}:workspace`,
       "group_hub_updated",
       () => {
-        if (timer) clearTimeout(timer);
-        timer = setTimeout(() => void refresh(), 140);
+        // Do not postpone forever in busy groups. Fence in-flight snapshots and
+        // request one trailing refresh if a committed update arrived mid-read.
+        if (kind === "schedule")
+          scheduleWriteVersions.set(
+            scopeKey,
+            (scheduleWriteVersions.get(scopeKey) ?? 0) + 1,
+          );
+        if (timer) return;
+        timer = setTimeout(() => {
+          timer = undefined;
+          void refresh();
+        }, 140);
       },
     );
     return () => {
       if (timer) clearTimeout(timer);
       unsubscribe();
     };
-  }, [cloudEnabled, groupId, refresh]);
+  }, [cloudEnabled, groupId, kind, refresh, scopeKey]);
 
   const replace = useCallback(
-    (next: HubRows[K][]) => emit(kind, scopeKey, next),
+    (next: HubRows[K][]) => {
+      if (kind === "schedule")
+        scheduleWriteVersions.set(
+          scopeKey,
+          (scheduleWriteVersions.get(scopeKey) ?? 0) + 1,
+        );
+      emit(kind, scopeKey, next);
+    },
     [kind, scopeKey],
   );
+  const beginScheduleWrite = useCallback(() => {
+    if (schedulePendingWrites.has(scopeKey)) throw new Error("Wait for the current event update to finish.");
+    schedulePendingWrites.add(scopeKey);
+    scheduleRequestControllers.get(scopeKey)?.abort();
+    scheduleRequestControllers.delete(scopeKey);
+    requestsByScope.schedule.delete(scopeKey);
+    setLoading(false);
+  }, [scopeKey]);
+  const finishScheduleWrite = useCallback(() => {
+    schedulePendingWrites.delete(scopeKey);
+    if (scopeRef.current === scopeKey && listenersByScope.schedule.get(scopeKey)?.size) void refreshRef.current();
+  }, [scopeKey]);
   return {
     rows: scopedRows,
     loading:
@@ -298,6 +394,8 @@ function useGroupHubRows<K extends HubKind>(kind: K, groupId: string) {
     replace,
     cachedRows: groupRows,
     cloudEnabled,
+    beginScheduleWrite,
+    finishScheduleWrite,
   };
 }
 
@@ -308,7 +406,9 @@ export function useGroupNotes(groupId: string) {
     async (input: SaveGroupNoteInput) => {
       const before = model.cachedRows;
       const now = new Date().toISOString();
-      const prior = input.id ? before.find((item) => item.id === input.id) : undefined;
+      const prior = input.id
+        ? before.find((item) => item.id === input.id)
+        : undefined;
       const optimistic: GroupNote = {
         id: input.id ?? `local-group-note-${Date.now().toString(36)}`,
         groupId,
@@ -319,11 +419,17 @@ export function useGroupNotes(groupId: string) {
         createdAt: prior?.createdAt ?? now,
         updatedAt: now,
       };
-      model.replace([optimistic, ...before.filter((item) => item.id !== optimistic.id)]);
+      model.replace([
+        optimistic,
+        ...before.filter((item) => item.id !== optimistic.id),
+      ]);
       if (!model.cloudEnabled) return optimistic;
       try {
         const saved = await saveGroupNote(input);
-        model.replace([saved, ...before.filter((item) => item.id !== saved.id)]);
+        model.replace([
+          saved,
+          ...before.filter((item) => item.id !== saved.id),
+        ]);
         return saved;
       } catch (reason) {
         model.replace(before);
@@ -361,14 +467,18 @@ export function useGroupNotes(groupId: string) {
   };
 }
 
-export function useGroupSchedule(groupId: string) {
+export function useGroupSchedule(groupId: string, anchor = dateKey()) {
   const { state } = useApp();
-  const model = useGroupHubRows("schedule", groupId);
+  const model = useGroupHubRows("schedule", groupId, anchor);
   const save = useCallback(
     async (input: SaveGroupScheduleInput) => {
+      if (input.groupId !== groupId) throw new Error("This event belongs to another group.");
+      model.beginScheduleWrite();
       const before = model.cachedRows;
       const now = new Date().toISOString();
-      const prior = input.id ? before.find((item) => item.id === input.id) : undefined;
+      const prior = input.id
+        ? before.find((item) => item.id === input.id)
+        : undefined;
       const optimistic: GroupScheduleItem = {
         id: input.id ?? `local-group-event-${Date.now().toString(36)}`,
         groupId,
@@ -378,16 +488,18 @@ export function useGroupSchedule(groupId: string) {
         startsAt: input.startsAt,
         endsAt: input.endsAt,
         allDay: input.allDay,
+        reminderMinutes: input.allDay ? undefined : input.reminderMinutes,
         revision: (prior?.revision ?? 0) + 1,
         createdAt: prior?.createdAt ?? now,
         updatedAt: now,
       };
       model.replace(
-        [optimistic, ...before.filter((item) => item.id !== optimistic.id)].sort(
-          (left, right) => left.startsAt.localeCompare(right.startsAt),
-        ),
+        [
+          optimistic,
+          ...before.filter((item) => item.id !== optimistic.id),
+        ].sort((left, right) => left.startsAt.localeCompare(right.startsAt)),
       );
-      if (!model.cloudEnabled) return optimistic;
+      if (!model.cloudEnabled) { model.finishScheduleWrite(); return optimistic; }
       try {
         const saved = await saveGroupScheduleItem(input);
         model.replace(
@@ -398,26 +510,30 @@ export function useGroupSchedule(groupId: string) {
         return saved;
       } catch (reason) {
         model.replace(before);
-        void model.refresh();
         throw reason;
+      } finally {
+        model.finishScheduleWrite();
       }
     },
     [groupId, model, state.currentUserId],
   );
   const remove = useCallback(
     async (item: GroupScheduleItem) => {
+      if (item.groupId !== groupId) throw new Error("This event belongs to another group.");
+      model.beginScheduleWrite();
       const before = model.cachedRows;
       model.replace(before.filter((candidate) => candidate.id !== item.id));
-      if (!model.cloudEnabled) return;
+      if (!model.cloudEnabled) { model.finishScheduleWrite(); return; }
       try {
         await deleteGroupScheduleItem(item.id, item.revision);
       } catch (reason) {
         model.replace(before);
-        void model.refresh();
         throw reason;
+      } finally {
+        model.finishScheduleWrite();
       }
     },
-    [model],
+    [groupId, model],
   );
   return {
     rows: model.rows,

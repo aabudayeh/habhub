@@ -647,6 +647,15 @@ export default function GroupSettings() {
               colors={colors}
               accent={accent}
             />
+            <NotificationPreferenceRow
+              title="Group event reminders"
+              detail="Opt in to timed reminders set on shared calendar events"
+              value={groupNotificationPreferences.scheduleReminders === true}
+              disabled={groupNotificationPreferences.enabled === false}
+              onValueChange={(scheduleReminders) => patchGroupNotifications({ scheduleReminders })}
+              colors={colors}
+              accent={accent}
+            />
             {state.group.groupTodosEnabled === true ? (
               <>
                 <NotificationPreferenceRow

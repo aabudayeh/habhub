@@ -54,10 +54,14 @@ Deno.serve(async (request) => {
 
   const payload = await request.json().catch(() => ({}));
   const limit = positiveLimit(payload?.limit);
+  // The minute-level calendar pass must not run challenge settlement/scans.
+  const scheduleOnly = payload?.mode === "group_schedule";
   const admin = createClient(url, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
-  const staged = await admin.rpc("stage_group_challenge_notifications", {
+  const staged = await admin.rpc(scheduleOnly
+    ? "stage_due_group_schedule_reminders"
+    : "stage_group_challenge_notifications", {
     p_limit: limit,
   });
   if (staged.error) return json({ error: staged.error.message }, 500);
@@ -65,13 +69,17 @@ Deno.serve(async (request) => {
   // challenge staging call. Social interactions dispatch immediately from the
   // actor's client, while this bounded hourly pass guarantees a transient
   // provider/network failure remains retryable even if that client closes.
-  const pending = await admin
+  let pendingQuery = admin
     .from("push_dispatch_events")
     .select("event_key")
     .is("dispatched_at", null)
-    .gt("expires_at", new Date().toISOString())
-    .order("created_at", { ascending: true })
-    .limit(limit);
+    .gt("expires_at", new Date().toISOString());
+  if (scheduleOnly)
+    pendingQuery = pendingQuery.eq("event_type", "group_schedule_reminder")
+      .order("attempt_count", { ascending: true });
+  // Reminder retries remain durable, but absent devices/provider failures must
+  // not monopolize the minute batch ahead of newly due calendar instances.
+  const pending = await pendingQuery.order("created_at", { ascending: true }).limit(limit);
   if (pending.error) return json({ error: pending.error.message }, 500);
   const eventKeys = [
     ...new Set(

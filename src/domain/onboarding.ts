@@ -1,5 +1,30 @@
 import type { HealthDataType } from "../types";
 
+const GUIDED_GOAL_TRACKERS: Readonly<Record<string, readonly string[]>> = {
+  weight: ["weight", "food"],
+  activity: ["steps", "workout"],
+  gym: ["workout", "workout_duration"],
+  learning: ["reading", "study"],
+  health: ["sleep", "pulse"],
+  nutrition: ["food", "water"],
+  friends: ["steps", "water"],
+};
+
+/** Small, goal-relevant starting point. Extra tools stay discoverable in-app. */
+export function guidedStarterTrackerIds(goals: readonly string[]): string[] {
+  const selected = goals.flatMap((goal) => GUIDED_GOAL_TRACKERS[goal] ?? []);
+  const visible = [...new Set(selected.length ? [...selected, "water"] : ["steps", "water"])].slice(0, 5);
+  return [...visible, "todo_completion"];
+}
+
+/** Choices shown in the live coach; suggestions do not themselves add data. */
+export function guidedSuggestedTrackerIds(goals: readonly string[]): string[] {
+  return [...new Set([
+    ...guidedStarterTrackerIds(goals).filter((id) => id !== "todo_completion"),
+    "steps", "water", "reading", "sleep", "weight", "workout", "food", "study",
+  ])].slice(0, 10);
+}
+
 type OnboardingHealthTracker = {
   templateId: string;
   healthMapping?: { dataType: HealthDataType };

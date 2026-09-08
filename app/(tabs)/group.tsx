@@ -26,7 +26,7 @@ import {
 import { GestureDetector } from "react-native-gesture-handler";
 import Reanimated from "react-native-reanimated";
 import { AppText as Text } from "@/src/components/AppText";
-import { LocalizedAlert as Alert, useTranslation } from "@/src/i18n";
+import { LocalizedAlert as Alert, useLocale, useTranslation } from "@/src/i18n";
 import { shareText } from "@/src/lib/shareText";
 import { ReorderItem } from "@/src/components/ReorderItem";
 import { HorizontalPager } from "@/src/components/HorizontalPager";
@@ -2395,6 +2395,8 @@ function ChallengeRankingCard({
   onLongPress: () => void;
   onRespond: (response: "accepted" | "declined") => Promise<void>;
 }) {
+  const t = useTranslation();
+  const locale = useLocale();
   const [responding, setResponding] = useState<"accepted" | "declined">();
   const highlightPulse = useRef(new Animated.Value(0)).current;
   useEffect(() => {
@@ -2443,14 +2445,14 @@ function ChallengeRankingCard({
   const targetLabel = openCompetition
     ? "Most wins"
     : metric
-      ? formatMetricValue(metric, challenge.target!)
+      ? formatMetricValue(metric, challenge.target!, locale)
       : String(challenge.target);
   const endDate = groupChallengeEndDate(challenge);
   const finalized = endDate < dateKey();
   const periodLabel =
     endDate === challenge.localDate
-      ? friendlyDate(challenge.localDate)
-      : `${friendlyDate(challenge.localDate)} – ${friendlyDate(endDate)}`;
+      ? friendlyDate(challenge.localDate, locale)
+      : `${friendlyDate(challenge.localDate, locale)} – ${friendlyDate(endDate, locale)}`;
   async function respond(response: "accepted" | "declined") {
     setResponding(response);
     try {
@@ -2567,17 +2569,27 @@ function ChallengeRankingCard({
             ]}
           >
             <Text style={[styles.challengeRank, { color: index < 3 ? palette.amber : colors.faint }]}>#{index + 1}</Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`${t("View profile")}: ${memberDisplayName(state, row.member)}`}
+              disabled={editing}
+              onPress={() => router.navigate({ pathname: "/member-profile/[id]", params: { id: row.member.id } } as never)}
+              style={styles.challengeMemberLink}
+            >
             <Avatar initials={row.member.initials} color={row.member.color} uri={row.member.avatarUri} size={29} />
             <View style={styles.challengeMemberCopy}>
               <Text numberOfLines={1} style={[styles.name, { color: colors.ink }]}>
                 {memberDisplayName(state, row.member)}{row.member.id === state.currentUserId ? " · You" : ""}
               </Text>
               <Text numberOfLines={1} style={[styles.challengeValue, { color: colors.muted }]}>
-                {row.member.lastDataSyncedAt
+                {!isCloudGroupId(state.group.id)
+                  ? "Local demo data"
+                  : row.member.lastDataSyncedAt
                   ? `Last synced ${relativeTime(row.member.lastDataSyncedAt)}`
                   : "Not synced yet"}
               </Text>
             </View>
+            </Pressable>
             <View style={styles.challengeProgress}>
               <View style={styles.challengeProgressLabel}>
                 <Text style={[styles.challengePercent, { color: row.mode === "exact" ? colors.ink : colors.faint }]}>
@@ -2813,6 +2825,7 @@ const styles = StyleSheet.create({
   challengeRow: { minHeight: 48, paddingHorizontal: 5, paddingVertical: 7, borderTopWidth: 1, borderRadius: 12, flexDirection: "row", alignItems: "center", gap: 7 },
   challengeRank: { width: 23, fontSize: 10, fontWeight: "900" },
   challengeMemberCopy: { flex: 1, minWidth: 0 },
+  challengeMemberLink: { flex: 1, minWidth: 0, minHeight: 44, flexDirection: "row", alignItems: "center", gap: 7 },
   challengeValue: { fontSize: 8, lineHeight: 11, marginTop: 2 },
   challengeProgress: { width: 105, gap: 3 },
   challengeProgressLabel: { minHeight: 15, flexDirection: "row", justifyContent: "flex-end", alignItems: "center", gap: 4 },

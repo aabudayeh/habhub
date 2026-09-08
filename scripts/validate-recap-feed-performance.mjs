@@ -138,7 +138,7 @@ assert.match(
 );
 assert.match(
   socialHook,
-  /"social_updated"[\s\S]{0,500}scheduleResponsiveWork\(\(\) => void refresh\(\)[\s\S]{0,220}minimumUserQuietMs: 650/,
+  /"social_updated"[\s\S]{0,500}scheduleResponsiveWork\(\(\) => \{ task = undefined; void refresh\(\); \}[\s\S]{0,220}minimumUserQuietMs: 650/,
   "Realtime social refreshes must stay behind native taps",
 );
 
@@ -230,6 +230,19 @@ const repeatedFeed = buildGroupRecapFeed(state, dates);
 const repeatedMs = performance.now() - repeatedStartedAt;
 
 assert.deepEqual(repeatedFeed, firstFeed);
+const englishEntry = firstFeed.find((item) => item.id === `entry:${selectedEntries[0].id}`);
+assert.equal(englishEntry?.value, "4,000 steps", "English recap values must not inherit the host OS locale");
+const germanFeed = buildGroupRecapFeed({ ...state, settings: { language: "de" } }, dates);
+assert.equal(
+  germanFeed.find((item) => item.id === englishEntry.id)?.value,
+  "4.000 steps",
+  "Changing the app language must also update recap number formatting",
+);
+assert.match(
+  feedScreen,
+  /const feedScopeKey = useMemo\([\s\S]{0,260}state\.settings\.language/,
+  "Cached native recaps must be scoped to the displayed language",
+);
 assert.equal(
   firstFeed.filter((item) => item.kind === "leader").length,
   dates.length,

@@ -699,7 +699,8 @@ export function PhotoComparisonStudio({
       <ExpandableImage
         uri={active.uri}
         containerStyle={styles.heroFrame}
-        thumbnailStyle={styles.heroImage}
+        thumbnailStyle={[styles.heroImage, { backgroundColor: colors.canvas }]}
+        thumbnailContentFit="contain"
         caption={[fullPhotoDate(active.localDate, locale), weight].filter(Boolean).join(" · ")}
       />
       <View style={styles.currentMeta}>

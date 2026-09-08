@@ -9,6 +9,7 @@ import React, {
   useState,
 } from "react";
 import { AccessibilityInfo } from "react-native";
+import { usePathname } from "expo-router";
 
 import { useApp } from "@/src/state/AppProvider";
 import {
@@ -124,6 +125,9 @@ export function TutorialProvider({
   guides = TUTORIAL_GUIDES,
 }: PropsWithChildren<{ guides?: readonly TutorialGuide[] }>) {
   const { state, updateSettings, flushLocalPersistence } = useApp();
+  const pathname = usePathname();
+  const suppressAutomaticResumeRef = useRef(false);
+  suppressAutomaticResumeRef.current = Boolean(state.settings.tutorialPromptsDisabled || (state.settings.guidedSetupStep && state.settings.guidedSetupStep !== "complete"));
   const accountId = state.currentUserId || "anonymous";
   const [activeSession, setActiveSessionState] =
     useState<ActiveTutorialSession | null>(null);
@@ -314,12 +318,15 @@ export function TutorialProvider({
           storedProgress.filter((entry) => Boolean(entry[1])),
         ) as Record<string, TutorialProgress | undefined>;
         setProgressByGuide(progress);
-        if (storedActive) {
+        if (storedActive && !suppressAutomaticResumeRef.current) {
           const resumed = reanchorTutorialSession(storedActive);
           enterSession(resumed);
           if (resumed !== storedActive) persistSession(resumed);
         }
-        else setActiveSession(null);
+        else {
+          setActiveSession(null);
+          if (storedActive) enqueueStorage(() => clearActiveTutorial(accountId));
+        }
         setHydrated(true);
       })
       .catch(() => {
@@ -335,6 +342,7 @@ export function TutorialProvider({
     accountId,
     clearTransitionTimers,
     enterSession,
+    enqueueStorage,
     guideSignature,
     guides,
     persistSession,
@@ -360,10 +368,13 @@ export function TutorialProvider({
   );
 
   useEffect(() => {
-    if (!hydrated || !state.settings.onboardingComplete) return;
+    // The onboarding page must finish its durable handoff before a preview
+    // swaps the route tree into an isolated sandbox.
+    if (!hydrated || !state.settings.onboardingComplete || pathname === "/onboarding") return;
     const guideId = tutorialGuideTrigger({
       tutorialComplete: state.settings.tutorialComplete,
       tutorialGuideId: state.settings.tutorialGuideId,
+      tutorialPromptsDisabled: state.settings.tutorialPromptsDisabled,
     });
     if (!guideId || !guideMap.has(guideId)) return;
     const trigger = `${accountId}:${guideId}:${state.settings.tutorialGuideRunId ?? "resume"}`;
@@ -382,10 +393,12 @@ export function TutorialProvider({
     accountId,
     guideMap,
     hydrated,
+    pathname,
     startGuide,
     state.settings.onboardingComplete,
     state.settings.tutorialComplete,
     state.settings.tutorialGuideId,
+    state.settings.tutorialPromptsDisabled,
     state.settings.tutorialGuideRunId,
   ]);
 

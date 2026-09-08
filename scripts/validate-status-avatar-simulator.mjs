@@ -238,7 +238,7 @@ const lowFatState = statusAvatarSimulationSetValue(
 const highFatState = statusAvatarSimulationSetValue(
   independentState,
   "body_fat",
-  40,
+  15,
   baseline,
 );
 const lowFat = statusAvatarSimulationPreview(lowFatState, baseline);

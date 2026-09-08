@@ -151,4 +151,20 @@ assert.equal(
   "Undoing the only stroke must produce an empty, backward-compatible layer",
 );
 
+// Exercise the same Lexical selection + formatting command used by Watch mode.
+// This verifies actual rich-text output, not just a synthetic completion event.
+const { default: lexical } = await import("lexical");
+const { default: { registerRichText } } = await import("@lexical/rich-text");
+const { default: { $convertToMarkdownString, TRANSFORMERS } } = await import("@lexical/markdown");
+const formattingEditor = lexical.createEditor({ namespace: "tutorial-format-validation", onError: (error) => { throw error; } });
+const unregisterRichText = registerRichText(formattingEditor);
+formattingEditor.update(() => {
+  lexical.$getRoot().append(lexical.$createParagraphNode().append(lexical.$createTextNode("Small steps make a good day.")));
+  lexical.$getRoot().select(0, lexical.$getRoot().getChildrenSize());
+  formattingEditor.dispatchCommand(lexical.FORMAT_TEXT_COMMAND, "bold");
+}, { discrete: true });
+const formattedPreview = formattingEditor.getEditorState().read(() => $convertToMarkdownString(TRANSFORMERS));
+assert.equal(formattedPreview, "**Small steps make a good day.**", "Watch must really apply bold before reporting completion");
+unregisterRichText();
+
 console.log("Journal editor validation passed.");

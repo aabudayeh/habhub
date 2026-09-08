@@ -9,6 +9,7 @@ const migrations = await Promise.all(
     "supabase/migrations/202608300003_social_notification_origin.sql",
     "supabase/migrations/202608300004_prompt_social_push_dispatch.sql",
     "supabase/migrations/202609050001_fix_challenge_result_social_recipient.sql",
+    "supabase/migrations/202609080005_bounded_social_engagement.sql",
   ].map((path) => Deno.readTextFile(new URL(path, root))),
 );
 
@@ -673,6 +674,81 @@ if (
 )
   throw new Error("An ambiguous legacy client id was guessed instead of rejected.");
 
+// Use the deployed SELECT policies, including target privacy and blocked-user
+// filtering, to exercise the aggregate APIs as an actual authenticated role.
+const safetyMigration = await Deno.readTextFile(new URL(
+  "supabase/migrations/202609040002_user_safety.sql", root,
+));
+await db.exec(`
+  truncate public.group_social_reactions, public.group_social_comments;
+  alter table public.group_social_reactions disable trigger user;
+  alter table public.group_social_comments disable trigger user;
+  insert into public.group_social_reactions (group_id, target_type, target_id, user_id, reaction, created_at)
+    select '${groupId}', 'metric_entry', '${entryId}',
+      case when i = 1 then '${viewerId}'::uuid else ('90000000-0000-4000-8000-' || lpad(i::text, 12, '0'))::uuid end,
+      'heart', '2026-01-01'::timestamptz + i * interval '1 minute'
+      from generate_series(1, 1501) i;
+  insert into public.group_social_comments (id, group_id, target_type, target_id, user_id, content, created_at)
+    select ('91000000-0000-4000-8000-' || lpad(i::text, 12, '0'))::uuid,
+      '${groupId}', 'metric_entry', '${entryId}', '${ownerId}', 'Comment ' || i, '2026-09-08 12:00Z'
+      from generate_series(1, 1203) i;
+  insert into public.group_social_comments (group_id, target_type, target_id, user_id, content)
+    values ('${groupId}', 'metric_entry', '${entryId}', '90000000-0000-4000-8000-000000000002', 'Blocked author');
+  alter table public.group_social_reactions enable trigger user;
+  alter table public.group_social_comments enable trigger user;
+  alter table public.group_social_reactions enable row level security;
+  alter table public.group_social_comments enable row level security;
+  create function public.habhub_message_visible_to_current_user(p_user_id uuid, p_unused uuid)
+    returns boolean language sql stable as $$
+      select p_user_id::text <> coalesce(current_setting('test.blocked_user', true), '')
+    $$;
+  grant usage on schema auth to authenticated;
+  grant select on public.group_social_reactions, public.group_social_comments, public.group_members to authenticated;
+`);
+for (const table of ["group_social_reactions", "group_social_comments"]) {
+  const policy = safetyMigration.match(new RegExp(`create policy ${table}_member_read[\\s\\S]*?;`))?.[0];
+  if (!policy) throw new Error(`Missing deployed read policy for ${table}`);
+  await db.exec(policy);
+}
+await db.exec(`set role authenticated; set test.blocked_user = '90000000-0000-4000-8000-000000000002';`);
+const targetJson = JSON.stringify([{ type: "metric_entry", id: entryId }]);
+const summarySql = `select * from public.get_group_social_engagement('${groupId}', '${targetJson}', true)`;
+const summary = (await db.query(summarySql)).rows[0];
+if (summary.reaction_counts.heart !== 1500 || Number(summary.comment_count) !== 1203)
+  throw new Error(`High-volume RLS counts were truncated or included blocked authors: ${JSON.stringify(summary.reaction_counts)}, ${summary.comment_count}`);
+if (summary.own_reaction.user_id !== viewerId)
+  throw new Error("The viewer's oldest reaction disappeared behind newer reactions.");
+if (summary.comments.length !== 20 || !summary.has_more_comments)
+  throw new Error("A popular target must return exactly one bounded 20-comment preview.");
+const firstIds = new Set(summary.comments.map((row) => row.id));
+const cursor = summary.comments[0];
+const second = await scalar(`select public.list_group_social_comments_page('${groupId}', 'metric_entry', '${entryId}', '${cursor.created_at}', '${cursor.id}', 20)`);
+if (second.comments.length !== 20 || second.comments.some((row) => firstIds.has(row.id)))
+  throw new Error("Equal-timestamp comment cursors duplicated or skipped a page.");
+if (!second.comments[19].id.endsWith("000000001183"))
+  throw new Error("The second page did not continue immediately before the first page.");
+const maxPage = await scalar(`select public.list_group_social_comments_page('${groupId}', 'metric_entry', '${entryId}', null, null, 999999)`);
+if (maxPage.comments.length !== 50) throw new Error("A caller bypassed the 50-comment page ceiling.");
+let invalidCursorRejected = false;
+try { await db.query(`select public.list_group_social_comments_page('${groupId}', 'metric_entry', '${entryId}', now(), null)`); }
+catch { invalidCursorRejected = true; }
+if (!invalidCursorRejected) throw new Error("An incomplete cursor silently restarted pagination.");
+let oversizedRejected = false;
+try { await db.query(`select * from public.get_group_social_engagement('${groupId}', '${JSON.stringify(Array(21).fill({ type: 'metric_entry', id: entryId }))}', true)`); }
+catch { oversizedRejected = true; }
+if (!oversizedRejected) throw new Error("An oversized summary request was not bounded.");
+await db.exec(`reset role; insert into public.metric_privacy_cache_fences values ('${groupId}', '${ownerId}', '${metricId}', 5); set role authenticated;`);
+if ((await db.query(summarySql)).rows.length)
+  throw new Error("Aggregate counts disclosed engagement for a privacy-fenced log.");
+await db.exec(`reset role; delete from public.metric_privacy_cache_fences; set role authenticated; set request.jwt.claim.sub = '99000000-0000-4000-8000-000000000001';`);
+if ((await db.query(summarySql)).rows.length)
+  throw new Error("An outsider read group engagement counts.");
+await db.exec("reset role; set role anon;");
+let anonymousRejected = false;
+try { await db.query(summarySql); } catch { anonymousRejected = true; }
+if (!anonymousRejected) throw new Error("An anonymous caller could execute the engagement summary RPC.");
+await db.exec("reset role;");
+
 console.log(
-  "Group social PostgreSQL validation passed: canonical identities, challenge-result UUID resolution and tie suppression, prompt exact-event dispatch keys, origin-aware comment and reaction delivery, unchanged-reaction idempotency, forged-badge and tied-leader suppression, collision rejection, and privacy fences.",
+  "Group social PostgreSQL validation passed: canonical identities, prompt dispatch, collision and privacy fences, exact 1,500-reaction/1,203-comment counts, oldest own reaction, equal-time cursor pages, request ceilings, blocked authors, outsider and anonymous access.",
 );

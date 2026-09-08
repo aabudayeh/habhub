@@ -8,7 +8,7 @@ const PREFIX = "metric-rally-onboarding-complete-v1:";
 // place instead of disappearing after the guided-flow release.
 const DRAFT_PREFIX = "metric-rally-onboarding-draft-v3:";
 
-export const ONBOARDING_FLOW_VERSION = 4;
+export const ONBOARDING_FLOW_VERSION = 5;
 
 export type OnboardingMode = "guided" | "classic";
 
@@ -50,6 +50,8 @@ type LegacyOnboardingDraftV3 = Omit<
   showGoalsToday?: boolean;
   showTodosToday?: boolean;
 };
+
+type LegacyOnboardingDraftV4 = Omit<OnboardingDraft, "version"> & { version: 4 };
 
 function key(accountId: string) {
   return `${PREFIX}${accountId}`;
@@ -94,7 +96,8 @@ export async function readOnboardingDraft(accountId: string) {
   try {
     const draft = JSON.parse(saved) as
       | OnboardingDraft
-      | LegacyOnboardingDraftV3;
+      | LegacyOnboardingDraftV3
+      | LegacyOnboardingDraftV4;
     if (draft.version === ONBOARDING_FLOW_VERSION)
       return {
         ...draft,
@@ -102,13 +105,14 @@ export async function readOnboardingDraft(accountId: string) {
           draft.healthHistoryDays,
         ),
       } satisfies OnboardingDraft;
-    if (draft.version === 3) {
+    if (draft.version === 3 || draft.version === 4) {
       return {
         ...draft,
         version: ONBOARDING_FLOW_VERSION,
         // Version 3 was the original five-page setup, now offered as the
         // familiar secondary path.
         onboardingMode: draft.onboardingMode ?? "classic",
+        step: draft.onboardingMode === "guided" ? 0 : draft.step,
         showGoalsToday: draft.showGoalsToday ?? true,
         showTodosToday: draft.showTodosToday ?? true,
         healthHistoryDays: normalizeHealthHistoryDays(

@@ -1180,7 +1180,7 @@ function LogRow({
                   item.userId === state.currentUserId &&
                   item.reaction === reaction,
               );
-              const count = reactions.filter(
+              const count = (targetKey ? social.summariesByTarget.get(targetKey)?.reactionCounts[reaction] : undefined) ?? reactions.filter(
                 (item) => item.reaction === reaction,
               ).length;
               return (

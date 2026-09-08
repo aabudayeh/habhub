@@ -36,6 +36,11 @@ const webShellStyles = `
     overscroll-behavior: none;
   }
 
+  #root :is(button, a, input, textarea, [role="button"], [role="tab"], [role="checkbox"], [role="radio"]):focus-visible {
+    outline: 3px solid #2F6FED;
+    outline-offset: 3px;
+  }
+
   #root {
     position: relative;
     isolation: isolate;

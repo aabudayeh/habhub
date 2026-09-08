@@ -10,9 +10,11 @@ const sourceExtensions = new Set([".ts", ".tsx"]);
 
 const translatedProps = new Map([
   ["Button", new Set(["label", "accessibilityLabel", "accessibilityHint"])],
+  ["CoachButton", new Set(["label", "accessibilityLabel", "accessibilityHint"])],
   ["Chip", new Set(["label", "accessibilityLabel", "accessibilityHint"])],
   ["IconButton", new Set(["label", "accessibilityLabel", "accessibilityHint"])],
   ["PageHeader", new Set(["eyebrow", "title", "subtitle"])],
+  ["ModeChoice", new Set(["title", "copy", "badge"])],
   ["SectionHeader", new Set(["title"])],
   ["SelectionMenu", new Set(["title", "emptyLabel"])],
   ["MetricSelector", new Set(["title", "emptyLabel"])],
@@ -327,6 +329,17 @@ function scanUiFile(file, found, pathErrors) {
       relativeFile.startsWith("src/notifications/") ||
       relativeFile === "src/cloud/groupCloud.ts";
     const badgeGenerator = relativeFile === "src/domain/badges.ts";
+
+    if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === "t" &&
+      node.arguments[0]
+    ) {
+      for (const value of stringsFromExpression(node.arguments[0])) {
+        addCopy(found, value, file, node.arguments[0], "t.literal");
+      }
+    }
 
     if (
       badgeGenerator &&

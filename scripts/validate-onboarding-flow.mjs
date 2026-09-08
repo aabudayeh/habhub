@@ -2,10 +2,38 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 
 import {
+  guidedStarterTrackerIds,
+  guidedSuggestedTrackerIds,
   selectedOnboardingHealthDataTypes,
   shouldWaitForOnboardingAuthority,
   syncOnboardingProfileBestEffort,
 } from "../src/domain/onboarding.ts";
+import { adjacentSetupPage, setupPageProgress } from "../src/domain/tutorialUsability.ts";
+
+for (const [mode, pages] of [
+  ["guided", [0]],
+  ["classic", [0, 1, 2, 3, 4]],
+]) {
+  let page = 0;
+  for (const [index, expected] of pages.entries()) {
+    assert.equal(page, expected, `${mode} setup should reach its next intended page`);
+    assert.deepEqual(setupPageProgress(mode, page), { current: index + 1, total: pages.length, optional: false });
+    if (index) assert.equal(adjacentSetupPage(mode, page, -1), pages[index - 1]);
+    page = adjacentSetupPage(mode, page, 1);
+  }
+}
+for (const optionalPage of [2, 3]) {
+  assert.equal(setupPageProgress("guided", optionalPage).optional, true);
+  assert.equal(adjacentSetupPage("guided", optionalPage, 1), 0, "Legacy guided pages return to welcome before live setup");
+  assert.equal(adjacentSetupPage("guided", optionalPage, -1), 0, "Legacy guided pages cannot reopen a form-based guided flow");
+}
+assert.deepEqual(guidedStarterTrackerIds([]), ["steps", "water", "todo_completion"]);
+assert.deepEqual(guidedStarterTrackerIds(["learning"]), ["reading", "study", "water", "todo_completion"]);
+assert.deepEqual(guidedStarterTrackerIds(["unknown"]), guidedStarterTrackerIds([]));
+const allGuidedGoals = ["weight", "activity", "gym", "learning", "health", "nutrition", "friends"];
+assert.equal(new Set(guidedStarterTrackerIds(allGuidedGoals)).size, guidedStarterTrackerIds(allGuidedGoals).length);
+assert.ok(guidedStarterTrackerIds(allGuidedGoals).length <= 6, "Live setup starts with at most five visible trackers plus To-Dos");
+assert.ok(guidedSuggestedTrackerIds(allGuidedGoals).length <= 10);
 
 assert.deepEqual(
   selectedOnboardingHealthDataTypes(
@@ -45,16 +73,16 @@ const onboardingTranslationSource = fs.readFileSync(
 );
 
 assert.match(
-  rootSource,
-  /\(auth\.status === "signedIn" \|\| auth\.status === "demo"\) &&[\s\S]{0,80}onboardingDone &&[\s\S]{0,80}rootSegment === "onboarding"/,
-  "Completed demo/no-cloud onboarding must leave /onboarding before the tutorial sandbox mounts.",
+  source,
+  /if \(completionRoute\) return <Redirect href=\{completionRoute as never\} \/>/,
+  "Onboarding must own its post-persistence redirect for demo and signed-in accounts.",
 );
 
 assert.match(source, /useState<0 \| 1 \| 2 \| 3 \| 4>\(0\)/);
 assert.match(source, /useState<OnboardingMode \| null>\([\s\S]{0,40}null/);
 assert.match(source, /WELCOME TO HABHUB/);
 assert.match(source, /title="Guided setup"/);
-assert.match(source, /title="Quick setup"/);
+assert.match(source, /title="Classic setup"/);
 assert.match(source, /badge="RECOMMENDED"/);
 assert.match(source, /chooseOnboardingMode\("guided"\)/);
 assert.match(source, /chooseOnboardingMode\("classic"\)/);
@@ -65,11 +93,11 @@ assert.doesNotMatch(
 );
 assert.match(
   source,
-  /function chooseOnboardingMode\(mode: OnboardingMode\)[\s\S]{0,120}setStartShortTour\(mode === "guided"\)/,
+  /function chooseOnboardingMode\(mode: OnboardingMode\)[\s\S]{0,180}setStartShortTour\(mode === "guided"\)/,
   "Guided setup must recommend the tutorial while classic setup keeps it optional.",
 );
-assert.match(source, /\{step \+ 1\}\/5/);
-assert.match(source, /ProgressBar progress=\{\(step \+ 1\) \/ 5\}/);
+assert.match(source, /setupPageProgress\(onboardingMode, step\)/);
+assert.match(source, /ProgressBar progress=\{setupProgress\.current \/ setupProgress\.total\}/);
 for (const [step, title] of [
   [0, "What matters to you?"],
   [1, "Your starter dashboard"],
@@ -84,7 +112,12 @@ for (const [step, title] of [
   );
 }
 assert.match(source, /if \(step === 4\)[\s\S]*?await finish\(\)/);
-assert.match(source, /label=\{step === 4 \? "Start using HabHub" : "Continue"\}/);
+assert.match(source, /label=\{onboardingMode === "guided" \? "Make Today mine" : step === 4 \? "Start using HabHub" : "Continue"\}/);
+assert.match(source, /if \(onboardingMode === "guided"\) \{\s*await beginLiveSetup\(\);\s*return;/,
+  "Guided welcome enters the live app directly, not the classic dashboard/profile forms");
+assert.match(source, /completeOnboarding\(false, "\/", \{ liveGuided: true, skipAllTutorials \}\)/);
+assert.match(source, /if \(preserveExisting\)[\s\S]{0,500}addMetrics\(missing\)/,
+  "Reopened guided setup must preserve existing catalogs and history");
 assert.doesNotMatch(source, /label="Finish with this setup"/);
 assert.match(
   onboardingTranslationSource,
@@ -210,8 +243,11 @@ assert.match(
   /updateSettings\(\{[\s\S]*?showGoalsToday,[\s\S]*?showTodosToday,[\s\S]*?defaultLandingPage: landingPage/,
   "Today visibility choices must be committed with the rest of onboarding settings.",
 );
-assert.match(source, /tutorialGuideId: shortTour \? "essential" : undefined/);
-assert.match(source, /tutorialComplete: !shortTour/);
+assert.match(source, /tutorialGuideId: startPreview \? "essential" : undefined/);
+assert.match(source, /tutorialComplete: !startPreview/);
+assert.match(source, /shortTour && !skipAllTutorials && !options\?\.liveGuided/);
+assert.match(source, /guidedSetupStep: options\?\.liveGuided && !skipAllTutorials \? "trackers" : "complete"/);
+assert.match(source, /accessibilityLabel="Skip all tutorials"/);
 assert.match(source, /onboardingVersion: ONBOARDING_FLOW_VERSION/);
 assert.match(source, /const name = saveDisplayNameLocally\(\)/);
 assert.match(
@@ -259,7 +295,8 @@ assert.match(
 
 assert.match(
   source,
-  /const DEFAULT_STARTER_TRACKER_IDS = \[[\s\S]*?"steps"[\s\S]*?"exercise"[\s\S]*?"food"[\s\S]*?"deficit"[\s\S]*?"weekly_deficit_balance"[\s\S]*?"todo_completion"[\s\S]*?"workout"[\s\S]*?"water"[\s\S]*?"reading"[\s\S]*?"study"[\s\S]*?"work"/,
+  /const DEFAULT_STARTER_TRACKER_IDS = \[\s*"steps",\s*"water",\s*"todo_completion",\s*\]/,
+  "New users should receive a small starter dashboard; goal-specific trackers are added only by their choices",
 );
 assert.doesNotMatch(source, /A balanced setup is already selected/);
 assert.doesNotMatch(source, /Fine-tune a priority/);
@@ -289,7 +326,7 @@ assert.match(storageSource, /goalTargets\?: Record<string, string>/);
 assert.match(source, /Tap a tracker to learn what it records/);
 assert.match(source, /onShowInfo=\{\(\) => showTrackerInfo\(item\)\}/);
 assert.doesNotMatch(source, /numberOfLines=\{1\}[\s\S]{0,120}metricName/);
-assert.match(source, /width < 360[\s\S]*?\? "100%"/);
+assert.match(source, /width < 620[\s\S]*?\? "100%"/);
 assert.doesNotMatch(
   source.match(/gym: \[([^\]]+)\]/)?.[1] ?? "",
   /gym_completed|gym_duration|gym_total_volume/,
@@ -329,8 +366,14 @@ assert.ok(
     routeIndex >= 0,
   "Configured data, completion marker, and cleared draft must be durable before navigation",
 );
+assert.match(source, /if \(state\.settings\.onboardingComplete && !finishing\)/,
+  "Completed-entry redirect must leave the active finish transaction mounted through its final flush");
+assert.doesNotMatch(rootSource, /onboardingDone\s*&&\s*rootSegment === "onboarding"/,
+  "Root navigation must not unmount onboarding while its completion snapshot is still writing");
+assert.match(tutorialContextSource, /!state\.settings\.onboardingComplete \|\| pathname === "\/onboarding"/,
+  "Automatic preview must wait for onboarding to finish its durable handoff and leave its route");
 
-assert.match(storageSource, /ONBOARDING_FLOW_VERSION = 4/);
+assert.match(storageSource, /ONBOARDING_FLOW_VERSION = 5/);
 assert.match(storageSource, /DRAFT_PREFIX = "metric-rally-onboarding-draft-v3:"/);
 assert.match(storageSource, /export type OnboardingMode = "guided" \| "classic"/);
 assert.match(storageSource, /onboardingMode: OnboardingMode/);
@@ -338,6 +381,9 @@ assert.match(storageSource, /showGoalsToday: boolean/);
 assert.match(storageSource, /showTodosToday: boolean/);
 assert.match(storageSource, /step: 0 \| 1 \| 2 \| 3 \| 4/);
 assert.match(storageSource, /draft\.version === ONBOARDING_FLOW_VERSION/);
+assert.match(storageSource, /draft\.version === 3 \|\| draft\.version === 4/);
+assert.match(storageSource, /step: draft\.onboardingMode === "guided" \? 0 : draft\.step/,
+  "Old guided drafts must enter live setup while classic drafts retain their page");
 assert.match(
   storageSource,
   /draft\.version === 3[\s\S]*?onboardingMode: draft\.onboardingMode \?\? "classic"[\s\S]*?showGoalsToday: draft\.showGoalsToday \?\? true[\s\S]*?showTodosToday: draft\.showTodosToday \?\? true/,

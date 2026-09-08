@@ -139,6 +139,10 @@ export default function PrivacyScreen() {
         The deleted account is removed from surviving challenge rosters, and
         other members&apos; private sync snapshots are scrubbed and revision-invalidated
         so an older offline copy cannot restore the deleted member identity.
+        Restricted hashed photo-ownership markers can remain for the lifetime
+        of a surviving group to prevent a deleted discussion being reassigned
+        to another person. These pseudonymous security markers are not public
+        and contain no images, captions or health values.
         A report filed by the deleting account is normally removed after its
         service-operator review finishes. If review is still queued, HabHub
         removes the reporter account identifier but retains the report reason,

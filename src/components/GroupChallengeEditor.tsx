@@ -3,7 +3,6 @@ import * as ImagePicker from "expo-image-picker";
 import React, { useEffect, useMemo, useState } from "react";
 import {
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -17,6 +16,7 @@ import {
   ChallengeVisual,
 } from "@/src/components/ChallengeVisual";
 import { SelectionMenu } from "@/src/components/SelectionMenu";
+import { TutorialModal as Modal } from "@/src/components/TutorialModal";
 import { Avatar } from "@/src/components/ui";
 import { SaveGroupChallengeInput } from "@/src/cloud/groupChallenges";
 import { dateKey, dateWithOffsetFrom } from "@/src/domain/date";

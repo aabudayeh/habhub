@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { Buffer } from "node:buffer";
+import { stripTypeScriptTypes } from "node:module";
+import "./validate-push-fanout.mjs";
 
 import {
   assertPushDeliveryComplete,
@@ -88,6 +91,73 @@ const challengeRankMigration = read(
 const durablePushWorker = read(
   "supabase/functions/challenge-notifications/index.ts",
 );
+
+// Exercise the production preference and recipient functions without starting
+// Deno.serve or contacting a real account. This compiles repository source,
+// never user formulas or user-supplied JavaScript.
+const reminderPolicyModule = stripTypeScriptTypes([
+  edge.slice(edge.indexOf("const PUSH_QUERY_PAGE_SIZE"), edge.indexOf("Deno.serve(")),
+  edge.slice(edge.indexOf("async function canonicalRecipients("), edge.indexOf("async function markCanonicalEventAccepted(")),
+  edge.slice(edge.indexOf("function preferenceAllowed("), edge.indexOf("function challengePushCopy(")),
+  edge.slice(edge.indexOf("function objectRecord("), edge.indexOf("function changedStaleRegistrationCount(")),
+  "export { preferenceAllowed, canonicalRecipients };",
+].join("\n"));
+const { preferenceAllowed: edgePreferenceAllowed, canonicalRecipients: edgeRecipients } =
+  await import(`data:text/javascript;base64,${Buffer.from(reminderPolicyModule).toString("base64")}`);
+const reminderPolicyEvent = {
+  category: "metric", eventType: "group_schedule_reminder", groupId: "group-1",
+  eventKey: "reminder-1", dispatcherId: "creator", audience: "group_including_sender", data: {},
+};
+const reminderPolicy = (value, extra = {}) => ({
+  ...extra, groupPreferencesByGroup: { "group-1": {
+    scheduleReminders: value, trackerUpdates: false, workspaceUpdates: false, memberIds: [],
+  } },
+});
+for (const value of [undefined, null, false, "true", 1])
+  assert.equal(edgePreferenceAllowed(reminderPolicy(value), reminderPolicyEvent), false,
+    "shared event reminders require explicit boolean opt-in");
+assert.equal(edgePreferenceAllowed(reminderPolicy(true), reminderPolicyEvent), true,
+  "calendar reminders are independent of tracker/workspace/member filters");
+assert.equal(edgePreferenceAllowed(reminderPolicy(true, { pushEnabled: false }), reminderPolicyEvent), false);
+assert.equal(edgePreferenceAllowed(reminderPolicy(true, { mutedGroupIds: ["group-1"] }), reminderPolicyEvent), false);
+assert.equal(edgePreferenceAllowed({ groupPreferencesByGroup: { "group-1": { scheduleReminders: true, enabled: false } } }, reminderPolicyEvent), false);
+const reminderRows = {
+  group_members: ["creator", "member", "departed"].map((user_id) => ({ group_id: "group-1", user_id, status: user_id === "departed" ? "left" : "active", role: "member" })),
+  group_notification_events: ["creator", "member", "departed"].map((recipient_id) => ({ group_id: "group-1", event_key: "reminder-1", event_type: "group_schedule_reminder", recipient_id })),
+  user_snapshots: ["creator", "member", "departed"].map((user_id) => ({ user_id, notifications: reminderPolicy(true) })),
+  user_blocks: [],
+};
+const reminderAdmin = { from(table) {
+  let rows = reminderRows[table];
+  const query = {
+    select() { return query; },
+    eq(key, value) { rows = rows.filter((row) => row[key] === value); return query; },
+    neq(key, value) { rows = rows.filter((row) => row[key] !== value); return query; },
+    in(key, values) { rows = rows.filter((row) => values.includes(row[key])); return query; },
+    or() { return query; },
+    order(key) { rows = [...rows].sort((a, b) => String(a[key]).localeCompare(String(b[key]))); return query; },
+    limit(count) { rows = rows.slice(0, count); return query; },
+    gt(key, value) { rows = rows.filter((row) => row[key] > value); return query; },
+    abortSignal() { return query; },
+    then(resolve, reject) { return Promise.resolve({ data: rows, error: null }).then(resolve, reject); },
+  };
+  return query;
+} };
+assert.deepEqual(await edgeRecipients(reminderAdmin, reminderPolicyEvent, "creator"), ["creator", "member"],
+  "creator must receive their own reminder and departed members must not");
+reminderRows.user_snapshots[1].notifications = reminderPolicy(false);
+assert.deepEqual(await edgeRecipients(reminderAdmin, reminderPolicyEvent, "creator"), ["creator"],
+  "current account opt-out must override an old staged reminder/token");
+reminderRows.user_snapshots[1].notifications = reminderPolicy(true);
+reminderRows.user_blocks = [{ blocker_id: "member", blocked_user_id: "creator" }];
+assert.deepEqual(await edgeRecipients(reminderAdmin, reminderPolicyEvent, "creator"), ["creator"],
+  "block after staging must suppress reminder recipient");
+assert.ok(edge.indexOf('admin.rpc("group_schedule_reminder_is_current"') < edge.indexOf('const { data: claimed, error: claimError }'),
+  "revalidate live reminder identity/eligibility before claiming a pending event");
+assert.match(durablePushWorker, /scheduleOnly[\s\S]{0,400}stage_due_group_schedule_reminders/);
+assert.match(durablePushWorker, /if \(scheduleOnly\)[\s\S]{0,100}\.eq\("event_type", "group_schedule_reminder"\)/);
+assert.match(durablePushWorker, /\.eq\("event_type", "group_schedule_reminder"\)[\s\S]{0,90}\.order\("attempt_count", \{ ascending: true \}\)/,
+  "new reminders must not starve behind repeatedly unavailable devices");
 
 assert.doesNotThrow(() => assertPushDeliveryComplete({ sent: 2 }));
 const stagedMetricAttachment = {
@@ -334,7 +404,7 @@ assert.ok(
 assert.equal(
   (edge.match(/\.from\("group_member_aliases"\)/g) ?? []).length,
   1,
-  "recipient nicknames must be loaded in one bounded query rather than once per push target",
+  "recipient nicknames use one scoped query shape, chunked per recipient batch rather than per push target",
 );
 const recipientAliasResolver = edge.slice(
   edge.indexOf("async function recipientChatNicknames"),
@@ -342,7 +412,7 @@ const recipientAliasResolver = edge.slice(
 );
 assert.match(
   recipientAliasResolver,
-  /\.eq\("group_id", event\.groupId\)[\s\S]{0,180}\.eq\("subject_user_id", senderId\)[\s\S]{0,180}\.in\("owner_user_id", recipientIds\)/,
+  /readPushRecipientChunks\(recipientIds,[\s\S]{0,500}\.eq\("group_id", event\.groupId\)[\s\S]{0,180}\.eq\("subject_user_id", senderId\)[\s\S]{0,180}\.in\("owner_user_id", ids\)/,
   "chat pushes must resolve each recipient's private group-scoped alias",
 );
 assert.match(
@@ -624,12 +694,16 @@ assert.match(edge, /priorAcceptances/);
 assert.match(edge, /alreadyAccepted/);
 assert.match(edge, /acceptedTickets/);
 const acceptanceRead = edge.slice(
-  edge.indexOf("const { data: priorAcceptances"),
+  edge.indexOf("const priorAcceptances ="),
   edge.indexOf("const expoEligible"),
 );
-assert.match(acceptanceRead, /\.select\("user_id, token"\)/);
-assert.match(acceptanceRead, /\.in\([\s\S]{0,40}"user_id"/);
-assert.match(acceptanceRead, /\.in\([\s\S]{0,40}"token"/);
+assert.match(acceptanceRead, /loadPushAcceptances/);
+const acceptanceLoader = edge.slice(edge.indexOf("async function loadPushAcceptances"), edge.indexOf("Deno.serve("));
+assert.match(acceptanceLoader, /\.select\("user_id, token"\)/);
+assert.match(acceptanceLoader, /\.in\("user_id", ids\)/);
+assert.match(acceptanceLoader, /\["user_id", "token"\]/);
+assert.doesNotMatch(acceptanceLoader, /\.in\("token"/,
+  "Web Push bearer endpoints must not be concatenated into oversized URL lists");
 assert.match(
   acceptanceRead,
   /`\$\{item\.user_id as string\}:\$\{item\.token as string\}`[\s\S]{0,160}`\$\{item\.userId\}:\$\{item\.token\}`/,
@@ -1550,7 +1624,7 @@ assert.match(
 assert.match(alertDomain, /socialReactionsEnabled/);
 assert.match(
   alertDomain,
-  /const groupEventsEnabled = groupPreferences\?\.enabled !== false[\s\S]{0,180}groupEventsEnabled &&[\s\S]{0,180}groupPreferences\?\.socialReactions \?\?[\s\S]{0,100}notifications\.socialReactions/,
+  /groupPreferencesByGroup\?\.\[event\.groupId\][\s\S]{0,100}if \(groupPreferences\?\.enabled === false\) return false;[\s\S]{0,100}groupPreferences\?\.socialReactions \?\? notifications\.socialReactions/,
   "the account-wide Alerts feed must honor both the group master switch and the effective reaction preference",
 );
 for (const challengePreference of [
@@ -1668,6 +1742,47 @@ const attachmentAlertState = {
 const renderedAttachmentAlert = buildAlerts(attachmentAlertState).find(
   (alert) => alert.id === "message-attachment-alert-fixture",
 );
+const multiGroupA = attachmentAlertState.group;
+const multiGroupB = { ...multiGroupA, id: "group-2", name: "Study friends" };
+const multiGroupState = {
+  ...attachmentAlertState,
+  groups: [multiGroupA, multiGroupB],
+  messages: [],
+  settings: {
+    ...attachmentAlertState.settings,
+    memberNicknamesByGroup: { "group-1": { "member-1": "Workout buddy" }, "group-2": { "member-1": "Study buddy" } },
+    notifications: {
+      ...attachmentAlertState.settings.notifications,
+      groupPreferencesByGroup: {
+        "group-1": { enabled: false, scheduleReminders: false, todoUpdates: false, workspaceUpdates: false },
+        "group-2": { enabled: true, scheduleReminders: true, todoUpdates: true, workspaceUpdates: true },
+      },
+    },
+  },
+};
+const multiGroupEvents = ["group-1", "group-2"].flatMap((groupId) =>
+  ["group_schedule_reminder", "group_note_updated", "group_todo_completed", "social_reaction", "challenge_accepted"].map((kind) => ({
+    id: `${groupId}:${kind}`, groupId, kind, recipientId: "member-1", actorId: "member-1",
+    eventKey: `${groupId}:${kind}`, createdAt: "2026-09-08T12:00:00.000Z",
+  })),
+);
+const canonicalAlertsFor = (group) => buildAlerts({ ...multiGroupState, group }, multiGroupEvents)
+  .filter((alert) => alert.id.startsWith("group-notification-"));
+const multiGroupAlerts = canonicalAlertsFor(multiGroupA);
+assert.equal(multiGroupAlerts.length, 5, "An open muted group must not suppress other groups' account updates");
+assert.ok(multiGroupAlerts.every((alert) => alert.groupId === "group-2"));
+assert.deepEqual(canonicalAlertsFor(multiGroupB), multiGroupAlerts, "Switching the open group must not change account-wide event preferences or labels");
+assert.match(multiGroupAlerts.find((alert) => alert.category === "workspace").detail, /Study buddy/, "Actor aliases must belong to the event's group");
+const reminderOffState = {
+  ...multiGroupState,
+  settings: { ...multiGroupState.settings, notifications: { ...multiGroupState.settings.notifications,
+    groupPreferencesByGroup: { ...multiGroupState.settings.notifications.groupPreferencesByGroup,
+      "group-2": { enabled: true, scheduleReminders: false },
+    },
+  } },
+};
+assert.equal(buildAlerts(reminderOffState, multiGroupEvents).some((alert) => alert.id.endsWith("group_schedule_reminder")), false);
+assert.match(alerts, /state\.groups\.some\(\(group\) => isCloudGroupId\(group\.id\)\)/, "Account updates must remain available while personal setup is the open group");
 assert.ok(renderedAttachmentAlert);
 assert.equal(renderedAttachmentAlert.category, "message");
 assert.equal(renderedAttachmentAlert.detail.includes("habhub://"), false);

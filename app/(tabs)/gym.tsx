@@ -3995,7 +3995,14 @@ function GymScreen() {
               {sessionDetailsOpen ? (
                 <>
               {plans.length ? (
-                <TutorialTarget id="workout-templates">
+                <TutorialTarget id="workout-templates" onTutorialActivate={() => {
+                  if (!tutorialSandbox) return;
+                  const plan = plans.find((item) => item.name.trim().toLocaleLowerCase() === "full-body strength");
+                  if (!plan) return;
+                  loadPlan(plan);
+                  setTemplatesOpen(false);
+                  tutorial.reportEvent({ actionId: "tutorial.workout.choose-template", scope: "isolated-preview" });
+                }}>
                 <View
                   style={[
                     styles.templateMenu,
@@ -4314,9 +4321,11 @@ function GymScreen() {
                 exerciseEditMode ? (
                   <Pressable
                     onPress={() => setExerciseEditMode(false)}
+                    accessibilityRole="button"
+                    accessibilityLabel={t("Done")}
                     style={[styles.exerciseDone, { backgroundColor: accent }]}
                   >
-                    <Text style={styles.exerciseDoneText}>Done</Text>
+                    <Text preserveColor style={[styles.exerciseDoneText, { color: readableTextColor(accent) }]}>Done</Text>
                   </Pressable>
                 ) : (
                   <View style={styles.summaryActions}>
@@ -4548,7 +4557,9 @@ function GymScreen() {
                         >
                           <View style={styles.setRow}>
                             {exerciseIndex === 0 && setIndex === 0 ? (
-                              <TutorialTarget id="workout-exercises">
+                              <TutorialTarget id="workout-exercises" onTutorialActivate={() => {
+                                if (tutorialSandbox && !set.completed) toggleSet(exercise.id, set);
+                              }}>
                                 <Pressable onPress={() => toggleSet(exercise.id, set)}>
                                   <Ionicons
                                     name={set.completed ? "checkmark-circle" : "ellipse-outline"}
@@ -5439,9 +5450,11 @@ function GymScreen() {
                 performanceEditMode ? (
                   <Pressable
                     onPress={() => setPerformanceEditMode(false)}
+                    accessibilityRole="button"
+                    accessibilityLabel={t("Done")}
                     style={[styles.exerciseDone, { backgroundColor: accent }]}
                   >
-                    <Text style={styles.exerciseDoneText}>Done</Text>
+                    <Text preserveColor style={[styles.exerciseDoneText, { color: readableTextColor(accent) }]}>Done</Text>
                   </Pressable>
                 ) : (
                   <Text style={[styles.summary, { color: accent }]}>
@@ -6206,16 +6219,16 @@ const styles = StyleSheet.create({
   },
   completeAllText: { fontSize: 7, fontWeight: "900" },
   exerciseDone: {
-    minHeight: 30,
+    minHeight: 44,
+    minWidth: 62,
     borderRadius: 9,
     paddingHorizontal: 12,
     alignItems: "center",
     justifyContent: "center",
   },
   exerciseDoneText: {
-    color: palette.ink,
-    fontSize: 8,
-    fontWeight: "900",
+    fontSize: 12,
+    fontWeight: "700",
   },
   exerciseDragHandle: {
     width: 30,

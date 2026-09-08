@@ -63,7 +63,9 @@ export function tutorialCloseSettings(
 export function tutorialGuideTrigger(settings: {
   tutorialComplete: boolean;
   tutorialGuideId?: string;
+  tutorialPromptsDisabled?: boolean;
 }) {
+  if (settings.tutorialPromptsDisabled) return undefined;
   return (
     settings.tutorialGuideId ??
     (!settings.tutorialComplete ? "essential" : undefined)

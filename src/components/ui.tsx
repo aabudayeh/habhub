@@ -487,6 +487,7 @@ export function IconButton({
     <Pressable
       accessibilityLabel={translate ? t(label) : label}
       accessibilityRole="button"
+      hitSlop={2}
       onPress={onPress}
       style={({ pressed }) => [
         styles.iconButton,
@@ -807,14 +808,14 @@ const styles = StyleSheet.create({
     ...typography.pageTitle,
     letterSpacing: -0.35,
   },
-  titleCompact: { fontSize: 18, lineHeight: 22, letterSpacing: -0.25 },
+  titleCompact: { fontSize: 20, lineHeight: 25, letterSpacing: -0.25 },
   subtitle: {
     color: palette.muted,
     fontSize: 13,
     lineHeight: 19,
     marginTop: 5,
   },
-  subtitleCompact: { fontSize: 10, lineHeight: 14, marginTop: 2 },
+  subtitleCompact: { fontSize: 12, lineHeight: 18, marginTop: 3 },
   sectionHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -838,9 +839,9 @@ const styles = StyleSheet.create({
   },
   cardCompact: { borderRadius: 17, padding: 12 },
   iconButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 15,
     backgroundColor: palette.card,
     borderWidth: 1,
     borderColor: palette.border,
@@ -861,9 +862,9 @@ const styles = StyleSheet.create({
     gap: 8,
     borderWidth: 1,
   },
-  buttonCompact: { minHeight: 40, paddingHorizontal: 13, borderRadius: 12 },
+  buttonCompact: { minHeight: 44, paddingHorizontal: 13, borderRadius: 12 },
   buttonSmall: {
-    minHeight: 34,
+    minHeight: 40,
     paddingHorizontal: 8,
     paddingVertical: 5,
     borderRadius: 10,
@@ -879,13 +880,13 @@ const styles = StyleSheet.create({
   },
   button_ghost: { backgroundColor: "transparent", borderColor: palette.border },
   button_danger: { backgroundColor: "#FFF1F0", borderColor: "#F3C6C3" },
-  buttonText: { color: palette.primary, fontSize: 13, fontWeight: "800" },
-  buttonTextSmall: { fontSize: 11 },
+  buttonText: { color: palette.primary, fontSize: 14, fontWeight: "700" },
+  buttonTextSmall: { fontSize: 12 },
   buttonTextPrimary: { color: palette.white },
   disabled: { opacity: 0.45 },
   pressed: { opacity: 0.72, transform: [{ scale: 0.985 }] },
   chip: {
-    minHeight: 36,
+    minHeight: 40,
     paddingHorizontal: 13,
     borderRadius: 18,
     backgroundColor: palette.card,
@@ -896,14 +897,14 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 6,
   },
-  chipCompact: { minHeight: 30, paddingHorizontal: 10 },
-  chipSmall: { minHeight: 27, paddingHorizontal: 8, paddingVertical: 4 },
+  chipCompact: { minHeight: 36, paddingHorizontal: 10 },
+  chipSmall: { minHeight: 32, paddingHorizontal: 9, paddingVertical: 5 },
   chipSelected: {
     backgroundColor: palette.primarySoft,
     borderColor: "#B9DFC9",
   },
-  chipText: { color: palette.muted, fontSize: 11, fontWeight: "800" },
-  chipTextSmall: { fontSize: 9, fontWeight: "800" },
+  chipText: { color: palette.muted, fontSize: 12, fontWeight: "600" },
+  chipTextSmall: { fontSize: 11, fontWeight: "600" },
   chipTextSelected: { color: palette.primary },
   avatar: {
     alignItems: "center",

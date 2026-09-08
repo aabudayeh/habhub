@@ -1689,7 +1689,7 @@ function GoalMapProgress({
                         ? `${bloodPressure.averageLabel} mmHg avg`
                         : metric.dataType === "boolean"
                         ? `${completion}% completion avg`
-                        : `${formatMetricValue(metric, period.average)} avg`}
+                        : `${formatMetricValue(metric, period.average, locale)} avg`}
                       {metric.dataType !== "boolean"
                         ? bloodPressure
                           ? ` · ${period.loggedDates.length} logged · ${bloodPressure.offsetLabel}`
@@ -1715,6 +1715,7 @@ function GoalMapProgress({
                               state.currentUserId,
                               today,
                             ),
+                            locale,
                           )}
                       {" · Best "}
                       {
@@ -2388,7 +2389,7 @@ function MetricSummary({
               ? `${measured.length ? `${measured.length} logged days` : "No entries"} · overall ${Math.round(overall)}/${Math.round(metricOverallAverage(state, bloodPressure.diastolic, state.currentUserId, dates[dates.length - 1]))} mmHg`
             : isBoolean
               ? `${applicable.length ? Math.round((reached / applicable.length) * 100) : 0}% completed in this range`
-              : `${measured.length ? `${measured.length} logged days` : "No entries"} · overall ${formatMetricValue(metric, overall)}`}
+              : `${measured.length ? `${measured.length} logged days` : "No entries"} · overall ${formatMetricValue(metric, overall, locale)}`}
         </Text>
         {weightStats ? (
           <Text numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.82} style={[styles.remaining, { color: colors.ink }]}>

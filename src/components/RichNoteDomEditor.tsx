@@ -35,6 +35,7 @@ import { $patchStyleText, $setBlocksType } from "@lexical/selection";
 import {
   $createParagraphNode,
   $createTextNode,
+  $getRoot,
   $getSelection,
   $isRangeSelection,
   $isTextNode,
@@ -73,6 +74,7 @@ type DomJsonValue =
 export interface RichNoteDomEditorRef extends DOMImperativeFactory {
   setBlock: (...args: DomJsonValue[]) => void;
   toggleInline: (...args: DomJsonValue[]) => void;
+  formatAll: (...args: DomJsonValue[]) => void;
   setTextColor: (...args: DomJsonValue[]) => void;
   insertLink: (...args: DomJsonValue[]) => void;
   replaceHashtag: (...args: DomJsonValue[]) => void;
@@ -252,6 +254,13 @@ function EditorBridge({
         runAtLastSelection(() =>
           editor.dispatchCommand(FORMAT_TEXT_COMMAND, lexicalStyle),
         );
+      },
+      formatAll: (style) => {
+        if (typeof style !== "string" || !["bold", "italic", "strike"].includes(style)) return;
+        editor.update(() => {
+          $getRoot().select(0, $getRoot().getChildrenSize());
+          editor.dispatchCommand(FORMAT_TEXT_COMMAND, style === "strike" ? "strikethrough" : style as TextFormatType);
+        });
       },
       setTextColor: (color) => {
         const nextColor = typeof color === "string" ? color : null;

@@ -60,7 +60,12 @@ export default function Alerts() {
   const unreadBadgeRef = useRef(false);
   const initializedFeedKey = useRef<string | undefined>(undefined);
   const alertScope = scope === "group" ? "group" : "personal";
-  const hasGroup = isCloudGroupId(state.group.id);
+  const hasGroup = alertScope === "group"
+    ? isCloudGroupId(state.group.id)
+    : state.groups.some((group) => isCloudGroupId(group.id));
+  const hasGroupTodos = alertScope === "group"
+    ? state.group.groupTodosEnabled === true
+    : state.groups.some((group) => isCloudGroupId(group.id) && group.groupTodosEnabled === true);
   const feedKey = `${alertScope}:${state.currentUserId}:${state.group.id}`;
   const badgeAnchor = dateKey();
   const badgeChallengeInputs = useBadgeChallengeInputs(
@@ -178,7 +183,8 @@ export default function Alerts() {
             (event.kind === "group_note_created" ||
               event.kind === "group_note_updated" ||
               event.kind === "group_schedule_created" ||
-              event.kind === "group_schedule_updated"),
+              event.kind === "group_schedule_updated" ||
+              event.kind === "group_schedule_reminder"),
         )
         .map((event) => event.id);
     if (targetFilter === "lead")
@@ -423,7 +429,7 @@ export default function Alerts() {
           />
           {unreadCategories.has("lead") ? <View style={styles.filterUnreadDot} /> : null}
         </View> : null}
-        {hasGroup && state.group.groupTodosEnabled === true ? <View style={styles.filterChip}>
+        {hasGroup && hasGroupTodos ? <View style={styles.filterChip}>
           <Chip
             label="Group tasks"
             selected={filter === "todo"}

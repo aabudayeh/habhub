@@ -57,6 +57,7 @@ import {
 import { localizeMetricName } from "@/src/i18n/domain";
 import { useLocale, useLocalization } from "@/src/i18n";
 import { useApp } from "@/src/state/AppProvider";
+import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 import { palette, useAppColors } from "@/src/theme";
 
 const SEGMENTS = 32;
@@ -272,6 +273,7 @@ function StatusBodyFact({
 export default function StatusPage() {
   const { state, updateSettings } = useApp();
   const tutorial = useTutorial();
+  const tutorialSandbox = useTutorialSandboxActive();
   const colors = useAppColors();
   const { t } = useLocalization();
   const locale = useLocale();
@@ -565,7 +567,16 @@ export default function StatusPage() {
               </View>
 
               <TutorialTarget id="status-avatar-source">
-              <TutorialTarget id="status-avatar">
+              <TutorialTarget
+                id="status-avatar"
+                onTutorialActivate={() => {
+                  if (!tutorialSandbox) return;
+                  setAvatarSourceEditorOpen(false);
+                  setAvatarSimulatorOpen(true);
+                  tutorial.reportEvent({ actionId: "tutorial.status.open-simulator", scope: "isolated-preview" });
+                }}
+                onTutorialDeactivate={() => setAvatarSimulatorOpen(false)}
+              >
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={t("Open avatar simulator")}

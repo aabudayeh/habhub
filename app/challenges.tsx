@@ -34,7 +34,7 @@ import {
   Screen,
 } from "@/src/components/ui";
 import { AppText as Text } from "@/src/components/AppText";
-import { LocalizedAlert as Alert, useTranslation } from "@/src/i18n";
+import { LocalizedAlert as Alert, useLocale, useTranslation } from "@/src/i18n";
 import {
   canManageGroupChallenge,
   challengeSettlementKey,
@@ -102,6 +102,7 @@ export default function ChallengesScreen() {
   const { state } = useApp();
   const localDemo = state.group.id === DEFAULT_DEMO_GROUP_ID;
   const t = useTranslation();
+  const locale = useLocale();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const params = useLocalSearchParams<{
@@ -757,15 +758,16 @@ export default function ChallengesScreen() {
           const expanded = expandedId === cardKey;
           const period =
             groupChallengeEndDate(challenge) === challenge.localDate
-              ? friendlyDate(challenge.localDate)
-              : `${friendlyDate(challenge.localDate)} – ${friendlyDate(
+              ? friendlyDate(challenge.localDate, locale)
+              : `${friendlyDate(challenge.localDate, locale)} – ${friendlyDate(
                   groupChallengeEndDate(challenge),
+                  locale,
                 )}`;
           const target =
             challenge.target === undefined
               ? "Highest total wins"
               : metric
-                ? formatMetricValue(metric, challenge.target)
+                ? formatMetricValue(metric, challenge.target, locale)
                 : String(challenge.target);
           const highlighted = highlightedId === cardKey;
           const localRows =
@@ -790,7 +792,7 @@ export default function ChallengesScreen() {
             localViewerStanding?.valueLabel ??
             (cloudViewerStanding?.total !== undefined
               ? metric
-                ? formatMetricValue(metric, cloudViewerStanding.total)
+                ? formatMetricValue(metric, cloudViewerStanding.total, locale)
                 : String(cloudViewerStanding.total)
               : undefined);
           const remoteResultRows = challengeStandings.get(cardKey) ?? [];
@@ -1017,7 +1019,7 @@ export default function ChallengesScreen() {
                             </Text>
                             <Text style={[styles.resultValue, { color: colors.muted }]}>
                               {metric
-                                ? formatMetricValue(metric, row.total)
+                                ? formatMetricValue(metric, row.total, locale)
                                 : String(row.total)}
                             </Text>
                           </View>

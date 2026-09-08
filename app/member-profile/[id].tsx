@@ -490,7 +490,7 @@ const styles = StyleSheet.create({
   joinedMetaValue: { fontSize: 7.5, lineHeight: 11, fontWeight: "700" },
   joinedMetaSeparator: { flexShrink: 0, fontSize: 7.5, lineHeight: 11, fontWeight: "700" },
   sync: { fontSize: 9, marginTop: 6 },
-  safetyCard: { gap: 12, marginBottom: 12 },
+  safetyCard: { gap: 12, marginTop: 12, marginBottom: 12 },
   safetyHeading: { flexDirection: "row", alignItems: "center", gap: 10 },
   safetyIcon: {
     width: 40,

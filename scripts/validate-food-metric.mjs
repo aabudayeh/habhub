@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import "./validate-demo-nutrition.mjs";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 

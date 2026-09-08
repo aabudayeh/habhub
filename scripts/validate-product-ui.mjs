@@ -15,6 +15,8 @@ const status = read("app", "(tabs)", "status.tsx");
 const metricEditor = read("app", "metric-editor.tsx");
 const groupSettings = read("app", "group-settings.tsx");
 const leaderboard = read("app", "(tabs)", "group.tsx");
+const workout = read("app", "(tabs)", "gym.tsx");
+const publicProfile = read("app", "member-profile", "[id].tsx");
 
 const seededToday = seed.indexOf('"index"');
 const seededStatus = seed.indexOf('"status"');
@@ -151,5 +153,14 @@ assert.match(
   /label=\{canManageGroup \? "Group settings" : "Tracker sharing"\}[\s\S]{0,120}router\.navigate\("\/group-settings"/,
   "every active group member must be able to open their authorized Group Settings surface",
 );
+
+assert.match(publicProfile, /safetyCard:\s*\{[^}]*marginTop:\s*12/,
+  "Community safety must be separated from the badge showcase");
+assert.equal((workout.match(/<Text preserveColor style=\{\[styles\.exerciseDoneText, \{ color: readableTextColor\(accent\) \}\]\}>Done<\/Text>/g) ?? []).length, 2,
+  "Both workout editing exits must have a visible, theme-contrasting Done label");
+assert.match(leaderboard, /accessibilityLabel=\{`\$\{t\("View profile"\)\}:[\s\S]{0,240}disabled=\{editing\}[\s\S]{0,220}pathname: "\/member-profile\/\[id\]"/,
+  "Challenge names and avatars must open a member profile outside edit mode");
+assert.match(leaderboard, /!isCloudGroupId\(state\.group\.id\)\s*\? "Local demo data"\s*: row\.member\.lastDataSyncedAt/,
+  "Credential-free demo rankings must not imply that simulated members have failed to sync");
 
 console.log("Product navigation and compact UI validation passed.");

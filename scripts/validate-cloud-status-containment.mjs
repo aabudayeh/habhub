@@ -144,8 +144,13 @@ assert.match(
 );
 assert.match(
   backgroundHealth,
-  /revisionSafeEntriesWithFloors\.map\(\(entry\) => entry\.localDate\)[\s\S]{0,260}pushCloudRecentActivity\([\s\S]{0,120}changedDates/,
+  /revisionSafeEntriesWithFloors\.map\(\(entry\) => entry\.localDate\)/,
   "native background publication must prioritize dates actually changed by its import",
+);
+assert.match(
+  backgroundHealth,
+  /for \(const destination of batch\.groups\)[\s\S]{0,1000}pushCloudRecentActivity\(\s*stateForGroupPublication\(live, group\),\s*2,\s*undefined,\s*changedDates/,
+  "each bounded destination must use the current account state and changed import dates",
 );
 assert.match(
   appProvider,

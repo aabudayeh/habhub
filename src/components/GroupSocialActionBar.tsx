@@ -13,6 +13,39 @@ import { memberDisplayName } from "@/src/domain/members";
 import { relativeTime } from "@/src/domain/date";
 import { useAppColors, useGroupAccent } from "@/src/theme";
 import type { AppState, Member } from "@/src/types";
+import type { GroupSocialSummary } from "@/src/domain/socialEngagement";
+
+export type SocialCommentPageControls = {
+  before?: Pick<GroupSocialComment, "id" | "createdAt">;
+  hasMore: boolean;
+  loading?: boolean;
+  error?: string;
+};
+
+export function GroupSocialCommentPagination({ page, onLoad, inverse = false }: {
+  page?: SocialCommentPageControls;
+  onLoad?: (older: boolean) => void;
+  inverse?: boolean;
+}) {
+  const colors = useAppColors();
+  if (!page || !onLoad) return null;
+  const color = inverse ? "#FFFFFFE8" : colors.primary;
+  return (
+    <View>
+      {page.error ? <Text style={[styles.pageError, { color }]}>{page.error}</Text> : null}
+      <View style={styles.pagination}>
+        {page.before ? <Pressable accessibilityRole="button" disabled={page.loading} onPress={() => onLoad(false)} style={styles.pageButton}>
+          <Ionicons name="refresh-outline" size={14} color={color} />
+          <Text style={[styles.pageLabel, { color }]}>Latest comments</Text>
+        </Pressable> : null}
+        {page.hasMore ? <Pressable accessibilityRole="button" disabled={page.loading} onPress={() => onLoad(true)} style={styles.pageButton}>
+          <Ionicons name="time-outline" size={14} color={color} />
+          <Text style={[styles.pageLabel, { color }]}>{page.loading ? "Loading…" : "Older comments"}</Text>
+        </Pressable> : null}
+      </View>
+    </View>
+  );
+}
 
 const ALL_REACTIONS: GroupSocialReactionKind[] = [
   "heart",
@@ -39,7 +72,10 @@ export function GroupSocialActionBar({
   members,
   state,
   reactions,
+  summary,
   comments = [],
+  commentPage,
+  onLoadCommentPage,
   allowedReactions = ALL_REACTIONS,
   commentsEnabled = true,
   onReact,
@@ -55,7 +91,10 @@ export function GroupSocialActionBar({
   members: readonly Member[];
   state?: AppState;
   reactions: readonly GroupSocialReaction[];
+  summary?: GroupSocialSummary;
   comments?: readonly GroupSocialComment[];
+  commentPage?: SocialCommentPageControls;
+  onLoadCommentPage?: (older: boolean) => void;
   allowedReactions?: readonly GroupSocialReactionKind[];
   commentsEnabled?: boolean;
   onReact: (reaction: GroupSocialReactionKind) => void;
@@ -114,7 +153,7 @@ export function GroupSocialActionBar({
         {allowedReactions.map((reaction) => {
           const active = mine?.reaction === reaction;
           const color = colorFor(reaction, accent);
-          const count = reactions.filter((item) => item.reaction === reaction).length;
+          const count = summary?.reactionCounts[reaction] ?? reactions.filter((item) => item.reaction === reaction).length;
           return (
             <Pressable
               key={reaction}
@@ -150,14 +189,15 @@ export function GroupSocialActionBar({
         {commentsEnabled ? (
           <Pressable
             accessibilityRole="button"
+            accessibilityLabel="Show comments"
             accessibilityState={{ expanded: commentsOpen }}
             {...interactionPressHandlers}
             onPress={() => setCommentsOpen((open) => !open)}
             style={[styles.action, compact && styles.compactAction]}
           >
             <Ionicons name="chatbubble-outline" size={compact ? 13 : 15} color={foreground} />
-            {comments.length ? (
-              <Text translate={false} style={[styles.count, { color: foreground }]}>{comments.length}</Text>
+            {(summary?.commentCount ?? comments.length) ? (
+              <Text translate={false} style={[styles.count, { color: foreground }]}>{summary?.commentCount ?? comments.length}</Text>
             ) : null}
           </Pressable>
         ) : null}
@@ -204,8 +244,9 @@ export function GroupSocialActionBar({
               </View>
             );
           }) : (
-            <Text style={[styles.empty, { color: foreground }]}>No comments yet.</Text>
+            <Text style={[styles.empty, { color: foreground }]}>{commentPage?.before ? "No comments on this page." : "No comments yet."}</Text>
           )}
+          <GroupSocialCommentPagination page={commentPage} onLoad={onLoadCommentPage} inverse={inverse} />
           {onComment ? (
             <View style={styles.composer}>
               <TextInput
@@ -254,4 +295,8 @@ const styles = StyleSheet.create({
   composer: { flexDirection: "row", alignItems: "center", gap: 6 },
   input: { flex: 1, minHeight: 38, borderWidth: 1, borderRadius: 12, paddingHorizontal: 10, fontSize: 10 },
   send: { width: 38, height: 38, borderRadius: 12, alignItems: "center", justifyContent: "center" },
+  pagination: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 },
+  pageButton: { minHeight: 40, flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 5 },
+  pageLabel: { fontSize: 11, fontWeight: "700" },
+  pageError: { fontSize: 11, lineHeight: 16, paddingVertical: 5 },
 });

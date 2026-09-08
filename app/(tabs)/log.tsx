@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
+import { LiveSetupLogHint } from "@/src/components/LiveSetupCoach";
 import { Image } from "expo-image";
 import * as ImagePicker from "expo-image-picker";
 import { router, useLocalSearchParams } from "expo-router";
@@ -1257,6 +1258,7 @@ function LogScreen() {
           </Pressable>
         }
       />
+      <LiveSetupLogHint onContinue={(work) => { if (!requestDraftExitRef.current(work)) work(); }} />
       <View style={styles.selector}>
         <MetricSelector
           title={selected ? "Change tracker" : "What are you adding?"}
@@ -1315,7 +1317,13 @@ function LogScreen() {
                   : formatMetricValue(selected, numericToday)}
               </Text>
             </View>
-            <TutorialTarget id="log-visibility">
+            <TutorialTarget id="log-visibility" onTutorialActivate={() => {
+              if (!tutorialSandbox) return;
+              setPrivacyMenuOpen(true);
+              setVisibility("status");
+              updateMetric(selected.id, { defaultVisibility: "status" });
+              tutorial.reportEvent({ actionId: "tutorial.log.visibility", scope: "isolated-preview" });
+            }} onTutorialDeactivate={() => setPrivacyMenuOpen(false)}>
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel="Who can see it?"

@@ -97,10 +97,10 @@ export function SelectionMenu({
         accessibilityRole="button"
         accessibilityLabel={t(title)}
         accessibilityHint={t("Open selection")}
-        accessibilityState={{ disabled }}
+        accessibilityState={{ disabled, expanded: open }}
         disabled={disabled}
         hitSlop={compactIcon ? 6 : undefined}
-        onPress={() => setOpen(true)}
+        onPress={() => { setQuery(""); setOpen(true); }}
         style={[
           compactIcon ? styles.compactTrigger : styles.trigger,
           { backgroundColor: colors.card, borderColor: colors.border },
@@ -293,17 +293,17 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   copy: { flex: 1, minWidth: 0 },
-  title: { fontSize: 10, fontWeight: "900" },
-  summary: { fontSize: 8, fontWeight: "700", marginTop: 2 },
+  title: { fontSize: 13, fontWeight: "700" },
+  summary: { fontSize: 11, fontWeight: "400", marginTop: 3 },
   backdrop: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,.42)",
     justifyContent: "flex-end",
     padding: 12,
   },
-  sheet: { maxHeight: "82%", borderRadius: 22, padding: 14, gap: 7 },
+  sheet: { width: "100%", maxWidth: 560, alignSelf: "center", maxHeight: "82%", borderRadius: 24, padding: 18, gap: 10 },
   handle: { width: 36, height: 4, borderRadius: 3, alignSelf: "center" },
-  sheetTitle: { fontSize: 14, fontWeight: "900" },
+  sheetTitle: { fontSize: 18, fontWeight: "700" },
   search: {
     minHeight: 40,
     borderWidth: 1,
@@ -313,7 +313,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 7,
   },
-  searchInput: { flex: 1, minHeight: 38, fontSize: 10 },
+  searchInput: { flex: 1, minHeight: 44, fontSize: 14 },
   bulk: {
     minHeight: 30,
     flexDirection: "row",
@@ -321,12 +321,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 18,
   },
-  bulkText: { fontSize: 9, fontWeight: "900" },
+  bulkText: { fontSize: 12, fontWeight: "600" },
   list: { flexGrow: 0 },
   listContent: { paddingBottom: 4 },
   group: {
-    fontSize: 8,
-    fontWeight: "900",
+    fontSize: 11,
+    fontWeight: "700",
     letterSpacing: 0.7,
     textTransform: "uppercase",
     paddingHorizontal: 4,
@@ -334,7 +334,8 @@ const styles = StyleSheet.create({
     paddingBottom: 4,
   },
   row: {
-    minHeight: 48,
+    minHeight: 56,
+    paddingVertical: 8,
     borderTopWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: 5,
     flexDirection: "row",
@@ -348,14 +349,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  name: { fontSize: 10, fontWeight: "800" },
-  meta: { fontSize: 7, marginTop: 1 },
-  empty: { padding: 16, textAlign: "center", fontSize: 9 },
+  name: { fontSize: 13, fontWeight: "600" },
+  meta: { fontSize: 11, lineHeight: 16, marginTop: 2 },
+  empty: { padding: 16, textAlign: "center", fontSize: 13 },
   done: {
-    minHeight: 42,
+    minHeight: 46,
     borderRadius: 13,
     alignItems: "center",
     justifyContent: "center",
   },
-  doneText: { color: "#FFFFFF", fontSize: 9, fontWeight: "900" },
+  doneText: { color: "#FFFFFF", fontSize: 14, fontWeight: "700" },
 });

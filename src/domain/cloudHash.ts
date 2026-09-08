@@ -5,6 +5,7 @@
  * already-hashed references.
  */
 const objectHashCache = new WeakMap<object, string>();
+const sequenceHashCache = new WeakMap<readonly unknown[], string>();
 
 function canonicalHashValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalHashValue);
@@ -46,6 +47,8 @@ export function stableValueHash(value: unknown) {
  * exactly as it was in the previous array hash.
  */
 export function orderedValueHash(values: readonly unknown[] | undefined) {
+  const cached = values && sequenceHashCache.get(values);
+  if (cached) return cached;
   let hash = 2166136261;
   const items = values ?? [];
   hash = updateFnv(hash, `[${items.length}]`);
@@ -53,5 +56,7 @@ export function orderedValueHash(values: readonly unknown[] | undefined) {
     const itemHash = stableValueHash(items[index]);
     hash = updateFnv(hash, `${index}:${itemHash.length}:${itemHash};`);
   }
-  return (hash >>> 0).toString(16);
+  const result = (hash >>> 0).toString(16);
+  if (values) sequenceHashCache.set(values, result);
+  return result;
 }

@@ -21,7 +21,8 @@ import {
 
 import { AppText as Text, AppTextInput as TextInput } from "@/src/components/AppText";
 import { CheerIcon } from "@/src/components/CheerIcon";
-import { GroupSocialActionBar } from "@/src/components/GroupSocialActionBar";
+import { GroupSocialActionBar, GroupSocialCommentPagination, type SocialCommentPageControls } from "@/src/components/GroupSocialActionBar";
+import type { GroupSocialSummary } from "@/src/domain/socialEngagement";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import { DateRangeNavigator, PeriodChoiceBar } from "@/src/components/PeriodNavigator";
 import { SafetyReportSheet } from "@/src/components/SafetyReportSheet";
@@ -343,6 +344,9 @@ export default function StoryRecapScreen() {
             members={state.group.members}
             state={state}
             inverse
+            summary={storySocial.summariesByTarget.get(storySocial.targetKey(story.socialTarget))}
+            commentPage={storySocial.commentPages.get(storySocial.targetKey(story.socialTarget))}
+            onLoadCommentPage={(older) => void storySocial.loadCommentPage(story.socialTarget!, older)}
             reactions={
               storySocial.reactionsByTarget.get(
                 storySocial.targetKey(story.socialTarget),
@@ -538,6 +542,7 @@ export function GroupRecapFeedScreen() {
       [
         state.currentUserId,
         state.group.id,
+        state.settings.language ?? "en",
         period,
         dates[0] ?? anchor,
         dates[dates.length - 1] ?? anchor,
@@ -548,6 +553,7 @@ export function GroupRecapFeedScreen() {
       period,
       state.currentUserId,
       state.group.id,
+      state.settings.language,
     ],
   );
   const feedAuthority = useMemo(
@@ -791,11 +797,15 @@ export function GroupRecapFeedScreen() {
             item={item}
             currentUserId={state.currentUserId}
             members={feedMembers}
+            interactionScopeKey={social.interactionScopeKey}
             timeFormat={state.settings.timeFormat}
             highlighted={highlightedItemId === item.id}
             onLayout={(y) => itemY.current.set(item.id, y)}
             reactions={social.reactionsByTarget.get(social.targetKey(item.socialTarget)) ?? []}
+            summary={social.summariesByTarget.get(social.targetKey(item.socialTarget))}
             comments={social.commentsByTarget.get(social.targetKey(item.socialTarget)) ?? []}
+            commentPage={social.commentPages.get(social.targetKey(item.socialTarget))}
+            onLoadCommentPage={(older) => void social.loadCommentPage(item.socialTarget, older)}
             onReact={(reaction) => {
               setSocialActionError(false);
               void social
@@ -980,12 +990,16 @@ type FeedMember = { member: Member; displayName: string };
 type FeedCardProps = {
   item: RecapFeedItem;
   currentUserId: string;
+  interactionScopeKey: string;
   members: ReadonlyMap<string, FeedMember>;
   timeFormat: "12h" | "24h" | undefined;
   highlighted: boolean;
   onLayout: (y: number) => void;
   reactions: SocialHook["reactions"];
+  summary?: GroupSocialSummary;
   comments: SocialHook["comments"];
+  commentPage?: SocialCommentPageControls;
+  onLoadCommentPage: (older: boolean) => void;
   onReact: (reaction: GroupSocialReactionKind) => void;
   onComment: (content: string) => Promise<void>;
   onDeleteComment: (commentId: string) => Promise<void>;
@@ -1012,14 +1026,14 @@ function commentDateTimeLabel(
   }).format(date);
 }
 
-function FeedCard({ item, currentUserId, members, timeFormat, highlighted, onLayout, reactions, comments, onReact, onComment, onDeleteComment, onReportComment, onReportItem, onShare }: FeedCardProps) {
+function FeedCard({ item, currentUserId, members, timeFormat, highlighted, onLayout, reactions, summary, comments, commentPage, onLoadCommentPage, onReact, onComment, onDeleteComment, onReportComment, onReportItem, onShare }: FeedCardProps) {
   const colors = useAppColors();
   const accent = useGroupAccent();
   const locale = useLocale();
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const member = item.memberId ? members.get(item.memberId)?.member : undefined;
-  const counts = (reaction: GroupSocialReactionKind) => reactions.filter((candidate) => candidate.reaction === reaction).length;
+  const counts = (reaction: GroupSocialReactionKind) => summary?.reactionCounts[reaction] ?? reactions.filter((candidate) => candidate.reaction === reaction).length;
   const mine = reactions.find((reaction) => reaction.userId === currentUserId);
   const macros = item.nutrition ? [
     { id: "Protein", value: item.nutrition.proteinG ?? 0, color: "#A66AE8" },
@@ -1054,7 +1068,7 @@ function FeedCard({ item, currentUserId, members, timeFormat, highlighted, onLay
           <ReactionButton icon="party-popper" count={counts("cheer")} active={mine?.reaction === "cheer"} color="#E3A72F" onPress={() => onReact("cheer")} />
           <ReactionButton icon="thumbs-up" count={counts("thumbs_up")} active={mine?.reaction === "thumbs_up"} color={accent} onPress={() => onReact("thumbs_up")} />
           <ReactionButton icon="thumbs-down" count={counts("thumbs_down")} active={mine?.reaction === "thumbs_down"} color="#D87C42" onPress={() => onReact("thumbs_down")} />
-          <Pressable onPress={() => setCommentsOpen((value) => !value)} style={styles.actionButton}><Ionicons name="chatbubble-outline" size={15} color={colors.muted} /><Text style={[styles.actionText, { color: colors.muted }]}>{comments.length || "Comment"}</Text></Pressable>
+          <Pressable accessibilityLabel="Show comments" onPress={() => setCommentsOpen((value) => !value)} style={styles.actionButton}><Ionicons name="chatbubble-outline" size={15} color={colors.muted} /><Text style={[styles.actionText, { color: colors.muted }]}>{(summary?.commentCount ?? comments.length) || "Comment"}</Text></Pressable>
           {reportableItem ? <Pressable accessibilityRole="button" accessibilityLabel={`Report shared update from ${members.get(item.memberId ?? "")?.displayName ?? "member"}`} onPress={onReportItem} style={styles.actionButton}><Ionicons name="flag-outline" size={15} color={colors.muted} /></Pressable> : null}
           <Pressable onPress={onShare} style={styles.actionButton}><Ionicons name="paper-plane-outline" size={15} color={colors.muted} /><Text style={[styles.actionText, { color: colors.muted }]}>Share</Text></Pressable>
         </View>
@@ -1112,6 +1126,7 @@ function FeedCard({ item, currentUserId, members, timeFormat, highlighted, onLay
               </View>
             );
           })}
+          <GroupSocialCommentPagination page={commentPage} onLoad={onLoadCommentPage} />
           <View style={styles.commentComposer}><TextInput value={draft} onChangeText={setDraft} placeholder="Add a comment" placeholderTextColor={colors.faint} style={[styles.commentInput, { color: colors.ink, borderColor: colors.border, backgroundColor: colors.canvas }]} /><IconButton icon="send" label="Post comment" onPress={() => { const content = draft.trim(); if (!content) return; setDraft(""); void onComment(content).catch(() => setDraft(content)); }} /></View>
         </View> : null}
       </Card>
@@ -1148,9 +1163,19 @@ const MemoFeedCard = React.memo(
   (left, right) =>
     left.item === right.item &&
     left.currentUserId === right.currentUserId &&
+    left.interactionScopeKey === right.interactionScopeKey &&
     left.members === right.members &&
     left.timeFormat === right.timeFormat &&
     left.highlighted === right.highlighted &&
+    left.summary?.commentCount === right.summary?.commentCount &&
+    left.summary?.reactionCounts.heart === right.summary?.reactionCounts.heart &&
+    left.summary?.reactionCounts.cheer === right.summary?.reactionCounts.cheer &&
+    left.summary?.reactionCounts.thumbs_up === right.summary?.reactionCounts.thumbs_up &&
+    left.summary?.reactionCounts.thumbs_down === right.summary?.reactionCounts.thumbs_down &&
+    left.commentPage?.before?.id === right.commentPage?.before?.id &&
+    left.commentPage?.hasMore === right.commentPage?.hasMore &&
+    left.commentPage?.loading === right.commentPage?.loading &&
+    left.commentPage?.error === right.commentPage?.error &&
     sameFeedReactions(left.reactions, right.reactions) &&
     sameFeedComments(left.comments, right.comments),
 );

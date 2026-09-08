@@ -33,6 +33,10 @@ import {
 } from "@/src/domain/cloudMaintenance";
 import { createKeyedLatestAsyncDrain } from "@/src/domain/latestAsyncDrain";
 import {
+  groupProjectionId,
+  groupProjectionSourceId,
+} from "@/src/domain/groupPublication";
+import {
   groupActivityFallbackMembershipIsActive,
   groupActivitySnapshotProvesMembershipLoss,
 } from "@/src/domain/groupActivityRefresh";
@@ -48,6 +52,7 @@ import {
 } from "@/src/domain/vacation";
 import { metricEntryKey } from "@/src/domain/metricEntry";
 import {
+  isGoogleHealthEntry,
   withoutGoogleHealthEntries,
 } from "@/src/domain/googleHealthLocalPrivacy";
 import { reconcileImportedHealthEntries } from "@/src/domain/health";
@@ -1200,7 +1205,7 @@ export async function loadCloudGroupActivity(
       (tombstone) =>
         metricEntryKey(
           tombstone.user_id,
-          tombstone.client_generated_id,
+          groupProjectionSourceId(groupId, tombstone.client_generated_id),
         ),
     ),
   );
@@ -1324,7 +1329,7 @@ export async function loadCloudGroupActivity(
   const remoteEntries: MetricEntry[] = applySharedMetricPrivacyFences(
     entryRows.map((entry) =>
       withoutSharedWorkoutParentDetails({
-        id: entry.client_generated_id,
+        id: groupProjectionSourceId(groupId, entry.client_generated_id),
         cloudId: entry.id,
         metricId: slugById.get(entry.metric_id) ?? entry.metric_id,
         userId: entry.user_id,
@@ -2191,7 +2196,7 @@ export async function loadCloudWorkspace(
       const asset = mediaById.get(photo.media_asset_id);
       const path = asset?.storage_path;
       return {
-        id: photo.client_generated_id ?? photo.id,
+        id: groupProjectionSourceId(groupId, photo.client_generated_id ?? photo.id),
         userId: photo.owner_user_id,
         uri: path ? (urls.get(path) ?? "") : "",
         storagePath: path,
@@ -2674,6 +2679,10 @@ export async function pushCloudWorkspace(
   }) => void,
   accountRevision?: number,
   yieldForUi?: () => Promise<void>,
+  options: {
+    activityOnly?: boolean;
+    operationIsCurrent?: () => boolean;
+  } = {},
 ) {
   if (!isCloudGroupId(state.group.id))
     return {
@@ -2685,7 +2694,16 @@ export async function pushCloudWorkspace(
       acknowledgedPrivacyFenceMetricIds: [],
     };
   const client = requireCloud();
-  const yieldMaintenance = yieldForUi ?? (() => Promise.resolve());
+  const ensureCurrent = () => {
+    if (options.operationIsCurrent?.() === false)
+      throw new Error("group_publication_superseded");
+  };
+  const yieldMaintenance = async () => {
+    ensureCurrent();
+    await yieldForUi?.();
+    ensureCurrent();
+  };
+  ensureCurrent();
   const current = state.group.members.find(
     (member) => member.id === state.currentUserId,
   );
@@ -2720,8 +2738,10 @@ export async function pushCloudWorkspace(
       acknowledgedPrivacyFenceMetricIds: [],
     };
   const canManage = current.role === "owner" || current.role === "admin";
+  // Inactive destinations may upload only an explicitly requested admin edit;
+  // activity-only callers otherwise never replay cached group configuration.
   const groupConfigurationPushed = canManage && pushGroupConfiguration;
-  const metadataProjection = await client.rpc(
+  const metadataProjection = options.activityOnly && !groupConfigurationPushed ? { data: null, error: null } : await client.rpc(
     "publish_account_workspace_metadata",
     {
       ...accountMetadataRpcParams(state, publishRevision),
@@ -2844,9 +2864,13 @@ export async function pushCloudWorkspace(
     ]),
   ];
   const explicitlyDeletedLocalDates: string[] = [];
+  const explicitDeletedEntryIdSet = new Set(explicitDeletedEntryIds);
   for (const batch of batches(remoteEntryIdsToDelete)) {
     const deleted = await client.rpc("delete_group_metric_entries", {
-      p_client_generated_ids: batch,
+      // Explicit source deletion revokes every authorized projection; inferred
+      // fallback cleanup concerns this destination only.
+      p_client_generated_ids: batch.map((id) => explicitDeletedEntryIdSet.has(id)
+        ? id : groupProjectionId(state.group.id, id)),
       p_expected_revision: publishRevision,
     });
     if (deleted.error) {
@@ -2895,7 +2919,9 @@ export async function pushCloudWorkspace(
           client_generated_id?: string | null;
         }[]
       )
-        .map((row) => row.client_generated_id)
+        .map((row) => row.client_generated_id
+          ? groupProjectionSourceId(state.group.id, row.client_generated_id)
+          : undefined)
         .filter((id): id is string => Boolean(id)),
     );
     publishedDetailedImportedEntryIdsByGroup.set(
@@ -2911,6 +2937,13 @@ export async function pushCloudWorkspace(
     fastRecentDates,
     publishRevision,
   );
+  const intendedExactMetricIds = new Set<string>();
+  const rememberExactStatuses = (rows: CloudDailyStatusUpsertRow[]) => {
+    rows.forEach((row) => {
+      if (row.visibility === "group" && row.metric_id) intendedExactMetricIds.add(row.metric_id);
+    });
+  };
+  rememberExactStatuses(fastRecentStatuses);
   // Publish only the two-day routine overlap before comparing/uploading detailed
   // food, workout, message, photo, and historical rows. The previous 30-day
   // matrix made every live Steps change rewrite hundreds of unchanged rows.
@@ -2929,6 +2962,8 @@ export async function pushCloudWorkspace(
     });
   await yieldMaintenance();
   const detailedOwnedEntries = ownedEntries.filter((entry) => {
+    // Google detail is owned by its destination-aware server projector.
+    if (isGoogleHealthEntry(entry)) return false;
     if (supersededSharedStepFallbackIds.has(entry.id)) return false;
     const metric =
       state.metrics.find((candidate) => candidate.id === entry.metricId) ??
@@ -2946,6 +2981,10 @@ export async function pushCloudWorkspace(
   const rawOwnedEntries = detailedOwnedEntries
     .filter((entry) => entry.visibility === "group")
     .map(withoutSharedWorkoutParentDetails);
+  rawOwnedEntries.forEach((entry) => {
+    const metricId = idBySlug.get(entry.metricId);
+    if (metricId) intendedExactMetricIds.add(metricId);
+  });
   // A visibility withdrawal advances a permanent metric fence. If the owner
   // later re-shares that tracker, a legacy relational detail row can still be
   // marked `group` while its old account revision remains behind the fence.
@@ -2976,6 +3015,7 @@ export async function pushCloudWorkspace(
   ].flatMap((entryId): MetricEntry[] => {
     const entry = ownedEntriesById.get(entryId);
     if (!entry || entry.source !== "imported") return [];
+    if (isGoogleHealthEntry(entry)) return [];
     const metric =
       state.metrics.find((candidate) => candidate.id === entry.metricId) ??
       state.group.metricConfiguration?.find(
@@ -3015,13 +3055,13 @@ export async function pushCloudWorkspace(
         "client_generated_id, metric_id, value, local_date, recorded_at, visibility, source, label, note, nutrition, submetric_values, source_provider, source_record_id, source_origin, source_updated_at, image_path, account_revision",
       )
       .eq("user_id", state.currentUserId)
-      .in("client_generated_id", ids);
+      .in("client_generated_id", ids.map((id) => groupProjectionId(state.group.id, id)));
     if (result.error) throw result.error;
     oldEntries.push(...(result.data ?? []));
   }
   const oldEntriesById = new Map(
     oldEntries
-      .map((entry) => [entry.client_generated_id, entry]),
+      .map((entry) => [groupProjectionSourceId(state.group.id, entry.client_generated_id), entry]),
   );
   const rawCandidateById = new Map(
     rawOwnedEntries.map((entry) => [entry.id, entry]),
@@ -3085,7 +3125,7 @@ export async function pushCloudWorkspace(
         "client_generated_id, value, local_date, recorded_at, visibility, source, label, note, nutrition, submetric_values, source_provider, source_record_id, source_origin, source_updated_at, image_path, account_revision",
       )
       .eq("user_id", state.currentUserId)
-      .in("client_generated_id", entryIds);
+      .in("client_generated_id", entryIds.map((id) => groupProjectionId(state.group.id, id)));
   const priorRowResults: Awaited<
     ReturnType<typeof loadPriorRowsBatch>
   >[] = [];
@@ -3097,7 +3137,7 @@ export async function pushCloudWorkspace(
   if (priorRowError) throw priorRowError;
   const priorRowsById = new Map(
     priorRowResults.flatMap((result) => result.data ?? []).map((entry) => [
-      entry.client_generated_id,
+      groupProjectionSourceId(state.group.id, entry.client_generated_id),
       entry,
     ]),
   );
@@ -3266,7 +3306,7 @@ export async function pushCloudWorkspace(
             // The server accepts exactly one fresh committed shared row. The
             // client reaches this branch only after comparing the old and new
             // privacy-filtered ranking models and proving a leader change.
-            p_source_entry_ids: [firstChangedId],
+            p_source_entry_ids: [groupProjectionId(state.group.id, firstChangedId)],
           });
           if (enqueued.error) throw enqueued.error;
           const eventKey = String(enqueued.data ?? "");
@@ -3280,9 +3320,10 @@ export async function pushCloudWorkspace(
       })()];
       }),
     );
+  const projectionRepairEntryIds = new Set<string>();
   if (entriesToUpsert.length) {
     const rows = entriesToUpsert.map((entry) => ({
-        client_generated_id: entry.id,
+        client_generated_id: groupProjectionId(state.group.id, entry.id),
         metric_id: idBySlug.get(entry.metricId),
         user_id: state.currentUserId,
         value: entry.value,
@@ -3314,7 +3355,7 @@ export async function pushCloudWorkspace(
       const cleared = await client.rpc(
         "clear_group_metric_entry_tombstones",
         {
-          p_client_generated_ids: batch,
+          p_client_generated_ids: batch.map((id) => groupProjectionId(state.group.id, id)),
           p_expected_revision: publishRevision,
         },
       );
@@ -3504,8 +3545,10 @@ export async function pushCloudWorkspace(
   const supplementalStatusDates = statusDates.filter(
     (localDate) => !fastRecentDateSet.has(localDate),
   );
-  const upsertStatuses = (rows: CloudDailyStatusUpsertRow[]) =>
-    upsertCloudDailyStatusRows(client, rows);
+  const upsertStatuses = (rows: CloudDailyStatusUpsertRow[]) => {
+    rememberExactStatuses(rows);
+    return upsertCloudDailyStatusRows(client, rows);
+  };
   const commitActivity = (dates: string[]) =>
     commitCloudActivityCheckpoint(
       client,
@@ -3587,13 +3630,13 @@ export async function pushCloudWorkspace(
   // outbox is retried independently on startup/reconnect.
   await Promise.allSettled([
     dispatchCommittedEntryNotifications(),
-    dispatchCommittedLeadNotifications(),
+    ...(options.activityOnly ? [] : [dispatchCommittedLeadNotifications()]),
   ]);
 
   // Period-winner alerts are distinct from live lead-change alerts: they only
   // announce a period that has finished. Stable event keys plus the server's
   // push_events claim make this safe when several members sync at once.
-  if (state.group.members.length > 1) {
+  if (!options.activityOnly && state.group.members.length > 1) {
     const winnerState = sharedCompetitionState(state);
     const winnerMetrics = (state.group.metricConfiguration ?? []).filter(
       (metric) =>
@@ -3698,13 +3741,13 @@ export async function pushCloudWorkspace(
   const activeMemberIds = new Set(
     state.group.members.map((member) => member.id),
   );
-  const ownedMessages = state.messages.filter(
+  const ownedMessages = (options.activityOnly ? [] : state.messages).filter(
     (message) =>
       message.senderId === state.currentUserId &&
       cloudOwnedMessage(message, state.group.id) &&
       (!message.recipientId || activeMemberIds.has(message.recipientId)),
   ).map((message) => messageForGroup(message, state.group.id));
-  const currentMessageRows = await client
+  const currentMessageRows = options.activityOnly ? { data: [], error: null } : await client
     .from("messages")
     .select("client_generated_id, push_dispatched_at, image_path")
     .eq("group_id", state.group.id)
@@ -3841,7 +3884,7 @@ export async function pushCloudWorkspace(
     if (deleted.error) throw deleted.error;
   }
   const ownedPhotos = state.photos.filter(
-    (photo) => photo.userId === state.currentUserId && photo.storagePath,
+    (photo) => idBySlug.has("progress_photo") && photo.userId === state.currentUserId && photo.storagePath,
   );
   const { data: oldPhotos, error: oldPhotoError } = await client
     .from("photo_updates")
@@ -3851,19 +3894,16 @@ export async function pushCloudWorkspace(
   if (oldPhotoError) throw oldPhotoError;
   const currentPhotoIds = new Set(ownedPhotos.map((photo) => photo.id));
   const inferredDeletedPhotoIds = (oldPhotos ?? [])
-    .map((photo) => photo.client_generated_id)
+    .map((photo) => groupProjectionSourceId(state.group.id, photo.client_generated_id))
     .filter((id) => id && !currentPhotoIds.has(id));
   if (inferredDeletedPhotoIds.length) {
     const deleted = await client.rpc("delete_group_photo_updates", {
-      p_client_generated_ids: inferredDeletedPhotoIds,
+      p_client_generated_ids: inferredDeletedPhotoIds.map((id) => groupProjectionId(state.group.id, id)),
       p_group_id: state.group.id,
       p_expected_revision: publishRevision,
     });
     if (deleted.error) throw deleted.error;
   }
-  const deletedPhotoIds = [
-    ...new Set([...explicitDeletedPhotoIds, ...inferredDeletedPhotoIds]),
-  ];
   for (const photo of ownedPhotos) {
     const { data: asset, error: assetError } = await client
       .from("media_assets")
@@ -3883,35 +3923,41 @@ export async function pushCloudWorkspace(
         media_asset_id: asset.id,
         owner_user_id: state.currentUserId,
         group_id: state.group.id,
-        client_generated_id: photo.id,
+        client_generated_id: groupProjectionId(state.group.id, photo.id),
         caption: photo.caption,
         local_date: photo.localDate,
-         visibility: photo.visibility,
-         created_at: photo.createdAt,
-         account_revision: publishRevision,
-       },
+        visibility: photo.visibility,
+        created_at: photo.createdAt,
+        account_revision: publishRevision,
+      },
       { onConflict: "owner_user_id,client_generated_id" },
     );
     if (error) throw error;
   }
 
-  const aliases = state.settings.memberNicknamesByGroup[state.group.id] ?? {};
-  const aliasRows = Object.entries(aliases)
-    .filter(([, alias]) => alias.trim())
-    .map(([memberId, alias]) => ({
-      subject_user_id: memberId,
-      nickname: alias.trim(),
-    }));
-  const aliasRevision = confirmedCloudPublishRevision(
-    publishRevision,
-    await resolveAccountRevision(client, state.currentUserId),
-  );
-  const aliasProjection = await client.rpc("publish_group_member_aliases", {
-    p_group_id: state.group.id,
-    p_expected_revision: aliasRevision,
-    p_aliases: aliasRows,
-  });
-  if (aliasProjection.error) throw aliasProjection.error;
+  if (!options.activityOnly) {
+    const aliases = state.settings.memberNicknamesByGroup[state.group.id] ?? {};
+    const aliasRows = Object.entries(aliases)
+      .filter(([, alias]) => alias.trim())
+      .map(([memberId, alias]) => ({
+        subject_user_id: memberId,
+        nickname: alias.trim(),
+      }));
+    const aliasRevision = confirmedCloudPublishRevision(
+      publishRevision,
+      await resolveAccountRevision(client, state.currentUserId),
+    );
+    const aliasProjection = await client.rpc("publish_group_member_aliases", {
+      p_group_id: state.group.id,
+      p_expected_revision: aliasRevision,
+      p_aliases: aliasRows,
+    });
+    if (aliasProjection.error) throw aliasProjection.error;
+  }
+  if (ownedPhotos.some((photo) => photo.visibility === "group")) {
+    const metricId = idBySlug.get("progress_photo");
+    if (metricId) intendedExactMetricIds.add(metricId);
+  }
   const nextPublishedDetailedImportedEntryIds = new Set(
     [...publishedDetailedImportedEntryIds].filter(
       (entryId) =>
@@ -3927,14 +3973,31 @@ export async function pushCloudWorkspace(
     publishedDetailCacheKey,
     nextPublishedDetailedImportedEntryIds,
   );
+  // No-op upserts need not return a row. Check the compact fence metadata
+  // after ALL writes instead: exact detail, photo-only sharing and summaries
+  // at/below a new fence all require the same bounded newer-revision repair.
+  for (const metricIds of batches([...intendedExactMetricIds], 100)) {
+    await yieldMaintenance();
+    const fences = await client.from("metric_privacy_cache_fences")
+      .select("metric_id")
+      .eq("group_id", state.group.id)
+      .eq("user_id", state.currentUserId)
+      .gte("revision", publishRevision)
+      .in("metric_id", metricIds);
+    if (fences.error) throw fences.error;
+    (fences.data ?? []).forEach((fence) => projectionRepairEntryIds.add(`metric:${fence.metric_id}`));
+  }
   return {
     deletedEntryIds: explicitDeletedEntryIds,
-    deletedPhotoIds,
+    // Destination cleanup (for example removing the Photo tracker from B)
+    // must never become a deletion tombstone for the owner's source photo.
+    deletedPhotoIds: explicitDeletedPhotoIds,
     activityVersion: activityCommit.version,
     workspacePushed: true,
     groupConfigurationPushed,
     groupConfigurationRevision:
       projectionResult?.groupConfigurationRevision,
     acknowledgedPrivacyFenceMetricIds: pendingPrivacyFenceMetricIds,
+    projectionRepairEntryIds: [...projectionRepairEntryIds].sort(),
   };
 }

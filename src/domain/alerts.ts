@@ -308,15 +308,12 @@ export function buildAlerts(
           : messageReadCursorKey,
       };
     });
-  const groupEventsEnabled = groupPreferences?.enabled !== false;
-  const socialReactionsEnabled =
-    groupEventsEnabled &&
-    (groupPreferences?.socialReactions ??
-      notifications.socialReactions ??
-      true);
   const challengeEvents = groupNotificationEvents
     .filter((event) => {
-      if (!groupEventsEnabled) return false;
+      // The account inbox contains several groups, not only the open one.
+      const groupPreferences = notifications.groupPreferencesByGroup?.[event.groupId];
+      if (groupPreferences?.enabled === false) return false;
+      const socialReactionsEnabled = groupPreferences?.socialReactions ?? notifications.socialReactions ?? true;
       const userAuthoredUpdate =
         event.kind === "social_reaction" ||
         event.kind === "social_comment" ||
@@ -325,8 +322,11 @@ export function buildAlerts(
         event.kind === "group_note_created" ||
         event.kind === "group_note_updated" ||
         event.kind === "group_schedule_created" ||
-        event.kind === "group_schedule_updated";
+        event.kind === "group_schedule_updated" ||
+        event.kind === "group_schedule_reminder";
       if (userAuthoredUpdate && event.actorId && blockedUserIds.has(event.actorId))
+        return false;
+      if (event.kind === "group_schedule_reminder" && groupPreferences?.scheduleReminders !== true)
         return false;
       if (
         event.kind === "social_reaction" ||
@@ -373,9 +373,14 @@ export function buildAlerts(
       return true;
     })
     .map((event): PaceAlert => {
-    const actor = state.group.members.find(
+    const eventGroup = state.groups.find((group) => group.id === event.groupId)
+      ?? (state.group.id === event.groupId ? state.group : undefined);
+    const actor = eventGroup?.members.find(
       (member) => member.id === event.actorId,
     );
+    const actorName = actor && eventGroup
+      ? memberDisplayName({ ...state, group: eventGroup }, actor)
+      : "A friend";
     const invitation = event.kind === "challenge_invitation";
     const accepted = event.kind === "challenge_accepted";
     const allAccepted = event.kind === "challenge_all_accepted";
@@ -392,7 +397,8 @@ export function buildAlerts(
       event.kind === "group_note_updated";
     const scheduleUpdate =
       event.kind === "group_schedule_created" ||
-      event.kind === "group_schedule_updated";
+      event.kind === "group_schedule_updated" ||
+      event.kind === "group_schedule_reminder";
     const workspaceUpdate = noteUpdate || scheduleUpdate;
     const socialEntry =
       event.targetType === "metric_entry" && event.targetId
@@ -463,7 +469,9 @@ export function buildAlerts(
             ? event.kind === "group_note_created"
               ? "New group note"
               : "Group note updated"
-            : event.kind === "group_schedule_created"
+            : event.kind === "group_schedule_reminder"
+              ? "Group event reminder"
+              : event.kind === "group_schedule_created"
               ? "New group event"
               : "Group event updated"
           : todoUpdate
@@ -484,15 +492,15 @@ export function buildAlerts(
       detail:
         event.detail ??
         (workspaceUpdate
-          ? `${actor ? memberDisplayName(state, actor) : "A friend"} updated the shared group workspace.`
+          ? `${actorName} updated the shared group workspace.`
           : todoUpdate
-          ? `${actor ? memberDisplayName(state, actor) : "A friend"} updated a shared task.`
+          ? `${actorName} updated a shared task.`
           : invitation
           ? "Open HabHub to accept or decline."
           : allAccepted
             ? "Everyone accepted the challenge."
             : accepted
-              ? `${actor ? memberDisplayName(state, actor) : "A friend"} accepted your challenge.`
+              ? `${actorName} accepted your challenge.`
               : "Open the Leaderboard for the latest challenge standings."),
       createdAt: event.createdAt,
       memberId: actor?.id,

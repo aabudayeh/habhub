@@ -225,7 +225,7 @@ export function buildGroupRecapFeed(
     const label = entry.label?.trim() || entry.note?.trim();
     const value =
       typeof entry.value === "number"
-        ? formatMetricValue(metric, entry.value)
+        ? formatMetricValue(metric, entry.value, state.settings.language ?? "en")
         : typeof entry.value === "boolean"
           ? entry.value
             ? "Completed"
@@ -366,11 +366,11 @@ export function buildGroupRecapFeed(
         body:
           endDate === challenge.localDate
             ? `${accepted} participant${accepted === 1 ? "" : "s"} competing today.`
-            : `${accepted} participant${accepted === 1 ? "" : "s"} competing through ${friendlyDate(endDate)}.`,
+            : `${accepted} participant${accepted === 1 ? "" : "s"} competing through ${friendlyDate(endDate, state.settings.language ?? "en")}.`,
         value:
           challenge.target === undefined
             ? "Open challenge"
-            : formatMetricValue(metric, challenge.target),
+            : formatMetricValue(metric, challenge.target, state.settings.language ?? "en"),
         icon: "flag-outline",
         color: metric.color,
         socialTarget: {
@@ -428,7 +428,7 @@ export function buildGroupRecapFeed(
         : "The final standings are ready.",
       value:
         winningPlacement?.value !== undefined
-          ? formatMetricValue(metric, winningPlacement.value)
+          ? formatMetricValue(metric, winningPlacement.value, state.settings.language ?? "en")
           : winningRow?.mode === "exact"
             ? winningRow.valueLabel
             : undefined,
@@ -667,7 +667,7 @@ function groupChallengeStories(
           title: winners.length ? `${winners.join(" & ")} won` : name,
           stat:
             winningPlacement?.value !== undefined
-              ? formatMetricValue(metric, winningPlacement.value)
+              ? formatMetricValue(metric, winningPlacement.value, state.settings.language ?? "en")
               : winningRow?.mode === "exact"
                 ? winningRow.valueLabel
                 : "Finished",
@@ -692,11 +692,11 @@ function groupChallengeStories(
         stat:
           challenge.target === undefined
             ? `${accepted} competing`
-            : formatMetricValue(metric, challenge.target),
+            : formatMetricValue(metric, challenge.target, state.settings.language ?? "en"),
         body:
           endDate === challenge.localDate
             ? "The group is competing today."
-            : `The group is competing through ${friendlyDate(endDate)}.`,
+            : `The group is competing through ${friendlyDate(endDate, state.settings.language ?? "en")}.`,
         icon: "flag-outline",
         color: metric.color,
         socialTarget: {
@@ -749,7 +749,7 @@ function personalStories(
       scope: "personal",
       eyebrow: "YOUR 7-DAY RECAP",
       title: "You kept moving",
-      stat: `${Math.round(stepAverage).toLocaleString()} steps/day`,
+      stat: `${Math.round(stepAverage).toLocaleString(state.settings.language ?? "en")} steps/day`,
       body:
         change === undefined
           ? `${km.toFixed(1)} estimated kilometres this week.`
@@ -763,7 +763,7 @@ function personalStories(
       eyebrow: "DISTANCE UNLOCKED",
       title: "Put it in perspective",
       stat: `${(km / 42.195).toFixed(1)} marathons`,
-      body: `Your ${Math.round(stepTotal).toLocaleString()} steps add up to roughly ${km.toFixed(1)} km.`,
+      body: `Your ${Math.round(stepTotal).toLocaleString(state.settings.language ?? "en")} steps add up to roughly ${km.toFixed(1)} km.`,
       icon: "map-outline",
       color: "#3274D9",
     });
@@ -782,7 +782,7 @@ function personalStories(
     id: "personal-score",
     scope: "personal",
     eyebrow: "BEST DAY",
-    title: friendlyDate(scores[0]?.day ?? current[6]),
+    title: friendlyDate(scores[0]?.day ?? current[6], state.settings.language ?? "en"),
     stat: `${Math.round(scores[0]?.value ?? 0)}/100`,
     body: "Your highest configured HabHub score in this recap window.",
     icon: "sparkles-outline",
@@ -795,7 +795,7 @@ function personalStories(
       scope: "personal",
       eyebrow: "ACTIVE ENERGY",
       title: "Energy invested",
-      stat: formatMetricValue(exercise, value),
+      stat: formatMetricValue(exercise, value, state.settings.language ?? "en"),
       body: "Total logged active energy across your last seven days.",
       icon: exercise.icon,
       color: exercise.color,
@@ -808,7 +808,7 @@ function personalStories(
       scope: "personal",
       eyebrow: "NUTRITION RHYTHM",
       title: "Your daily average",
-      stat: formatMetricValue(food, value),
+      stat: formatMetricValue(food, value, state.settings.language ?? "en"),
       body: "Your activity-adjusted allowance is evaluated separately on each day.",
       icon: food.icon,
       color: food.color,
@@ -821,7 +821,7 @@ function personalStories(
       scope: "personal",
       eyebrow: "PROTEIN CHECK",
       title: "Weekly average",
-      stat: formatMetricValue(protein, value),
+      stat: formatMetricValue(protein, value, state.settings.language ?? "en"),
       body: "A simple look at consistency—not a medical recommendation.",
       icon: protein.icon,
       color: protein.color,
@@ -914,7 +914,7 @@ function groupStories(
       scope: "group",
       eyebrow: `${metric.name.toUpperCase()} LEADER`,
       title: memberDisplayName(state, rows[0].member),
-      stat: formatMetricValue(metric, rows[0].value),
+      stat: formatMetricValue(metric, rows[0].value, state.settings.language ?? "en"),
       body: "Best daily average across the current seven-day recap.",
       icon: metric.icon,
       color: metric.color,
@@ -935,7 +935,7 @@ function groupStories(
       scope: "group",
       eyebrow: "TOGETHER",
       title: "The group went far",
-      stat: `${Math.round(groupSteps).toLocaleString()} steps`,
+      stat: `${Math.round(groupSteps).toLocaleString(state.settings.language ?? "en")} steps`,
       body: `Roughly ${groupDistanceKm.toFixed(1)} km combined—about ${(groupDistanceKm / 42.195).toFixed(1)} marathons.`,
       icon: "people-outline",
       color: steps.color,

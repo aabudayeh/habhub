@@ -6,11 +6,14 @@ import { fileURLToPath } from "node:url";
 
 import pngjs from "pngjs";
 import imageSizePackage from "image-size";
+import ts from "typescript";
+import { assertMarketingCapture } from "./marketing-capture-quality.mjs";
 
 const { PNG } = pngjs;
 const imageSize = imageSizePackage.imageSize ?? imageSizePackage;
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const exportsRoot = path.join(repoRoot, "store", "exports");
+const staticMastersOnly = process.argv.includes("--static-masters");
 const capturePlan = JSON.parse(
   fs.readFileSync(path.join(repoRoot, "store", "capture-plan.json"), "utf8"),
 );
@@ -60,9 +63,11 @@ function sourceImageMetadata(relativePath, width, height) {
   assert(image.type === "jpg", `${relativePath} must be a JPEG capture; got ${image.type ?? "unknown"}.`);
   assert(image.width === width && image.height === height, `${relativePath} must be ${width}x${height}; got ${image.width}x${image.height}.`);
   assert(bytes.length > 20_000, `${relativePath} appears unexpectedly small or blank.`);
+  const quality = assertMarketingCapture(bytes, relativePath);
   return {
     path: relativePath.replaceAll("\\", "/"),
     type: "jpeg",
+    ...quality,
     width: image.width,
     height: image.height,
     bytes: bytes.length,
@@ -125,24 +130,26 @@ function videoMetadata(ffmpeg, relativePath, width, height, minimumDuration, max
 }
 
 assert(capturePlan.version >= 6, "Marketing capture plan must include the live interactive-guide revision.");
+assert(capturePlan.fixture?.viewport === "420x911" && capturePlan.fixture?.sourcePixelSize === "840x1822" && capturePlan.fixture?.deviceScaleFactor === 2, "Marketing captures must preserve the phone CSS viewport at 2x pixel density.");
 assert(capturePlan.fixture?.captureScript === "scripts/capture-marketing-web.mjs", "Capture provenance must name the repeatable browser script.");
 assert(capturePlan.fixture?.interactiveCaptureScript === "scripts/capture-interactive-guide-web.mjs", "Capture provenance must name the repeatable live guide script.");
 assert(capturePlan.featureTourScenes?.length >= 30, "The feature tour must cover at least 30 real-screen beats.");
 assert(capturePlan.deliverables?.applePreview?.size === "886x1920", "Apple preview must use the current 886x1920 portrait size.");
 assert(capturePlan.deliverables?.applePreview?.maximumFrameRate <= 30, "Apple preview must be capped at 30 fps.");
-assert(capturePlan.deliverables?.featureTour?.durationSeconds === 99, "Paired batch preview/staging makes the comprehensive tour 99 seconds.");
+assert(capturePlan.deliverables?.featureTour?.durationSeconds === 102, "Live onboarding plus paired batch preview/staging makes the comprehensive tour 102 seconds.");
 assert(capturePlan.deliverables?.featureTour?.presentation === "still-screen branded montage", "The existing feature tour must be labelled honestly as a still-screen montage.");
 assert(capturePlan.deliverables?.interactiveGuide?.size === "1080x1920", "Interactive guide must be a 1080x1920 portrait master.");
 assert(capturePlan.deliverables?.interactiveGuide?.format === "H.264/AAC MP4", "Interactive guide must declare H.264/AAC MP4 delivery.");
 assert(capturePlan.deliverables?.interactiveGuide?.maximumFrameRate <= 30, "Interactive guide must be capped at 30 fps.");
 assert(capturePlan.deliverables?.interactiveGuide?.minimumDurationSeconds >= 180, "Interactive guide must be long enough to contain the full Watch tutorial.");
-assert(capturePlan.deliverables?.interactiveGuide?.maximumDurationSeconds <= 900, "Interactive guide must fail instead of recording indefinitely.");
+assert(capturePlan.deliverables?.interactiveGuide?.maximumDurationSeconds <= 1800, "The readable 98-step course needs about 18 minutes; its watchdog must remain bounded at 30 minutes.");
 const tourIds = capturePlan.featureTourScenes.map((scene) => scene.id);
 assert(tourIds.indexOf("todo-staged") === tourIds.indexOf("todo-batch") + 1, "Batch preview and staged Sub-To-Dos must be consecutive tour beats.");
 assert(buildSource.includes('Callout = "TAP STAGE"') && buildSource.includes('Callout = "REACT + COMMENT"'), "Interaction beats need branded tap callouts.");
 assert(/New-FadeVideo \$tourFrames[\s\S]*-Motion/.test(buildSource), "Comprehensive tour must include subtle motion.");
 assert(buildSource.includes("anullsrc"), "Captions-first masters must carry the documented silent AAC track.");
 assert(captureSource.includes("HTMLTextAreaElement.prototype") && captureSource.includes("openStoryComments()"), "Marketing capture must drive real React input state and expose the recap comment composer.");
+assert(captureSource.includes("fromSurface: true") && !captureSource.includes("fromSurface: false") && captureSource.includes("assertMarketingCapture"), "Marketing capture must validate surface-only frames and never fall back to the blank-prone viewport path.");
 assert(interactiveCaptureSource.includes('guideButtonLabel = "Watch Complete HabHub guide"'), "Interactive capture must launch the real complete Watch guide.");
 assert(interactiveCaptureSource.includes('finalGuideStepMarker = "Save into the tutorial preview"'), "Interactive capture must prove that Watch mode reaches the final full-guide step.");
 assert(interactiveCaptureSource.includes('"Page.startScreencast"') && interactiveCaptureSource.includes('"Page.screencastFrameAck"'), "Interactive guide must be recorded as a live CDP screencast.");
@@ -183,6 +190,8 @@ for (const feature of [
   "notification controls",
   "display settings",
   "page tutorials",
+  "live onboarding",
+  "skip all tutorials",
 ]) assert(coverage.has(feature), `Feature-tour coverage is missing: ${feature}`);
 
 const rawNames = [...new Set([
@@ -212,7 +221,7 @@ const tourFrameNames = capturePlan.featureTourScenes.map(
   (scene, index) => `${String(index + 1).padStart(2, "0")}-${scene.id}.png`,
 );
 
-const sourceImages = rawNames.map((name) => sourceImageMetadata(`store/source-captures/iphone-420x911/${name}`, 420, 911));
+const sourceImages = rawNames.map((name) => sourceImageMetadata(`store/source-captures/iphone-420x911/${name}`, 840, 1822));
 const pngs = [
   ...appleNames.map((name) => pngMetadata(`store/exports/apple/iphone-6.9/en-US/${name}`, 1260, 2736)),
   ...googleNames.map((name) => pngMetadata(`store/exports/google/phone/en-US/${name}`, 1080, 1920)),
@@ -225,26 +234,106 @@ const ffmpeg = findFfmpeg();
 const videos = [
   videoMetadata(ffmpeg, "store/exports/video/apple/en-US/habhub-apple-master-886x1920.mp4", 886, 1920, 20, 30),
   videoMetadata(ffmpeg, "store/exports/video/google/en-US/habhub-google-master-1080x1920.mp4", 1080, 1920, 30, 60),
-  videoMetadata(ffmpeg, "store/exports/video/feature-tour/en-US/habhub-comprehensive-feature-tour-1080x1920.mp4", 1080, 1920, 98.9, 99.1),
-  videoMetadata(
+  videoMetadata(ffmpeg, "store/exports/video/feature-tour/en-US/habhub-comprehensive-feature-tour-1080x1920.mp4", 1080, 1920, 101.9, 102.1),
+  ...(!staticMastersOnly ? [videoMetadata(
     ffmpeg,
     capturePlan.deliverables.interactiveGuide.path,
     1080,
     1920,
     capturePlan.deliverables.interactiveGuide.minimumDurationSeconds,
     capturePlan.deliverables.interactiveGuide.maximumDurationSeconds,
-  ),
+  )] : []),
 ];
+
+let interactiveGuideEvidence;
+if (!staticMastersOnly) {
+  const guidePath = absolute(capturePlan.deliverables.interactiveGuide.path);
+  const evidencePath = path.join(path.dirname(guidePath), "habhub-full-interactive-guide.capture.json");
+  assert(fs.existsSync(evidencePath), "The full guide needs its successful live-capture evidence, not only an MP4.");
+  const evidence = JSON.parse(fs.readFileSync(evidencePath, "utf8"));
+  const curriculumBytes = fs.readFileSync(absolute("src/tutorial/guides.ts"));
+  const curriculum = ts.createSourceFile("guides.ts", curriculumBytes.toString("utf8"), ts.ScriptTarget.Latest, true);
+  const expectedSteps = [];
+  const expectedActions = [];
+  const property = (object, name) => object?.properties?.find((item) => item.name?.getText(curriculum) === name)?.initializer;
+  const definitions = new Map();
+  for (const statement of curriculum.statements)
+    if (ts.isVariableStatement(statement))
+      for (const declaration of statement.declarationList.declarations)
+        if (ts.isIdentifier(declaration.name) && declaration.initializer)
+          definitions.set(declaration.name.text, declaration.initializer);
+  // Declaration order is not playback order: FULL_TUTORIAL_GUIDE explicitly
+  // composes the arrays (notably Group Hub before Workout). Resolve only that
+  // exact composition, failing closed if its syntax stops being literal.
+  function collect(node, resolving = new Set()) {
+    assert(node, "The full-guide composition references an undefined step array.");
+    if (ts.isAsExpression(node) || ts.isSatisfiesExpression(node) || ts.isParenthesizedExpression(node))
+      return collect(node.expression, resolving);
+    if (ts.isIdentifier(node)) {
+      assert(!resolving.has(node.text), `Circular full-guide composition: ${node.text}`);
+      return collect(definitions.get(node.text), new Set([...resolving, node.text]));
+    }
+    if (ts.isArrayLiteralExpression(node)) {
+      for (const element of node.elements)
+        collect(ts.isSpreadElement(element) ? element.expression : element, resolving);
+      return;
+    }
+    if (ts.isCallExpression(node) && node.expression.getText(curriculum) === "step") {
+      const input = node.arguments[1];
+      const id = property(input, "id");
+      const action = property(property(input, "practice"), "actionId");
+      assert(id && ts.isStringLiteral(id), "Each composed full-guide lesson must have a literal id.");
+      expectedSteps.push(id.text);
+      if (action) {
+        assert(ts.isStringLiteral(action), "Each recorded demonstration must have a literal action id.");
+        expectedActions.push(action.text);
+      }
+      return;
+    }
+    assert(false, `Unsupported full-guide composition: ${node.getText(curriculum).slice(0, 100)}`);
+  }
+  collect(property(definitions.get("FULL_TUTORIAL_GUIDE"), "steps"));
+  assert(expectedSteps.length === 98 && new Set(expectedSteps).size === 98 && expectedActions.length === 19 && new Set(expectedActions).size === 19,
+    "The release curriculum must contain exactly 98 unique lessons and 19 unique real demonstrations.");
+  assert(evidence.finalStepObserved === true, "The guide must reach its final lesson.");
+  assert(evidence.observedStepCount === expectedSteps.length && evidence.observedSteps?.length === expectedSteps.length,
+    "The live recording must include every current tutorial lesson.");
+  for (const [index, expectedId] of expectedSteps.entries()) {
+    const observed = evidence.observedSteps[index];
+    assert(observed?.stepIndex === index && observed?.stepId === expectedId,
+      `Missing or out-of-order recorded lesson: ${expectedId}`);
+  }
+  const observedActions = new Set(evidence.observedActions ?? []);
+  assert(evidence.expectedActionCount === expectedActions.length && evidence.observedActionCount === expectedActions.length && observedActions.size === expectedActions.length,
+    "The live recording must confirm each actual demonstration, not merely advance through its card.");
+  for (const action of expectedActions) assert(observedActions.has(action), `Unperformed recorded demonstration: ${action}`);
+  const sha256 = (bytes) => crypto.createHash("sha256").update(bytes).digest("hex");
+  assert(evidence.curriculumSha256 === sha256(curriculumBytes), "The recorded guide curriculum is stale; recapture it.");
+  assert(evidence.outputSha256 === sha256(fs.readFileSync(guidePath)), "The guide video does not match its successful capture evidence.");
+  interactiveGuideEvidence = {
+    path: path.relative(repoRoot, evidencePath).replaceAll("\\", "/"),
+    capturedAt: evidence.capturedAt,
+    observedStepCount: evidence.observedStepCount,
+    observedActionCount: evidence.observedActionCount,
+    outputSha256: evidence.outputSha256,
+    curriculumSha256: evidence.curriculumSha256,
+  };
+}
 
 const manifest = {
   generatedAt: new Date().toISOString(),
+  validationScope: staticMastersOnly ? "static-art-and-three-montages-only" : "complete-four-master-marketing-set",
   capturePlanVersion: capturePlan.version,
-  provenance: "Still compositions and the continuous interactive guide use real release-candidate HabHub web UI captured from a fresh credential-free synthetic demo. No feature UI was invented.",
+  provenance: staticMastersOnly
+    ? "Still compositions use real release-candidate HabHub web UI captured from a fresh credential-free synthetic demo. The continuous interactive guide is excluded from this partial validation."
+    : "Still compositions and the continuous interactive guide use real release-candidate HabHub web UI captured from a fresh credential-free synthetic demo. No feature UI was invented.",
   presentation: {
     storePreviewAndAds: "still-screen branded compositions built from auditable real-app captures",
     featureTourMotion: "subtle centered zoom",
     interactionCallouts: true,
-    interactiveGuide: "continuous live Edge/CDP capture of the real Watch tutorial, with real route transitions, animated pointer, and isolated practice actions",
+    interactiveGuide: staticMastersOnly
+      ? "not validated in this partial static-master run"
+      : "continuous live Edge/CDP capture of the real Watch tutorial, with real route transitions, animated pointer, and isolated practice actions",
     audio: "captions-first master with an intentionally silent AAC track; no music or voiceover license is implied",
     pairedDemonstrations: ["batch outline preview -> staged nested Sub-To-Dos"],
   },
@@ -256,9 +345,12 @@ const manifest = {
   sourceImages,
   pngs,
   videos,
+  interactiveGuideEvidence,
 };
 fs.mkdirSync(exportsRoot, { recursive: true });
-fs.writeFileSync(path.join(exportsRoot, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+const manifestPath = path.join(exportsRoot, staticMastersOnly ? "manifest-static-candidate.json" : "manifest.json");
+fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
 console.log(`Validated ${sourceImages.length} JPEG source captures, ${pngs.length} PNG deliverables, and ${videos.length} H.264/AAC MP4 masters.`);
-console.log(`Manifest: ${path.join(exportsRoot, "manifest.json")}`);
+console.log(`Manifest: ${manifestPath}`);
+if (staticMastersOnly) console.log("Partial validation only. Run without --static-masters after the final interactive guide is ready.");

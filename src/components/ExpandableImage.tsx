@@ -7,11 +7,11 @@ import { AppText as Text } from "@/src/components/AppText";
 import { palette } from '@/src/theme';
 import { PhotoUpdate } from '@/src/types';
 
-export function ExpandableImage({ uri, thumbnailStyle, containerStyle, label = 'Open full-size image', caption }: { uri: PhotoUpdate['uri']; thumbnailStyle?: StyleProp<ImageStyle>; containerStyle?: StyleProp<ViewStyle>; label?: string; caption?: string }) {
+export function ExpandableImage({ uri, thumbnailStyle, containerStyle, thumbnailContentFit = 'cover', label = 'Open full-size image', caption }: { uri: PhotoUpdate['uri']; thumbnailStyle?: StyleProp<ImageStyle>; containerStyle?: StyleProp<ViewStyle>; thumbnailContentFit?: 'cover' | 'contain'; label?: string; caption?: string }) {
   const [open, setOpen] = useState(false);
   return <>
     <Pressable accessibilityRole="imagebutton" accessibilityLabel={label} onPress={() => setOpen(true)} style={[styles.thumbnailButton, containerStyle]}>
-      <Image source={typeof uri === 'string' ? { uri } : uri} style={[styles.thumbnail, thumbnailStyle]} contentFit="cover" transition={120} />
+      <Image source={typeof uri === 'string' ? { uri } : uri} style={[styles.thumbnail, thumbnailStyle]} contentFit={thumbnailContentFit} transition={120} />
       <View style={styles.expandBadge}><Ionicons name="expand-outline" size={13} color={palette.white} /></View>
     </Pressable>
     <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>

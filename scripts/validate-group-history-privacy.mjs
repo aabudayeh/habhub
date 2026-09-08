@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import "./validate-multi-group-publication.mjs";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -40,9 +41,37 @@ import {
 } from "../src/domain/groupActivityRefresh.ts";
 import { periodDates } from "../src/domain/leaderboard.ts";
 import { recapFeedItemIdForSocialTarget } from "../src/domain/recaps.ts";
+import {
+  indexSocialRows,
+  mergeSocialComments,
+  restoreDeletedSocialComment,
+  socialSummaryWithReaction,
+} from "../src/domain/socialEngagement.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (file) => readFileSync(path.join(root, file), "utf8");
+
+const busySummary = {
+  groupId: "group", targetType: "group_note", targetId: "note",
+  reactionCounts: { heart: 1500, cheer: 4000, thumbs_up: 52, thumbs_down: 3 },
+  ownReaction: "heart", commentCount: 1203,
+};
+assert.deepEqual(socialSummaryWithReaction(busySummary, "cheer").reactionCounts,
+  { heart: 1499, cheer: 4001, thumbs_up: 52, thumbs_down: 3 },
+  "a local reaction switch must adjust exact totals without materializing thousands of reaction rows");
+assert.equal(socialSummaryWithReaction(busySummary, undefined).reactionCounts.heart, 1499);
+assert.equal(busySummary.reactionCounts.heart, 1500, "optimistic totals must preserve the server baseline for rollback");
+const commentFixture = (id) => ({
+  id, groupId: "group", targetType: "group_note", targetId: "note", userId: "user",
+  content: id, createdAt: "2026-09-08T12:00:00Z", updatedAt: "2026-09-08T12:00:00Z",
+});
+assert.deepEqual(
+  restoreDeletedSocialComment([commentFixture("new-concurrent")], commentFixture("failed-delete")).map((row) => row.id),
+  ["failed-delete", "new-concurrent"],
+  "failed deletion must restore only its row and preserve concurrent additions and successful deletions");
+assert.equal(mergeSocialComments([commentFixture("same")], [commentFixture("same")]).length, 1,
+  "comment confirmation and refresh must not duplicate the same saved row");
+assert.equal(indexSocialRows(Array.from({ length: 50000 }, (_, index) => commentFixture(String(index)))).get("group_note\u0000note").length, 50000);
 
 const reactionBurst = new Map();
 const mutationKey = "group\0metric-entry\0member";
@@ -274,7 +303,7 @@ assert.match(cloud, /remoteStatusCount < expectedStatusCount/);
 assert.match(provider, /const SHARED_ENTRY_DETAIL_PROJECTION_VERSION = 4/);
 assert.match(
   provider,
-  /sharedEntryDetailProjectionVersion:\s*SHARED_ENTRY_DETAIL_PROJECTION_VERSION/,
+  /groupPublicationDigest\(state, SHARED_ENTRY_DETAIL_PROJECTION_VERSION\)/,
   "a client upgrade must force one bounded workspace backfill for previously omitted shared item details",
 );
 assert.match(
@@ -1383,11 +1412,17 @@ assert.match(
   /resolveGroupSocialTargets[\s\S]{0,1800}\.in\("user_id", ownerIds\)[\s\S]{0,120}\.in\("client_generated_id", clientGeneratedIds\)[\s\S]{0,220}metric_definitions\.group_id/,
   "legacy cached targets must be batch-resolved by owner/client id before canonical engagement reads",
 );
-assert.match(
-  socialHook,
-  /requestGenerationRef\.current !== generation[\s\S]{0,500}setReactions\(next\.reactions\)[\s\S]{0,700}requestGenerationRef\.current !== generation/,
-  "an older group or target request must not overwrite the current engagement state",
+assert.ok(
+  /requestGenerationRef\.current !== generation[\s\S]{0,500}setReactions\(next\.reactions\)/.test(socialHook) &&
+  /\.catch\(\(reason\) => \{\s*if \(\s*requestGenerationRef\.current !== generation/.test(socialHook),
+  "an older group or target request must not overwrite current engagement data or error state",
 );
+assert.ok(socialHook.includes("requestRef.current?.controller.abort()") &&
+  socialHook.includes("requestRef.current.refreshAgain = true") &&
+  socialHook.includes("if (refreshAgain) void refreshRef.current()"),
+  "superseded reads must abort and an event during a read must schedule a trailing refresh");
+assert.ok(/const requestScopeKey = [^\n]*includeComments[^\n]*stableTargets/.test(socialHook),
+  "different targets and comment modes must not reuse an incompatible in-flight request");
 const burstStart = socialHook.indexOf("beginSocialReactionBurst(", 100);
 const burstConfirm = socialHook.indexOf("confirmSocialReactionBurst(", burstStart);
 const burstRestore = socialHook.indexOf(
@@ -1404,7 +1439,7 @@ assert.ok(
 );
 assert.match(
   socialHook,
-  /targetAliases[\s\S]{0,1800}persistedTargetKey\(resolved\)/,
+  /next\.resolvedTargets\.map\(\(resolved, index\) => \[\s*targetKey\(stableTargets\[index\]\),\s*persistedTargetKey\(resolved\)/,
   "a legacy presentation key must point at the canonical persisted reaction key",
 );
 assert.match(

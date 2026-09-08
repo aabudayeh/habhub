@@ -386,10 +386,8 @@ assert.match(
   /if \(!activeGuide \|\| !activeSession \|\| !step \|\| !localizedGuide \|\| !localizedStep\)[\s\S]{0,260}styles\.transitionCurtain/,
   "Entering with no active session must retain a bounded transition surface",
 );
-assert.match(spotlightSource, /import \{ BlurView \} from "expo-blur"/);
-assert.match(spotlightSource, /experimentalBlurMethod=/);
-assert.match(spotlightSource, /Platform\.OS === "android" \? 34/);
-assert.match(spotlightSource, /"systemUltraThinMaterialDark"[\s\S]{0,100}"systemUltraThinMaterial"/);
+assert.match(spotlightSource, /styles\.callout,[\s\S]{0,500}backgroundColor: colors\.card/,
+  "Tutorial copy must have an opaque readable surface over dense app content");
 assert.match(spotlightSource, /pointerEvents="none"[\s\S]{0,120}styles\.transitionCurtain/);
 assert.match(
   contextSource,

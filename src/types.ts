@@ -661,7 +661,8 @@ export type GroupNotificationEvent = {
     | "group_note_created"
     | "group_note_updated"
     | "group_schedule_created"
-    | "group_schedule_updated";
+    | "group_schedule_updated"
+    | "group_schedule_reminder";
   challengeId?: string;
   /** Scored occurrence settled by the server, including recurring series. */
   occurrenceDate?: string;
@@ -752,6 +753,8 @@ export type GroupScheduleItem = {
   startsAt: string;
   endsAt?: string;
   allDay: boolean;
+  /** Optional shared timed-event reminder; recipients explicitly opt in. */
+  reminderMinutes?: number;
   revision: number;
   createdAt: string;
   updatedAt: string;
@@ -1316,6 +1319,10 @@ export type UserSettings = {
   /** Refreshes only the disposable built-in demo fixtures, never account data. */
   demoContentVersion?: number;
   tutorialComplete: boolean;
+  /** Disable automatic page prompts; manually opened guides remain available. */
+  tutorialPromptsDisabled?: boolean;
+  /** Nonblocking setup on the person's real Today page; never a demo session. */
+  guidedSetupStep?: "trackers" | "layout" | "first-log" | "explore" | "complete";
   advancedTutorialComplete: boolean;
   /** Active basic-guide replay selected from Quick Guide. */
   tutorialGuideId?: string;
@@ -1401,6 +1408,10 @@ export type UserSettings = {
   pendingGroupConfigurationIds?: string[];
   /** Tracker privacy revocations awaiting a revision-checked group fence. */
   pendingMetricPrivacyFenceIdsByGroup?: Record<string, string[]>;
+  /** Exact source projections needing one newer committed revision after a privacy fence. */
+  pendingGroupProjectionRepairIdsByGroup?: Record<string, string[]>;
+  /** Value-free monotonic commit marker; local repair IDs never leave this device. */
+  groupProjectionRepairGeneration?: number;
   /** Legacy v6 aliases retained only while migrating stored demo state. */
   memberNicknames?: Record<string, string>;
   notifications: NotificationSettings;
@@ -1474,6 +1485,8 @@ export type GroupNotificationPreferences = {
   todoReminders?: boolean;
   /** New and revised shared notes or schedule items. */
   workspaceUpdates?: boolean;
+  /** Opt-in shared event reminders, delivered even when the app is closed. */
+  scheduleReminders?: boolean;
 };
 
 export type TrackedGoalPeriod = { from: string; to?: string };

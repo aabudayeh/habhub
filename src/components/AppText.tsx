@@ -101,6 +101,11 @@ export function AppText({
       allowFontScaling={false}
       style={[
         style,
+        // Keep legacy extra-black labels consistent with the shared type
+        // scale; dense screens remain readable without every label shouting.
+        flattened?.fontWeight === "900" || flattened?.fontWeight === 900
+          ? { fontWeight: "800" }
+          : undefined,
         preserveColor
           ? undefined
           : {

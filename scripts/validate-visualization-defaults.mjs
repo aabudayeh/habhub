@@ -100,3 +100,14 @@ assert.match(
 );
 
 console.log("Metric visualization defaults validation passed.");
+
+assert.match(
+  detail,
+  /values=\{trendValues\}\s+dates=\{trendDates\}/,
+  "main chart axis must use the same complete month/year dates as its values",
+);
+assert.match(
+  detail,
+  /values=\{values\}\s+dates=\{trendDates\}/,
+  "submetric chart axis must use the same complete month/year dates as its values",
+);

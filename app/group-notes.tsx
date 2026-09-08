@@ -196,7 +196,10 @@ export default function GroupNotesScreen() {
                 members={state.group.members}
                 state={state}
                 reactions={social.reactionsByTarget.get(key) ?? []}
+                summary={social.summariesByTarget.get(key)}
                 comments={social.commentsByTarget.get(key) ?? []}
+                commentPage={social.commentPages.get(key)}
+                onLoadCommentPage={(older) => void social.loadCommentPage(target, older)}
                 onReact={(reaction) =>
                   void social.react(target, reaction).catch((reason) =>
                     Alert.alert(

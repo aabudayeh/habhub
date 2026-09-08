@@ -6,7 +6,7 @@
    `http://127.0.0.1:8081`.
 2. Run `pnpm capture:marketing:web`. This opens a clean headless Edge profile,
    selects credential-free demo mode, marks onboarding complete, dismisses the
-   tutorial overlay and writes 420 × 911 JPEG candidates below
+   tutorial overlay and writes 840 × 1822 JPEG candidates (420 × 911 CSS pixels at 2× density) below
    `store/exports/capture-candidates/web-420x911/`.
 3. Inspect every candidate for loading/error UI, clipped controls, accidental
    personal data, stale navigation and feature/caption mismatch.

@@ -3,6 +3,7 @@ import React, { useRef, useState } from "react";
 import {
   Modal,
   Pressable,
+  ScrollView,
   StyleSheet,
   useWindowDimensions,
   View,
@@ -10,6 +11,7 @@ import {
 
 import { AppText as Text } from "@/src/components/AppText";
 import { useAppColors, useGroupAccent } from "@/src/theme";
+import { useTranslation } from "@/src/i18n";
 
 type Anchor = { x: number; y: number; width: number; height: number };
 
@@ -26,8 +28,10 @@ export function InfoPopover({
   const trigger = useRef<View>(null);
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const t = useTranslation();
   const { width, height } = useWindowDimensions();
-  const bubbleWidth = Math.min(250, width - 24);
+  const bubbleWidth = Math.min(340, width - 32);
+  const maximumHeight = Math.max(120, height - 48);
   const left = anchor
     ? Math.max(
         12,
@@ -62,9 +66,11 @@ export function InfoPopover({
   return (
     <View ref={trigger} collapsable={false} style={styles.root}>
       <Pressable
-        accessibilityLabel={label}
+        accessibilityLabel={t(label)}
         accessibilityRole="button"
-        hitSlop={8}
+        accessibilityState={{ expanded: open }}
+        hitSlop={2}
+        style={styles.trigger}
         onPress={toggle}
       >
         <Ionicons
@@ -83,7 +89,8 @@ export function InfoPopover({
       >
         <View style={styles.modal}>
           <Pressable
-            accessibilityLabel="Close information"
+            accessibilityLabel={t("Close information")}
+            accessibilityRole="button"
             onPress={() => setOpen(false)}
             style={StyleSheet.absoluteFill}
           />
@@ -97,12 +104,21 @@ export function InfoPopover({
                 left,
                 top,
                 width: bubbleWidth,
+                maxHeight: maximumHeight,
                 backgroundColor: colors.card,
                 borderColor: colors.border,
               },
             ]}
           >
-            <Text style={[styles.copy, { color: colors.ink }]}>{message}</Text>
+            <View style={styles.heading}>
+              <Text style={[styles.title, { color: colors.ink }]}>{label}</Text>
+              <Pressable accessibilityRole="button" accessibilityLabel={t("Close information")} onPress={() => setOpen(false)} style={styles.close}>
+                <Ionicons name="close" size={20} color={colors.muted} />
+              </Pressable>
+            </View>
+            <ScrollView style={styles.content} keyboardShouldPersistTaps="handled">
+              <Text style={[styles.copy, { color: colors.muted }]}>{message}</Text>
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -112,17 +128,22 @@ export function InfoPopover({
 
 const styles = StyleSheet.create({
   root: { position: "relative", zIndex: 20 },
+  trigger: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
   modal: { flex: 1 },
   bubble: {
     position: "absolute",
     borderWidth: 1,
-    borderRadius: 11,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+    borderRadius: 18,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     shadowColor: "#000000",
     shadowOpacity: 0.18,
     shadowRadius: 8,
     elevation: 12,
   },
-  copy: { fontSize: 8, lineHeight: 12, fontWeight: "700" },
+  heading: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 5 },
+  title: { flex: 1, fontSize: 14, lineHeight: 20, fontWeight: "700" },
+  close: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
+  content: { flexGrow: 0, flexShrink: 1 },
+  copy: { fontSize: 13, lineHeight: 20, fontWeight: "400" },
 });

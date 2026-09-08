@@ -1,24 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import {
-  AccessibilityInfo,
-  Image,
-  type ImageSourcePropType,
-  StyleSheet,
-  View,
-} from "react-native";
+import { AccessibilityInfo, StyleSheet, View } from "react-native";
 
 import { AppText as Text } from "@/src/components/AppText";
+import { ContinuousBodyFigure } from "@/src/components/ContinuousBodyFigure";
 import { GOAL_COMPLETE_COLOR } from "@/src/domain/colors";
 import {
-  statusAvatarAtlasBlend,
-  type StatusAvatarAtlasBlend,
-  type StatusAvatarAtlasSample,
-} from "@/src/domain/statusAvatarAtlas";
-import {
+  statusAvatarGeometry,
   statusBodyAppearance,
   statusBodyCompositionForSource,
 } from "@/src/domain/statusAvatar";
-import { STATUS_AVATAR_SPRITES } from "@/src/generated/statusAvatarSprites";
 import { useLocalization } from "@/src/i18n";
 import { useAppColors } from "@/src/theme";
 import type {
@@ -29,90 +19,6 @@ import type {
 
 const BODY_WIDTH = 164;
 const BODY_HEIGHT = 250;
-
-function spriteSource(
-  variant: StatusAvatarAtlasBlend["variant"],
-  sample: StatusAvatarAtlasSample,
-) {
-  return STATUS_AVATAR_SPRITES[variant][sample.row][
-    sample.column
-  ] as ImageSourcePropType;
-}
-
-function AtlasCell({
-  blend,
-  height,
-  opacityScale,
-  sample,
-  tintColor,
-  width,
-}: {
-  blend: StatusAvatarAtlasBlend;
-  height: number;
-  opacityScale: number;
-  sample: StatusAvatarAtlasSample;
-  tintColor?: string;
-  width: number;
-}) {
-  const { config } = blend;
-  // Keep the generated figure's source proportions. Scaling X and Y
-  // independently made the body and head look unnaturally long. The viewport
-  // clips only transparent atlas padding; the widest source figure still fits.
-  const scale = height / config.bodyHeight;
-
-  return (
-    <Image
-      fadeDuration={0}
-      // The sprite is a 2x normalized source at the largest runtime size.
-      // Decode it at full resolution before the uniform downscale on Android
-      // so fine contour and shading detail are not discarded up front.
-      resizeMethod="scale"
-      resizeMode="contain"
-      source={spriteSource(blend.variant, sample)}
-      style={[
-        styles.atlasImage,
-        {
-          height: config.spriteHeight * scale,
-          left: width / 2 - config.bodyCenter * scale,
-          opacity: sample.opacity * opacityScale,
-          tintColor,
-          top: -config.bodyTop * scale,
-          width: config.spriteWidth * scale,
-        },
-      ]}
-    />
-  );
-}
-
-function AtlasBodyLayer({
-  blend,
-  height,
-  opacityScale = 1,
-  tintColor,
-  width,
-}: {
-  blend: StatusAvatarAtlasBlend;
-  height: number;
-  opacityScale?: number;
-  tintColor?: string;
-  width: number;
-}) {
-  return (
-    <View pointerEvents="none" style={StyleSheet.absoluteFill}>
-      {blend.samples.map((sample) => (
-        <AtlasCell
-          key={`${sample.column}:${sample.row}`}
-          blend={blend}
-          height={height}
-          opacityScale={opacityScale}
-          sample={sample}
-          tintColor={tintColor}
-          width={width}
-        />
-      ))}
-    </View>
-  );
-}
 
 export function BodyProgressAvatar({
   allowPartialComposition = false,
@@ -230,14 +136,15 @@ export function BodyProgressAvatar({
       weightKg,
     ],
   );
-  const blend = useMemo(
+  const geometry = useMemo(
     () =>
-      statusAvatarAtlasBlend(
+      statusAvatarGeometry(
         sex,
-        appearance.adiposity,
+        appearance.bodyMass,
         appearance.muscleProgress,
+        appearance.adiposity,
       ),
-    [appearance.adiposity, appearance.muscleProgress, sex],
+    [appearance.adiposity, appearance.bodyMass, appearance.muscleProgress, sex],
   );
   const renderedWidth = BODY_WIDTH * boundedDisplayScale;
   const renderedHeight = Math.round(
@@ -252,9 +159,9 @@ export function BodyProgressAvatar({
   return (
     <View
       accessible
-      accessibilityRole="progressbar"
-      accessibilityLabel={`${t("Tracked goals")}: ${percent}%`}
-      accessibilityValue={{ min: 0, max: 100, now: percent, text: `${percent}%` }}
+      accessibilityRole={showProgressLabel ? "progressbar" : "image"}
+      accessibilityLabel={showProgressLabel ? `${t("Tracked goals")}: ${percent}%` : t("About this estimate")}
+      accessibilityValue={showProgressLabel ? { min: 0, max: 100, now: percent, text: `${percent}%` } : undefined}
       style={[
         styles.frame,
         {
@@ -270,22 +177,14 @@ export function BodyProgressAvatar({
           { height: renderedHeight, width: renderedWidth },
         ]}
       >
-        <AtlasBodyLayer
-          blend={blend}
+        <ContinuousBodyFigure
+          geometry={geometry}
           height={renderedHeight}
-          opacityScale={bodyModel ? 1 : 0.34}
-          tintColor={bodyModel ? undefined : colors.ink}
+          opacity={bodyModel ? 1 : 0.34}
+          color={colors.ink}
+          detailed={bodyModel}
           width={renderedWidth}
         />
-        {bodyModel ? (
-          <AtlasBodyLayer
-            blend={blend}
-            height={renderedHeight}
-            opacityScale={0.36}
-            tintColor={colors.ink}
-            width={renderedWidth}
-          />
-        ) : null}
         {progressHeight > 0.1 ? (
           <View
             pointerEvents="none"
@@ -297,11 +196,11 @@ export function BodyProgressAvatar({
                 { height: renderedHeight, width: renderedWidth },
               ]}
             >
-              <AtlasBodyLayer
-                blend={blend}
+              <ContinuousBodyFigure
+                geometry={geometry}
                 height={renderedHeight}
-                opacityScale={bodyModel ? 0.82 : 1}
-                tintColor={GOAL_COMPLETE_COLOR}
+                opacity={bodyModel ? 0.68 : 1}
+                color={GOAL_COMPLETE_COLOR}
                 width={renderedWidth}
               />
             </View>
@@ -338,9 +237,6 @@ const styles = StyleSheet.create({
   },
   avatarViewport: {
     overflow: "hidden",
-  },
-  atlasImage: {
-    position: "absolute",
   },
   progressClip: {
     position: "absolute",

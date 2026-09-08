@@ -1,12 +1,12 @@
 import { Ionicons } from "@expo/vector-icons";
-import { BlurView } from "expo-blur";
-import { router, usePathname } from "expo-router";
+import { router, usePathname, useSegments } from "expo-router";
 import React, {
   PropsWithChildren,
   useCallback,
   useEffect,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import {
   AccessibilityInfo,
@@ -15,6 +15,7 @@ import {
   Easing,
   findNodeHandle,
   InteractionManager,
+  Keyboard,
   LayoutChangeEvent,
   Platform,
   Pressable,
@@ -30,12 +31,15 @@ import { AppText as Text } from "@/src/components/AppText";
 import { useLocalization } from "@/src/i18n";
 import { localizedTutorialGuide } from "@/src/i18n/tutorial";
 import { useApp } from "@/src/state/AppProvider";
+import { activeLiveSetupStep, skipAllTutorialsSettings, tutorialPageAlreadyLearned, tutorialReadingTimeMs, tutorialWatchTiming } from "@/src/domain/tutorialUsability";
+import { readableTextColor } from "@/src/domain/colors";
 import {
   calloutLayout,
   relativeTargetRect,
   spotlightRect,
 } from "@/src/tutorial/geometry";
 import { BASIC_TUTORIAL_GUIDE } from "@/src/tutorial/basicGuide";
+import { activeTutorialModalHost, subscribeTutorialModalHost } from "@/src/tutorial/modalHost";
 import { tutorialPromptForPath } from "@/src/tutorial/firstVisit";
 import {
   TutorialIsolatedPreviewBoundary,
@@ -292,9 +296,16 @@ function isBlockedRoute(pathname: string) {
   ].some((route) => pathname.startsWith(route));
 }
 
-export function TutorialSpotlight() {
+export function TutorialSpotlight({ modalHostId }: { modalHostId?: string } = {}) {
   const tutorial = useOptionalTutorial();
+  const activeModalHost = useSyncExternalStore(
+    subscribeTutorialModalHost,
+    activeTutorialModalHost,
+    () => undefined,
+  );
   if (!tutorial) return null;
+  if (activeModalHost !== modalHostId) return null;
+  if (modalHostId && !tutorial.activeSession) return null;
   return <TutorialSpotlightSurface />;
 }
 
@@ -306,19 +317,54 @@ function TutorialSpotlightSurface() {
 }
 
 function TutorialFirstVisitPrompt() {
-  const { state } = useApp();
-  const { guides, hydrated, startGuide } = useTutorial();
+  const { state, updateSettings } = useApp();
+  const { guides, hydrated, progressByGuide, startGuide } = useTutorial();
   const pathname = usePathname();
+  const segments = useSegments();
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const onAccent = readableTextColor(accent);
   const { language, t } = useLocalization();
   const [promptedPageId, setPromptedPageId] = useState<string>();
+  const [keyboardVisible, setKeyboardVisible] = useState(Keyboard.isVisible());
+  const insets = useSafeAreaInsets();
   const page = tutorialPromptForPath(pathname);
   const pageId = page?.pageId;
   const pageGuideId = page?.guideId;
   const pageStepId = page?.stepId;
   const pageTitle = page?.title;
   const accountId = state.currentUserId || "anonymous";
+  const guide = guides.find((item) => item.id === pageGuideId);
+  const pageAlreadyLearned = tutorialPageAlreadyLearned(guide, pageStepId, progressByGuide);
+  const liveSetupActive = Boolean(activeLiveSetupStep(state.settings));
+
+  useEffect(() => {
+    const show = Keyboard.addListener("keyboardDidShow", () => setKeyboardVisible(true));
+    const hide = Keyboard.addListener("keyboardDidHide", () => setKeyboardVisible(false));
+    const onWebFocus = (event?: FocusEvent) => {
+      const element = event?.type === "focusout" ? event.relatedTarget : document.activeElement;
+      setKeyboardVisible(
+        element instanceof HTMLElement && (
+          element.tagName === "TEXTAREA" ||
+          (element.tagName === "INPUT" && !["button", "checkbox", "radio", "submit"].includes((element as HTMLInputElement).type)) ||
+          element.isContentEditable
+        ),
+      );
+    };
+    if (Platform.OS === "web") {
+      onWebFocus();
+      document.addEventListener("focusin", onWebFocus);
+      document.addEventListener("focusout", onWebFocus);
+    }
+    return () => {
+      show.remove();
+      hide.remove();
+      if (Platform.OS === "web") {
+        document.removeEventListener("focusin", onWebFocus);
+        document.removeEventListener("focusout", onWebFocus);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     setPromptedPageId(undefined);
@@ -326,6 +372,9 @@ function TutorialFirstVisitPrompt() {
       !hydrated ||
       !state.settings.onboardingComplete ||
       !state.settings.tutorialComplete ||
+      state.settings.tutorialPromptsDisabled ||
+      liveSetupActive ||
+      pageAlreadyLearned ||
       !pageId ||
       !pageGuideId
     )
@@ -348,12 +397,14 @@ function TutorialFirstVisitPrompt() {
     pageGuideId,
     pageId,
     pageStepId,
+    pageAlreadyLearned,
     state.settings.onboardingComplete,
     state.settings.tutorialComplete,
+    state.settings.tutorialPromptsDisabled,
+    liveSetupActive,
   ]);
 
-  if (!pageId || !pageGuideId || promptedPageId !== pageId) return null;
-  const guide = guides.find((item) => item.id === pageGuideId);
+  if (!pageId || !pageGuideId || promptedPageId !== pageId || keyboardVisible || liveSetupActive || state.settings.tutorialPromptsDisabled) return null;
   if (!guide) return null;
   const localizedGuide = localizedTutorialGuide(guide, language);
   const promptTitle = pageTitle
@@ -376,13 +427,7 @@ function TutorialFirstVisitPrompt() {
 
   return (
     <View
-      accessible
-      accessibilityRole="summary"
-      accessibilityLabel={t("First time on {name}?").replace(
-        "{name}",
-        promptTitle,
-      )}
-      style={styles.firstVisitLayer}
+      style={[styles.firstVisitLayer, { paddingBottom: Math.max(14, insets.bottom + (segments[0] === "(tabs)" ? 67 : 12)) }]}
       pointerEvents="box-none"
     >
       <View
@@ -395,7 +440,7 @@ function TutorialFirstVisitPrompt() {
           <Ionicons name="sparkles" size={18} color={accent} />
         </View>
         <View style={styles.firstVisitCopy}>
-          <Text style={[styles.firstVisitTitle, { color: colors.ink }]}>
+          <Text accessibilityRole="header" accessibilityLiveRegion="polite" style={[styles.firstVisitTitle, { color: colors.ink }]}>
             {t("First time on {name}?").replace(
               "{name}",
               promptTitle,
@@ -429,12 +474,19 @@ function TutorialFirstVisitPrompt() {
               onPress={() => launch("practice")}
               style={[styles.firstVisitChoice, { backgroundColor: accent, borderColor: accent }]}
             >
-              <Ionicons name="hand-left" size={14} color="#FFFFFF" />
-              <Text preserveColor style={styles.firstVisitPracticeText}>
+              <Ionicons name="hand-left" size={14} color={onAccent} />
+              <Text preserveColor style={[styles.firstVisitPracticeText, { color: onAccent }]}>
                 {t("Practice")}
               </Text>
             </Pressable>
           </View>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => { rememberPrompt(); updateSettings(skipAllTutorialsSettings()); }}
+            style={styles.firstVisitSkipAll}
+          >
+            <Text style={[styles.firstVisitSkipText, { color: colors.muted }]}>{t("Skip all tutorials")}</Text>
+          </Pressable>
         </View>
       </View>
     </View>
@@ -464,6 +516,7 @@ function TutorialSpotlightContent() {
   const pathname = usePathname();
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const onAccent = readableTextColor(accent);
   const { language, t } = useLocalization();
   const { width, height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -475,12 +528,15 @@ function TutorialSpotlightContent() {
   const [reduceMotion, setReduceMotion] = useState(false);
   const [calloutHeight, setCalloutHeight] = useState(214);
   const [watchPaused, setWatchPaused] = useState(false);
+  const [screenReaderEnabled, setScreenReaderEnabled] = useState(false);
   const fade = useRef(new Animated.Value(0)).current;
   const curtain = useRef(new Animated.Value(0)).current;
   const pointerProgress = useRef(new Animated.Value(0)).current;
   const routedParameterizedStep = useRef<string | undefined>(undefined);
   const settledPath = useRef<string | undefined>(undefined);
   const settledStep = useRef<string | undefined>(undefined);
+  const watchActionStep = useRef<string | undefined>(undefined);
+  const watchAdvance = useRef<() => void>(() => undefined);
   const localizedGuide = activeGuide
     ? localizedTutorialGuide(activeGuide, language)
     : undefined;
@@ -492,6 +548,7 @@ function TutorialSpotlightContent() {
     : "inactive";
   const currentStepIdentity = useRef(stepIdentity);
   currentStepIdentity.current = stepIdentity;
+  useEffect(() => { watchActionStep.current = undefined; }, [stepIdentity]);
   const targetId = step?.anchor?.target ?? step?.target;
   const raw = targetId ? targets[targetId] : undefined;
   const relative = raw ? relativeTargetRect(raw, overlayOrigin) : undefined;
@@ -515,11 +572,22 @@ function TutorialSpotlightContent() {
   const anchorActivatable = Boolean(
     targetId && activatableTargets[targetId],
   );
+  const practiceCompleteRef = useRef(practiceComplete);
+  practiceCompleteRef.current = practiceComplete;
   const watchMode = activeSession?.experienceMode === "watch";
+  const watchReadingTime = tutorialReadingTimeMs(
+    localizedStep?.title ?? step?.title,
+    localizedStep?.copy ?? step?.copy,
+    localizedStep?.interaction?.instruction ?? step?.interaction?.instruction,
+  );
+  const watchTiming = tutorialWatchTiming(watchReadingTime,
+    Boolean(step?.interaction?.actionId && anchorActivatable && isolatedPreviewActive),
+    step?.interaction?.autoAdvance === true);
+  const watchActionDelay = watchTiming.actionAtMs;
   const realPracticeAvailable =
     observedPractice && isolatedPreviewActive && Boolean(rect);
   const canPassThrough =
-    !watchMode && realPracticeAvailable && !anchorActivatable;
+    !watchMode && realPracticeAvailable;
   const accessibleRehearsalAvailable = Boolean(
     observedPractice &&
       isolatedPreviewActive &&
@@ -563,6 +631,25 @@ function TutorialSpotlightContent() {
   }, []);
 
   useEffect(() => setWatchPaused(false), [activeSession?.runId]);
+
+  useEffect(() => {
+    // React Native Web reports true unconditionally; browsers do not expose
+    // screen-reader detection. Keep the explicit accessible Pause control.
+    if (Platform.OS === "web") return;
+    let mounted = true;
+    void AccessibilityInfo.isScreenReaderEnabled().then((enabled) => {
+      if (mounted) setScreenReaderEnabled(enabled);
+    });
+    const subscription = AccessibilityInfo.addEventListener("screenReaderChanged", setScreenReaderEnabled);
+    return () => {
+      mounted = false;
+      subscription.remove();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (screenReaderEnabled) setWatchPaused(true);
+  }, [screenReaderEnabled, activeSession?.runId]);
 
   useEffect(() => {
     fade.stopAnimation();
@@ -794,6 +881,7 @@ function TutorialSpotlightContent() {
     step,
     transitionDurationMs,
   ]);
+  watchAdvance.current = advance;
 
   useEffect(() => {
     pointerProgress.stopAnimation();
@@ -812,6 +900,7 @@ function TutorialSpotlightContent() {
       return;
     }
     const animation = Animated.sequence([
+      Animated.delay(watchActionDelay !== undefined ? Math.max(0, watchActionDelay - 960) : 0),
       Animated.timing(pointerProgress, {
         toValue: 0.72,
         duration: 720,
@@ -833,10 +922,12 @@ function TutorialSpotlightContent() {
     pointerProgress,
     reduceMotion,
     stepIdentity,
+    step?.interaction?.actionId,
     waitingForAnchor,
     waitingForRoute,
     watchMode,
     watchPaused,
+    watchActionDelay,
   ]);
 
   useEffect(() => {
@@ -850,16 +941,22 @@ function TutorialSpotlightContent() {
     )
       return;
     const actionId = step?.interaction?.actionId;
-    const actionTimer = actionId
+    // Navigation actions advance immediately when they report success. Give
+    // the text its full reading interval before demonstrating that click.
+    const actionTimer = actionId && !practiceCompleteRef.current && watchActionDelay !== undefined && isolatedPreviewActive && watchActionStep.current !== stepIdentity
       ? setTimeout(() => {
-          if (targetId && anchorActivatable)
-            requestTargetActivation(targetId);
-          reportPracticeAction(actionId, "isolated-preview");
-        }, reduceMotion ? 240 : 1_450)
+          if (currentStepIdentity.current !== stepIdentity) return;
+          watchActionStep.current = stepIdentity;
+          // Only a real handler may report an observed action. Traversal is
+          // not evidence that a to-do, edit, chart or workout action happened.
+          if (targetId && anchorActivatable) requestTargetActivation(targetId);
+        }, watchActionDelay)
       : undefined;
     const advanceTimer = setTimeout(
-      advance,
-      reduceMotion ? 2_000 : actionId ? 3_900 : 4_300,
+      () => {
+        if (currentStepIdentity.current === stepIdentity) watchAdvance.current();
+      },
+      watchTiming.advanceAtMs,
     );
     return () => {
       if (actionTimer) clearTimeout(actionTimer);
@@ -867,19 +964,20 @@ function TutorialSpotlightContent() {
     };
   }, [
     active,
-    advance,
     anchorActivatable,
     pageSettled,
-    reduceMotion,
-    reportPracticeAction,
+    isolatedPreviewActive,
     requestTargetActivation,
     step?.interaction?.actionId,
+    step?.interaction?.autoAdvance,
     stepIdentity,
     targetId,
     waitingForAnchor,
     waitingForRoute,
     watchMode,
     watchPaused,
+    watchTiming.advanceAtMs,
+    watchActionDelay,
   ]);
 
   useEffect(() => {
@@ -1074,7 +1172,7 @@ function TutorialSpotlightContent() {
         />
       )}
 
-      {watchMode && rect ? (
+      {watchMode && rect && watchActionDelay !== undefined ? (
         <Animated.View
           pointerEvents="none"
           accessibilityElementsHidden
@@ -1106,7 +1204,7 @@ function TutorialSpotlightContent() {
             },
           ]}
         >
-          <Ionicons name="hand-left" size={21} color="#FFFFFF" />
+          <Ionicons name="hand-left" size={21} color={onAccent} />
         </Animated.View>
       ) : null}
 
@@ -1119,29 +1217,13 @@ function TutorialSpotlightContent() {
             left: layout.left,
             top: layout.top,
             width: layout.width,
-            // The callout is glass over the live app, not a colored card. BlurView
-            // supplies the readable tint while this low-alpha wash avoids an
-            // opaque block on platforms whose blur warms up a frame late.
-            backgroundColor: colors.isDark
-              ? "rgba(8,18,34,0.08)"
-              : "rgba(255,255,255,0.06)",
+            // Text must remain readable over charts and dense tracker cards,
+            // including browsers and devices without reliable backdrop blur.
+            backgroundColor: colors.card,
             borderColor: accent,
           },
         ]}
       >
-        <BlurView
-          pointerEvents="none"
-          intensity={Platform.OS === "android" ? 34 : 48}
-          tint={
-            colors.isDark
-              ? "systemUltraThinMaterialDark"
-              : "systemUltraThinMaterial"
-          }
-          experimentalBlurMethod={
-            Platform.OS === "android" ? "dimezisBlurView" : undefined
-          }
-          style={styles.calloutBlur}
-        />
         <View
           ref={accessibilityIntroRef}
           accessible
@@ -1226,11 +1308,13 @@ function TutorialSpotlightContent() {
               color={practiceComplete ? "#149D67" : accent}
             />
             <Text style={[styles.practiceText, { color: colors.ink }]}>
-              {practiceComplete ? t("Nice - practice complete.") : displayStep.interaction.instruction}
+              {practiceComplete ? t("Nice - practice complete.") : watchMode && !anchorActivatable
+                ? t("Read this step, then try the action in Practice.")
+                : displayStep.interaction.instruction}
             </Text>
           </View>
         ) : null}
-        {accessibleRehearsalAvailable && step.interaction?.actionId ? (
+        {!watchMode && accessibleRehearsalAvailable && step.interaction?.actionId ? (
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={t("Complete simulated practice")}
@@ -1280,6 +1364,7 @@ function TutorialSpotlightContent() {
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={primaryLabel}
+            testID="tutorial-next"
             accessibilityState={{ disabled: nextDisabled }}
             disabled={nextDisabled}
             onPress={advance}
@@ -1290,9 +1375,9 @@ function TutorialSpotlightContent() {
             ]}
           >
             {waitingForAnchor || waitingForRoute ? (
-              <Ionicons name="ellipsis-horizontal" size={17} color={palette.white} />
+              <Ionicons name="ellipsis-horizontal" size={17} color={onAccent} />
             ) : null}
-            <Text preserveColor style={styles.buttonText}>{primaryLabel}</Text>
+            <Text preserveColor style={[styles.buttonText, { color: onAccent }]}>{primaryLabel}</Text>
             {!waitingForAnchor && !waitingForRoute ? (
               <Ionicons
                 name={
@@ -1301,7 +1386,7 @@ function TutorialSpotlightContent() {
                     : "arrow-forward"
                 }
                 size={16}
-                color={palette.white}
+                color={onAccent}
               />
             ) : null}
           </Pressable>
@@ -1343,7 +1428,7 @@ const styles = StyleSheet.create({
   },
   firstVisitCopy: { flex: 1, gap: 4 },
   firstVisitTitle: { fontSize: 14, lineHeight: 19, fontWeight: "900" },
-  firstVisitDetail: { fontSize: 10, lineHeight: 15 },
+  firstVisitDetail: { fontSize: 12, lineHeight: 18 },
   firstVisitActions: {
     marginTop: 7,
     flexDirection: "row",
@@ -1352,16 +1437,17 @@ const styles = StyleSheet.create({
     gap: 7,
   },
   firstVisitSkip: {
-    minHeight: 36,
+    minHeight: 44,
     paddingHorizontal: 10,
     borderWidth: 1,
     borderRadius: 11,
     alignItems: "center",
     justifyContent: "center",
   },
-  firstVisitSkipText: { fontSize: 9, fontWeight: "800" },
+  firstVisitSkipText: { fontSize: 11, fontWeight: "800" },
+  firstVisitSkipAll: { minHeight: 44, alignItems: "center", justifyContent: "center", alignSelf: "stretch" },
   firstVisitChoice: {
-    minHeight: 36,
+    minHeight: 44,
     paddingHorizontal: 11,
     borderWidth: 1,
     borderRadius: 11,
@@ -1370,8 +1456,8 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 5,
   },
-  firstVisitChoiceText: { fontSize: 9, fontWeight: "900" },
-  firstVisitPracticeText: { color: "#FFFFFF", fontSize: 9, fontWeight: "900" },
+  firstVisitChoiceText: { fontSize: 11, fontWeight: "900" },
+  firstVisitPracticeText: { color: "#FFFFFF", fontSize: 11, fontWeight: "900" },
   overlay: {
     ...StyleSheet.absoluteFillObject,
     zIndex: 10000,
@@ -1419,11 +1505,6 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 8 },
     elevation: 20,
   },
-  calloutBlur: {
-    ...StyleSheet.absoluteFillObject,
-    borderRadius: 20,
-    overflow: "hidden",
-  },
   accessibilityIntro: {
     position: "absolute",
     width: 1,
@@ -1459,14 +1540,14 @@ const styles = StyleSheet.create({
   watchStatusCopy: { flex: 1, flexDirection: "row", alignItems: "center", gap: 7 },
   watchStatusText: { flex: 1, fontSize: 10, lineHeight: 14, fontWeight: "800" },
   watchToggle: {
-    minHeight: 28,
+    minHeight: 44,
     paddingHorizontal: 9,
     borderWidth: 1,
     borderRadius: 9,
     alignItems: "center",
     justifyContent: "center",
   },
-  watchToggleText: { fontSize: 9, fontWeight: "900" },
+  watchToggleText: { fontSize: 11, fontWeight: "900" },
   practice: {
     marginTop: 10,
     borderRadius: 12,

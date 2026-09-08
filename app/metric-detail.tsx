@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
+import { LiveSetupLogHint } from "@/src/components/LiveSetupCoach";
 import { router, useLocalSearchParams } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -12,7 +13,7 @@ import {
 } from "react-native";
 import Svg, { Circle } from "react-native-svg";
 import { AppText as Text } from "@/src/components/AppText";
-import { LocalizedAlert as Alert, useLocale, useLocalization } from "@/src/i18n";
+import { LocalizedAlert as Alert, localeForLanguage, useLocale, useLocalization } from "@/src/i18n";
 import {
   localizeExerciseName,
   localizeSubmetricName,
@@ -113,6 +114,7 @@ import {
 } from "@/src/domain/fasting";
 import { ScreenTimeBreakdownCard } from "@/src/screenTime/ScreenTimeBreakdownCard";
 import { useTutorial } from "@/src/tutorial/TutorialContext";
+import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 import {
   FOOD_MACROS,
   FOOD_NUTRIENTS,
@@ -193,9 +195,10 @@ function OptionalTutorialTarget({
   enabled,
   id,
   children,
-}: React.PropsWithChildren<{ enabled: boolean; id: string }>) {
+  onTutorialActivate,
+}: React.PropsWithChildren<{ enabled: boolean; id: string; onTutorialActivate?: () => void }>) {
   return enabled ? (
-    <TutorialTarget id={id}>{children}</TutorialTarget>
+    <TutorialTarget id={id} onTutorialActivate={onTutorialActivate}>{children}</TutorialTarget>
   ) : (
     <>{children}</>
   );
@@ -230,6 +233,7 @@ export default function TrackerDetail() {
   } = useApp();
   const cloud = useCloudSyncActions();
   const tutorial = useTutorial();
+  const tutorialSandbox = useTutorialSandboxActive();
   const locale = useLocale();
   const { language, t } = useLocalization();
   const colors = useAppColors();
@@ -1232,7 +1236,7 @@ export default function TrackerDetail() {
   const formatRecordValue = (value: number) =>
     tracker.id === "todo_completion"
       ? `${Math.round(value)} completed`
-      : formatMetricValue(tracker, value);
+      : formatMetricValue(tracker, value, locale);
   const weightStats =
     tracker.id === "weight"
       ? weightProgressStats(state, state.currentUserId, day)
@@ -1395,6 +1399,7 @@ export default function TrackerDetail() {
           </View>
         }
       />
+      <LiveSetupLogHint tracker />
       <View {...pageSwipeResponder.panHandlers}>
       <View style={styles.controls}>
         <Card style={styles.periodCard}>
@@ -1410,6 +1415,10 @@ export default function TrackerDetail() {
                   key={item.id}
                   enabled={item.id === "week"}
                   id="metric-detail-week"
+                  onTutorialActivate={tutorialSandbox ? () => {
+                    chooseDetailPeriod("week");
+                    tutorial.reportEvent({ actionId: "tutorial.metric-detail.open-week", scope: "isolated-preview" });
+                  } : undefined}
                 >
                 <Pressable
                   accessibilityRole="button"
@@ -1601,7 +1610,11 @@ export default function TrackerDetail() {
         ) : null}
       </View>
       {canSkipToday || canAddEntry || canOpenWorkout || canOpenPhotoProgress || canUseActivityTimer || isFasting ? (
-        <OptionalTutorialTarget enabled={isFasting} id="fasting-controls">
+        <OptionalTutorialTarget enabled={isFasting} id="fasting-controls" onTutorialActivate={tutorialSandbox && canControlFast ? () => {
+          if (fastingProgress?.active) endFast(tracker.id);
+          else startFast(tracker.id);
+          tutorial.reportEvent({ actionId: "tutorial.fasting.toggle", scope: "isolated-preview" });
+        } : undefined}>
           <View style={styles.detailQuickActions}>
           {canSkipToday ? (
             <Pressable
@@ -1834,14 +1847,14 @@ export default function TrackerDetail() {
                 : !displayAvailable
                   ? "Not available"
                   : weightStats
-                    ? formatMetricValue(tracker, weightStats.currentWeight)
+                    ? formatMetricValue(tracker, weightStats.currentWeight, locale)
                   : dates.length === 1 && mergedCompoundValue
                     ? mergedCompoundValue
                   : isBloodPressure
                     ? `${Math.round(dates.length === 1 ? current : average)}/${Math.round(dates.length === 1 ? currentDiastolic : averageDiastolic)} mmHg`
                   : formatMetricValue(
                       tracker,
-                      dates.length === 1 ? current : average,
+                      dates.length === 1 ? current : average, locale,
                     )}
             </Text>
             <Text style={[styles.sub, { color: colors.muted }]}>
@@ -1944,7 +1957,7 @@ export default function TrackerDetail() {
                 </Text>
                 <Text style={[styles.weightJourneyValue, { color: colors.ink }]}>
                   {journeyStats.hasMeasurement
-                    ? formatMetricValue(tracker, journeyStats.starting)
+                    ? formatMetricValue(tracker, journeyStats.starting, locale)
                     : "Not logged"}
                 </Text>
               </View>
@@ -1954,7 +1967,7 @@ export default function TrackerDetail() {
                 </Text>
                 <Text style={[styles.weightJourneyValue, { color: colors.ink }]}>
                   {journeyStats.hasMeasurement
-                    ? formatMetricValue(tracker, journeyStats.current)
+                    ? formatMetricValue(tracker, journeyStats.current, locale)
                     : "—"}
                 </Text>
               </View>
@@ -1963,7 +1976,7 @@ export default function TrackerDetail() {
                   TARGET
                 </Text>
                 <Text style={[styles.weightJourneyValue, { color: colors.ink }]}>
-                  {formatMetricValue(tracker, journeyStats.target)}
+                  {formatMetricValue(tracker, journeyStats.target, locale)}
                 </Text>
               </View>
             </View>
@@ -2144,8 +2157,8 @@ export default function TrackerDetail() {
               </Text>
               <Text style={[styles.dayProgressLabel, { color: colors.muted }]}>
                 {displayedValue > displayedTarget
-                  ? `${formatMetricValue(tracker, displayedValue - displayedTarget)} above`
-                  : `${formatMetricValue(tracker, displayedTarget - displayedValue)} left`}
+                  ? `${formatMetricValue(tracker, displayedValue - displayedTarget, locale)} above`
+                  : `${formatMetricValue(tracker, displayedTarget - displayedValue, locale)} left`}
               </Text>
             </View>
             <ProgressBar
@@ -2168,7 +2181,7 @@ export default function TrackerDetail() {
           <TutorialTarget id="metric-detail-chart">
             <Trend
               values={trendValues}
-              dates={dates}
+              dates={trendDates}
               axisRange={
                 period === "year"
                   ? "year"
@@ -2201,7 +2214,7 @@ export default function TrackerDetail() {
                   </Text>
                   <Trend
                     values={values}
-                    dates={dates}
+                    dates={trendDates}
                     axisRange={
                       period === "year"
                         ? "year"
@@ -2260,7 +2273,7 @@ export default function TrackerDetail() {
             tracker.dataType !== "boolean" ? (
               <Stat
                 label="Period total"
-                value={formatMetricValue(tracker, periodStats.total)}
+                value={formatMetricValue(tracker, periodStats.total, locale)}
                 colors={colors}
               />
             ) : null}
@@ -2269,7 +2282,7 @@ export default function TrackerDetail() {
               value={
                 isBloodPressure
                   ? `${Math.round(overallAverage)}/${Math.round(overallAverageDiastolic)} mmHg`
-                  : formatMetricValue(tracker, overallAverage)
+                  : formatMetricValue(tracker, overallAverage, locale)
               }
               colors={colors}
             />
@@ -2367,7 +2380,7 @@ export default function TrackerDetail() {
                   historicalRecords.bestWeekday
                     ? `${historicalRecords.bestWeekday.weekday} · ${formatMetricValue(
                         tracker,
-                        historicalRecords.bestWeekday.value,
+                        historicalRecords.bestWeekday.value, locale,
                       )}`
                     : "—"
                 }
@@ -2379,7 +2392,7 @@ export default function TrackerDetail() {
                   historicalRecords.bestWeekOfMonth
                     ? `Week ${historicalRecords.bestWeekOfMonth.week} · ${formatMetricValue(
                         tracker,
-                        historicalRecords.bestWeekOfMonth.value,
+                        historicalRecords.bestWeekOfMonth.value, locale,
                       )}`
                     : "—"
                 }
@@ -2391,7 +2404,7 @@ export default function TrackerDetail() {
                   historicalRecords.bestMonthOfYear
                     ? `${historicalRecords.bestMonthOfYear.month} · ${formatMetricValue(
                         tracker,
-                        historicalRecords.bestMonthOfYear.value,
+                        historicalRecords.bestMonthOfYear.value, locale,
                       )}`
                     : "—"
                 }
@@ -2627,7 +2640,7 @@ export default function TrackerDetail() {
                 </View>
                 <View style={styles.gymEntryActions}>
                   <Text style={[styles.entryValue, { color: tracker.color }]}>
-                    {formatMetricValue(tracker, contribution)}
+                    {formatMetricValue(tracker, contribution, locale)}
                   </Text>
                   {!supportsStepCoverageEditing ? <Pressable
                     accessibilityRole="button"
@@ -2846,7 +2859,7 @@ export default function TrackerDetail() {
                     return `${Math.round(Number(entry.value))}/${Math.round(Number(pair.diastolic.value))} mmHg${pair.pulse ? ` · ${Math.round(Number(pair.pulse.value))} bpm` : ""}`;
                   return typeof entry.value === "number" ||
                     typeof entry.value === "boolean"
-                    ? formatMetricValue(tracker, Number(entry.value))
+                    ? formatMetricValue(tracker, Number(entry.value), locale)
                     : String(entry.value);
                 })()}
               </Text>
@@ -2943,7 +2956,8 @@ export default function TrackerDetail() {
             <ExpandableImage
               uri={photo.uri}
               containerStyle={styles.photoImageFrame}
-              thumbnailStyle={styles.photoImage}
+              thumbnailStyle={[styles.photoImage, { backgroundColor: colors.canvas }]}
+              thumbnailContentFit="contain"
             />
           </Card>
           </Pressable>
@@ -5709,6 +5723,7 @@ function summaryLine(
   target: number,
   applicable: boolean,
 ) {
+  const locale = localeForLanguage(state.settings.language);
   if (!applicable) {
     if (tracker.id === "todo_completion")
       return "No to-dos are scheduled for this date.";
@@ -5748,8 +5763,8 @@ function summaryLine(
   if (tracker.goalRange)
     return `Preferred range ${tracker.goalRange.min}–${tracker.goalRange.max} ${tracker.unit}`;
   if (tracker.goal.kind === "at_least" && value > target)
-    return `${formatMetricValue(tracker, value - target)} above goal`;
-  return `Target ${formatMetricValue(tracker, target)}`;
+    return `${formatMetricValue(tracker, value - target, locale)} above goal`;
+  return `Target ${formatMetricValue(tracker, target, locale)}`;
 }
 function nutritionLine(
   nutrition: NonNullable<

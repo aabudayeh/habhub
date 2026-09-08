@@ -142,6 +142,105 @@ function expoTicketDisposition(ticket: PushTicket) {
   return "retry" as const;
 }
 
+const PUSH_QUERY_PAGE_SIZE = 250;
+const PUSH_RECIPIENT_CHUNK_SIZE = 100;
+const PUSH_DISCOVERY_ROW_LIMIT = 100_000;
+
+function assertPushDiscoveryBudget(count: number) {
+  // Fail retryably before any acceptance checkpoint instead of pretending a
+  // partial audience was complete. This is a worker memory/work safety fence.
+  if (count > PUSH_DISCOVERY_ROW_LIMIT)
+    throw new Error("Push audience exceeds the bounded discovery budget.");
+}
+
+function quotedPushCursor(value: unknown) {
+  if (typeof value !== "string" || !value.length)
+    throw new Error("Push discovery returned an invalid cursor.");
+  return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+}
+
+/** Unique ordered keys avoid the server's default 1,000-row result cap. */
+async function readPushRows<Row extends Record<string, unknown>>(
+  buildQuery: () => any,
+  keys: string[],
+): Promise<Row[]> {
+  const rows: Row[] = [];
+  let cursor: Row | undefined;
+  for (;;) {
+    let query = buildQuery();
+    for (const key of keys) query = query.order(key, { ascending: true });
+    if (cursor) {
+      if (keys.length === 1) query = query.gt(keys[0], cursor[keys[0]]);
+      else query = query.or(keys.map((key, index) => {
+        const prefix = keys.slice(0, index).map((prior) => `${prior}.eq.${quotedPushCursor(cursor![prior])}`);
+        const comparison = `${key}.gt.${quotedPushCursor(cursor![key])}`;
+        return prefix.length ? `and(${[...prefix, comparison].join(",")})` : comparison;
+      }).join(","));
+    }
+    const { data, error } = await query.limit(PUSH_QUERY_PAGE_SIZE)
+      .abortSignal(AbortSignal.timeout(20_000));
+    if (error) throw error;
+    const page = (data ?? []) as Row[];
+    if (page.length > PUSH_QUERY_PAGE_SIZE)
+      throw new Error("Push discovery exceeded its page size.");
+    rows.push(...page);
+    assertPushDiscoveryBudget(rows.length);
+    if (page.length < PUSH_QUERY_PAGE_SIZE) return rows;
+    const next = page[page.length - 1];
+    for (const key of keys) quotedPushCursor(next[key]);
+    if (cursor && keys.every((key) => next[key] === cursor![key]))
+      throw new Error("Push discovery cursor did not advance.");
+    cursor = next;
+  }
+}
+
+/** Bound every UUID in-clause and parallelize at most four chunks at once. */
+async function readPushRecipientChunks<Row>(
+  recipientIds: readonly string[],
+  readChunk: (ids: string[]) => Promise<Row[]>,
+): Promise<Row[]> {
+  const ids = [...new Set(recipientIds)];
+  assertPushDiscoveryBudget(ids.length);
+  const rows: Row[] = [];
+  for (let offset = 0; offset < ids.length; offset += PUSH_RECIPIENT_CHUNK_SIZE * 4) {
+    const work: Promise<Row[]>[] = [];
+    for (let index = offset; index < Math.min(ids.length, offset + PUSH_RECIPIENT_CHUNK_SIZE * 4); index += PUSH_RECIPIENT_CHUNK_SIZE)
+      work.push(readChunk(ids.slice(index, index + PUSH_RECIPIENT_CHUNK_SIZE)));
+    for (const page of await Promise.all(work)) {
+      rows.push(...page);
+      assertPushDiscoveryBudget(rows.length);
+    }
+  }
+  return rows;
+}
+
+async function discoverPushRegistrations(admin: AdminClient, recipientIds: string[]) {
+  const [tokens, webSubscriptions] = await Promise.all([
+    readPushRecipientChunks(recipientIds, (ids) => readPushRows<DevicePushTokenRow>(() => admin
+      .from("device_push_tokens")
+      .select("user_id, token, preferences, platform, updated_at")
+      .in("user_id", ids), ["token"])),
+    readPushRecipientChunks(recipientIds, (ids) => readPushRows<WebPushSubscriptionRow>(() => admin
+      .from("web_push_subscriptions")
+      .select("user_id, endpoint, p256dh, auth, expiration_time, preferences, updated_at")
+      .in("user_id", ids), ["endpoint"])).catch((error) => {
+        if (isMissingWebPushSubscriptionsError(error)) return [];
+        throw error;
+      }),
+  ]);
+  return { tokens, webSubscriptions };
+}
+
+async function loadPushAcceptances(admin: AdminClient, eventKey: string, recipientIds: string[]) {
+  // Never put bearer-capability Web Push endpoints in an unbounded URL list.
+  // Exact owner/token matching is applied to these event-scoped rows below.
+  return readPushRecipientChunks(recipientIds, (ids) => readPushRows<{ user_id: string; token: string }>(() => admin
+    .from("push_token_dispatch_acceptances")
+    .select("user_id, token")
+    .eq("event_key", eventKey)
+    .in("user_id", ids), ["user_id", "token"]));
+}
+
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS")
     return new Response("ok", { headers: cors });
@@ -396,6 +495,24 @@ Deno.serve(async (request) => {
       }
     }
 
+    if (canonical.eventType === "group_schedule_reminder") {
+      const scheduleItemId = normalizedUuid(canonical.data.scheduleItemId);
+      const current = scheduleItemId
+        ? await admin.rpc("group_schedule_reminder_is_current", {
+            p_group_id: canonical.groupId,
+            p_item_id: scheduleItemId,
+            p_event_key: canonical.eventKey,
+          })
+        : { data: false, error: null };
+      // Fail closed/retry on a missing RPC during rolling deployment. Never
+      // deliver an old event after its time/offset changes or it is deleted.
+      if (current.error) throw current.error;
+      if (current.data !== true) {
+        await markCanonicalEventAccepted(admin, canonical, "schedule_changed");
+        return json({ sent: 0, suppressed: true, accepted: true });
+      }
+    }
+
     const preMutationMembershipEvent =
       canonical.category === "membership" &&
       legacyPreMutationMembershipEvents.has(canonical.eventType);
@@ -546,22 +663,7 @@ Deno.serve(async (request) => {
       recipientIds,
     );
 
-    const { data: tokens, error: tokenError } = await admin
-      .from("device_push_tokens")
-      .select("user_id, token, preferences, platform, updated_at")
-      .in("user_id", recipientIds);
-    if (tokenError) throw tokenError;
-    const webSubscriptionResult = await admin
-      .from("web_push_subscriptions")
-      .select(
-        "user_id, endpoint, p256dh, auth, expiration_time, preferences, updated_at",
-      )
-      .in("user_id", recipientIds);
-    if (
-      webSubscriptionResult.error &&
-      !isMissingWebPushSubscriptionsError(webSubscriptionResult.error)
-    )
-      throw webSubscriptionResult.error;
+    const { tokens, webSubscriptions } = await discoverPushRegistrations(admin, recipientIds);
     const discoveredTargets: PushTarget[] = [
       ...((tokens ?? []) as DevicePushTokenRow[]).map((item) => ({
         kind: "expo" as const,
@@ -570,11 +672,7 @@ Deno.serve(async (request) => {
         updatedAt: item.updated_at as string,
         preferences: objectRecord(item.preferences),
       })),
-      ...(webSubscriptionResult.error
-        ? []
-        : (
-            (webSubscriptionResult.data ?? []) as WebPushSubscriptionRow[]
-          ).map((item) => {
+      ...webSubscriptions.map((item) => {
             const expirationTime = Number(item.expiration_time);
             return {
               kind: "web" as const,
@@ -589,7 +687,7 @@ Deno.serve(async (request) => {
               updatedAt: item.updated_at as string,
               preferences: objectRecord(item.preferences),
             };
-          })),
+          }),
     ];
     const targets = internalResendTargets
       ? discoveredTargets.filter(
@@ -628,22 +726,7 @@ Deno.serve(async (request) => {
         preferenceAllowed(item.preferences ?? {}, canonical!) &&
         !inQuietHours(item.preferences ?? {}),
     );
-    const { data: priorAcceptances, error: acceptanceReadError } =
-      preferenceEligible.length
-        ? await admin
-            .from("push_token_dispatch_acceptances")
-            .select("user_id, token")
-            .eq("event_key", canonical.eventKey)
-            .in(
-              "user_id",
-              [...new Set(preferenceEligible.map((item) => item.userId))],
-            )
-            .in(
-              "token",
-              preferenceEligible.map((item) => item.token),
-            )
-        : { data: [], error: null };
-    if (acceptanceReadError) throw acceptanceReadError;
+    const priorAcceptances = await loadPushAcceptances(admin, canonical.eventKey, preferenceEligible.map((item) => item.userId));
     const alreadyAccepted = new Set(
       (priorAcceptances ?? []).map(
         (item) => `${item.user_id as string}:${item.token as string}`,
@@ -1872,13 +1955,12 @@ async function recipientChatNicknames(
   // Nicknames are private aliases owned by the notification recipient. Resolve
   // them after the authorized audience is known so one member's alias is never
   // reused for another member's notification.
-  const { data, error } = await admin
+  const data = await readPushRecipientChunks(recipientIds, (ids) => readPushRows<{ owner_user_id: string; nickname: string }>(() => admin
     .from("group_member_aliases")
     .select("owner_user_id, nickname")
     .eq("group_id", event.groupId)
     .eq("subject_user_id", senderId)
-    .in("owner_user_id", recipientIds);
-  if (error) throw error;
+    .in("owner_user_id", ids), ["owner_user_id"]));
   return new Map(
     (
       (data ?? []) as { owner_user_id: unknown; nickname: unknown }[]
@@ -1970,7 +2052,8 @@ async function canonicalRecipients(
     if (error) throw error;
     return membership?.status === "active" ? [event.recipientId] : [];
   }
-  let query = admin
+  const members = await readPushRows<{ user_id: string; role: string }>(() => {
+    let query = admin
     .from("group_members")
     .select("user_id, role")
     .eq("group_id", event.groupId)
@@ -1979,11 +2062,28 @@ async function canonicalRecipients(
     query = query.neq("user_id", senderId);
   if (event.audience === "admins")
     query = query.in("role", ["owner", "admin"]);
-  const { data: members, error } = await query;
-  if (error) throw error;
+    return query;
+  }, ["user_id"]);
   let ids = (members ?? []).map((member) => member.user_id as string);
   if (event.audience === "challenge_participants") {
     ids = ids.filter((id) => challengeParticipantIds?.has(id));
+  }
+  if (event.eventType === "group_schedule_reminder" && ids.length) {
+    // Only recipients who explicitly opted in when this instance became due
+    // receive it. Re-check the latest account preference as well as each token
+    // below, so an opt-out on another device takes effect promptly.
+    const [inbox, snapshots] = await Promise.all([
+      readPushRecipientChunks(ids, (chunk) => readPushRows<{ recipient_id: string }>(() => admin.from("group_notification_events").select("recipient_id")
+        .eq("group_id", event.groupId).eq("event_key", event.eventKey)
+        .eq("event_type", "group_schedule_reminder").in("recipient_id", chunk), ["recipient_id"])),
+      readPushRecipientChunks(ids, (chunk) => readPushRows<{ user_id: string; notifications: unknown }>(() => admin.from("user_snapshots").select("user_id, notifications:payload->settings->notifications")
+        .in("user_id", chunk), ["user_id"])),
+    ]);
+    const stagedRecipients = new Set(inbox.map((row) => row.recipient_id));
+    const optedIn = new Set(snapshots.filter((row) => {
+      return preferenceAllowed(objectRecord(row.notifications), event);
+    }).map((row) => row.user_id));
+    ids = ids.filter((id) => stagedRecipients.has(id) && optedIn.has(id));
   }
   return filterBlockedChatRecipients(
     admin,
@@ -2009,17 +2109,26 @@ async function filterBlockedChatRecipients(
     event.eventType === "group_note_created" ||
     event.eventType === "group_note_updated" ||
     event.eventType === "group_schedule_created" ||
-    event.eventType === "group_schedule_updated";
+    event.eventType === "group_schedule_updated" ||
+    event.eventType === "group_schedule_reminder";
   if (!userAuthoredInteraction || !unique.length) return unique;
-  const { data, error } = await admin
-    .from("user_blocks")
-    .select("blocker_id, blocked_user_id")
-    .or(`blocker_id.eq.${senderId},blocked_user_id.eq.${senderId}`);
-  if (error) {
+  let data: { blocker_id: string; blocked_user_id: string }[];
+  try {
+    const sides = await Promise.all([
+      readPushRecipientChunks(unique, (ids) => readPushRows<{ blocker_id: string; blocked_user_id: string }>(() => admin
+        .from("user_blocks").select("blocker_id, blocked_user_id")
+        .eq("blocker_id", senderId).in("blocked_user_id", ids), ["blocked_user_id"])),
+      readPushRecipientChunks(unique, (ids) => readPushRows<{ blocker_id: string; blocked_user_id: string }>(() => admin
+        .from("user_blocks").select("blocker_id, blocked_user_id")
+        .eq("blocked_user_id", senderId).in("blocker_id", ids), ["blocker_id"])),
+    ]);
+    data = sides.flat();
+  } catch (error) {
     // During a rolling deploy, suppress user-authored chat and social pushes
     // until the safety migration is available. Failing closed avoids leaking
     // previews or interactions across a block.
-    if (/user_blocks|relation|schema cache/i.test(error.message)) return [];
+    const message = error && typeof error === "object" && "message" in error ? String(error.message) : String(error);
+    if (/user_blocks|relation|schema cache/i.test(message)) return [];
     throw error;
   }
   const candidates = new Set(unique);
@@ -2093,6 +2202,7 @@ function preferenceAllowed(
   settings: Record<string, unknown>,
   event: CanonicalEvent,
 ) {
+  const scheduleReminder = event.eventType === "group_schedule_reminder";
   const socialEvent =
     event.eventType === "social_reaction" ||
     event.eventType === "social_comment";
@@ -2111,6 +2221,8 @@ function preferenceAllowed(
   if (mutedGroups.includes(event.groupId)) return false;
   const groupPreferences = objectRecord(settings.groupPreferencesByGroup);
   const groupPreference = objectRecord(groupPreferences[event.groupId]);
+  if (scheduleReminder && groupPreference.scheduleReminders !== true)
+    return false;
   if (event.category !== "chat" && groupPreference.enabled === false)
     return false;
   const conversationId = event.data.conversationId;
@@ -2183,6 +2295,7 @@ function preferenceAllowed(
     !socialEvent &&
     !groupTodoEvent &&
     !workspaceEvent &&
+    !scheduleReminder &&
     (groupPreference.trackerUpdates ??
       groupPreference.progressUpdates ??
       settings.groupMetricActivity ??
@@ -2194,6 +2307,7 @@ function preferenceAllowed(
     !socialEvent &&
     !groupTodoEvent &&
     !workspaceEvent &&
+    !scheduleReminder &&
     Array.isArray(groupPreference.memberIds) &&
     (!event.dispatcherId || !groupPreference.memberIds.includes(event.dispatcherId))
   )

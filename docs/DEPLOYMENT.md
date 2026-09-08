@@ -470,6 +470,66 @@ pnpm.cmd dlx eas-cli@latest deploy --prod
 
 You may instead upload `dist/` to another static host. Add that exact domain to the Supabase redirect allowlist.
 
+### Usability release 1.0.20: bounded social reads and group calendar reminders
+
+This additive rollout assumes the group-productivity/reset rollout above is
+already complete. Migration `202609080005_bounded_social_engagement.sql` adds
+authorized aggregate social totals and cursor-paged comments; it does not
+change existing mutation contracts.
+
+For `202609080006_group_schedule_reminders.sql`, deploy the matching
+`send-push` and `challenge-notifications` functions **before** applying the
+migration. Their existing event paths remain compatible with the earlier
+schema; the new RPC is only used for scheduled group reminders. Then preview
+and apply the migration, confirm remote parity, and release the client.
+
+```powershell
+pnpm.cmd exec supabase functions deploy send-push --project-ref YOUR_PROJECT_REF
+pnpm.cmd exec supabase functions deploy challenge-notifications --project-ref YOUR_PROJECT_REF
+pnpm.cmd exec supabase db push --dry-run --linked
+pnpm.cmd exec supabase db push --linked
+pnpm.cmd exec supabase migration list --linked
+```
+
+The minute worker reuses the existing Vault
+`challenge_notification_worker_url`/`challenge_notification_worker_secret`
+and Edge `CHALLENGE_NOTIFICATION_WORKER_SECRET`. Verify the canonical URL,
+secret configuration, active `group-schedule-reminders-every-minute` cron job,
+and an authenticated empty-work response. Do not print secret values. Existing
+events have no reminder and every member's new preference defaults off.
+
+The worker checks indexed due/pending work before issuing HTTP, stages a bounded
+batch with row locks, and drains only calendar reminders in schedule-only mode.
+It does not settle challenges each minute. Reminder identity is event + start
+instant + offset: repeated passes/title edits cannot duplicate delivery. Moves,
+deletion, disabling, expiry, membership and block changes are rechecked before
+dispatch. Bookkeeping updates do not emit workspace invalidations. The creator
+can receive their own reminder when opted in. Confirm actual notification
+receipt/taps on signed iOS/Android and installed web test clients separately.
+
+The same release adds `202609080007_destination_scoped_group_publication.sql`,
+`202609080008_photo_media_and_social_ownership.sql`, and
+`202609080009_attachment_namespace_ownership.sql`. Apply these before the
+new client: destination identities are upgraded in place without changing
+canonical row UUIDs, existing photo discussions are bound to their owner,
+and invalid cross-owner media references become private without deleting files.
+Ambiguous legacy photo aliases are deliberately unavailable for social actions.
+The private alias binding uses restricted pseudonymous security metadata and
+survives a source-row removal to prevent ownership transfer; deleting the group
+removes its bindings. Confirm `pnpm.cmd validate:group-history`, preview the
+pending SQL, apply it and verify remote migration parity before release.
+
+Migration 009 also binds entry, message, avatar and media-asset paths to their
+actual uploader. Challenge artwork can belong to an authorized group
+administrator without transferring the challenge's creator. Account deletion
+and account-data reset remove that uploader's artwork reference from surviving
+challenges, without removing somebody else's challenge or artwork. Unproven
+legacy challenge images require a new upload; their files are preserved.
+Apply `202609080010_challenge_visual_owner_index.sql` immediately afterward to
+index uploader-scoped reset and profile-deletion cleanup. Its regression proves
+the ordinary PostgreSQL planner uses the index across 2,000 unrelated visuals.
+See `ATTACHMENT_OWNERSHIP_009.md` for migration behavior and regression evidence.
+
 ## 7. Store-launch responsibilities
 
 Before public release:
@@ -484,9 +544,10 @@ Before public release:
 Marketing export validation is a media-structure gate, not signed-device or
 store acceptance. The current plan produces 10 Apple screenshots, 8 Google
 screenshots, a Google feature graphic, 4 social highlights, a 29.9-second Apple
-preview, a 44.9-second Google cut, and a 99-second long-form feature tour. All
-three MP4 masters are captions-first and intentionally contain a silent AAC
-track; they do not include licensed music or voiceover. Follow
+preview, a 44.9-second Google cut, and a 102-second long-form feature tour. All
+three montage masters and the separate complete interactive Watch guide are
+captions-first and intentionally contain a silent AAC track; they do not include
+licensed music or voiceover. Follow
 `store/capture-plan.json` and `store/README.md`: background health/Samsung
 source behavior, notification delivery, Android widgets, Android native
 progress-video export, and iOS Apple Health claims remain blocked from

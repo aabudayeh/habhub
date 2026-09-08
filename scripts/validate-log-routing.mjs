@@ -215,7 +215,7 @@ assert.doesNotMatch(
 );
 assert.match(
   detail,
-  /typeof entry\.value === "number" \|\|\s*typeof entry\.value === "boolean"[\s\S]{0,100}formatMetricValue\(tracker, Number\(entry\.value\)\)/,
+  /typeof entry\.value === "number" \|\|\s*typeof entry\.value === "boolean"[\s\S]{0,100}formatMetricValue\(tracker, Number\(entry\.value\), locale\)/,
   "boolean Workout entries must use the normal Done label instead of rendering a literal true value",
 );
 assert.match(

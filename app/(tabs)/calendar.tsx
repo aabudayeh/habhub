@@ -3,7 +3,6 @@ import { router, useFocusEffect } from "expo-router";
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import {
   BackHandler,
-  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -17,8 +16,9 @@ import {
 } from "@/src/components/AppText";
 import { LocalizedAlert as Alert, useLocale, useLocalization } from "@/src/i18n";
 import { localizeMetricName } from "@/src/i18n/domain";
-import { Card, PageHeader, Screen } from "@/src/components/ui";
+import { Button, Card, PageHeader, Screen } from "@/src/components/ui";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
+import { TutorialModal as Modal } from "@/src/components/TutorialModal";
 import { InfoPopover } from "@/src/components/InfoPopover";
 import { SelectionMenu } from "@/src/components/SelectionMenu";
 import { usePageSwipeGesture } from "@/src/components/usePageSwipeGesture";
@@ -43,6 +43,7 @@ import {
   trackerGroupLabel,
 } from "@/src/domain/trackerCatalog";
 import { useApp } from "@/src/state/AppProvider";
+import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { MetricDefinition, ScheduleViewFilter } from "@/src/types";
 
@@ -98,6 +99,7 @@ function SchedulePage() {
     hour: number | null;
     events: ScheduleEvent[];
   }>();
+  const [creationSlot, setCreationSlot] = useState<{ date: string; time?: string }>();
   const [expandedRows, setExpandedRows] = useState<Set<string>>(
     () => new Set(),
   );
@@ -336,25 +338,7 @@ function SchedulePage() {
   }
 
   function createInSlot(localDate: string, time?: string) {
-    Alert.alert("Add to this slot", undefined, [
-      {
-        text: "New to-do",
-        onPress: () =>
-          router.navigate({
-            pathname: "/todo-editor",
-            params: { date: localDate, time },
-          } as never),
-      },
-      {
-        text: "New reminder",
-        onPress: () =>
-          router.navigate({
-            pathname: "/reminder-editor",
-            params: { date: localDate, time },
-          } as never),
-      },
-      { text: "Cancel", style: "cancel" },
-    ]);
+    setCreationSlot({ date: localDate, time });
   }
 
   const weekLabel = `${friendlyDate(dates[0], locale)} – ${friendlyDate(
@@ -634,6 +618,7 @@ function SchedulePage() {
               expanded={expandedRows.has("all")}
               uniformColumnShell
               tutorialId={date === dates[0] ? "schedule-all-slot" : undefined}
+              onTutorialDeactivate={() => setSlotMenu(undefined)}
               onOpenSlot={(events) => {
                 setSlotMenu({ date, hour: null, events });
                 if (date === dates[0])
@@ -716,6 +701,7 @@ function SchedulePage() {
                     ? "schedule-hour-slot"
                     : undefined
                 }
+                onTutorialDeactivate={() => setCreationSlot(undefined)}
                 onOpenSlot={(events) =>
                   setSlotMenu({ date, hour, events })
                 }
@@ -878,6 +864,39 @@ function SchedulePage() {
                 </View>
               ))}
             </ScrollView>
+          </Pressable>
+        </Pressable>
+      </Modal>
+      <Modal
+        transparent
+        visible={Boolean(creationSlot)}
+        animationType="fade"
+        onRequestClose={() => setCreationSlot(undefined)}
+      >
+        <Pressable style={styles.slotBackdrop} onPress={() => setCreationSlot(undefined)}>
+          <Pressable
+            onPress={(event) => event.stopPropagation()}
+            style={[styles.slotSheet, { backgroundColor: colors.card, borderColor: colors.border, gap: 12 }]}
+          >
+            <Text style={[styles.slotTitle, { color: colors.ink }]}>Add to this slot</Text>
+            <Text translate={false} style={[styles.slotDate, { color: colors.muted }]}>
+              {creationSlot ? `${t(friendlyDate(creationSlot.date, locale))}${creationSlot.time ? ` · ${formatClockTime(creationSlot.time, state.settings.timeFormat, locale)}` : ""}` : ""}
+            </Text>
+            <View style={{ flexDirection: "row", gap: 8 }}>
+              <View style={{ flex: 1 }}><Button label="New to-do" onPress={() => {
+                if (!creationSlot) return;
+                const params = creationSlot;
+                setCreationSlot(undefined);
+                router.navigate({ pathname: "/todo-editor", params } as never);
+              }} /></View>
+              <View style={{ flex: 1 }}><Button label="New reminder" onPress={() => {
+                if (!creationSlot) return;
+                const params = creationSlot;
+                setCreationSlot(undefined);
+                router.navigate({ pathname: "/reminder-editor", params } as never);
+              }} /></View>
+            </View>
+            <Button label="Cancel" variant="ghost" onPress={() => setCreationSlot(undefined)} />
           </Pressable>
         </Pressable>
       </Modal>
@@ -1055,6 +1074,7 @@ function ScheduleCell({
   onCreate,
   uniformColumnShell = false,
   tutorialId,
+  onTutorialDeactivate,
 }: {
   events: ScheduleEvent[];
   slotEvents: ScheduleEvent[];
@@ -1066,7 +1086,9 @@ function ScheduleCell({
   onCreate: (date: string) => void;
   uniformColumnShell?: boolean;
   tutorialId?: string;
+  onTutorialDeactivate?: () => void;
 }) {
+  const tutorialSandbox = useTutorialSandboxActive();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const { t } = useLocalization();
@@ -1213,7 +1235,14 @@ function ScheduleCell({
     </Pressable>
   );
   return tutorialId ? (
-    <TutorialTarget id={tutorialId} style={styles.cellTarget}>
+    <TutorialTarget id={tutorialId} style={styles.cellTarget}
+      onTutorialActivate={() => {
+        if (!tutorialSandbox) return;
+        if (tutorialId === "schedule-all-slot") onOpenSlot(slotEvents);
+        else if (tutorialId === "schedule-hour-slot") onCreate(date);
+      }}
+      onTutorialDeactivate={onTutorialDeactivate}
+    >
       {cell}
     </TutorialTarget>
   ) : uniformColumnShell ? (

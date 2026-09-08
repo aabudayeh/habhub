@@ -6,6 +6,7 @@ import type {
   MetricSocialTargetIdentity,
 } from "@/src/domain/groupSocialTarget";
 import { canonicalizeLegacyMetricSocialTargets } from "@/src/domain/groupSocialTarget";
+import type { GroupSocialSummary } from "@/src/domain/socialEngagement";
 
 export {
   metricEntrySocialTarget,
@@ -82,7 +83,20 @@ export type GroupSocialCommentMutation = {
 };
 
 const SOCIAL_TARGETS_PER_REQUEST = 20;
-const SOCIAL_ROWS_PER_REQUEST = 1000;
+export type GroupSocialCommentPage = {
+  comments: GroupSocialComment[];
+  hasMore: boolean;
+};
+
+type EngagementRow = {
+  target_type: GroupSocialTargetType;
+  target_id: string;
+  reaction_counts: GroupSocialSummary["reactionCounts"];
+  own_reaction: ReactionRow | null;
+  comment_count: number;
+  comments: CommentRow[];
+  has_more_comments: boolean;
+};
 
 type MetricTargetIdentityRow = {
   id: string;
@@ -171,6 +185,7 @@ function metricTargetOwnerClientKey(ownerUserId: string, clientGeneratedId: stri
 export async function resolveGroupSocialTargets(
   groupId: string,
   targets: readonly GroupSocialTarget[],
+  signal?: AbortSignal,
 ) {
   if (!supabase || !targets.length) return [...targets];
   const legacyMetricTargets = targets.filter(
@@ -208,7 +223,7 @@ export async function resolveGroupSocialTargets(
         ),
       ),
     );
-    const response = await supabase
+    const query = supabase
       .from("metric_entries")
       .select(
         "id, client_generated_id, user_id, metric_definitions!inner(group_id)",
@@ -217,6 +232,7 @@ export async function resolveGroupSocialTargets(
       .in("client_generated_id", clientGeneratedIds)
       .eq("visibility", "group")
       .eq("metric_definitions.group_id", groupId);
+    const response = await (signal ? query.abortSignal(signal) : query);
     if (response.error) throw cloudError(response.error);
     for (const row of (response.data ?? []) as MetricTargetIdentityRow[]) {
       const key = metricTargetOwnerClientKey(
@@ -234,68 +250,67 @@ export async function resolveGroupSocialTargets(
   return canonicalizeLegacyMetricSocialTargets(targets, identities);
 }
 
-async function loadRowsForTargets<Row>(
-  table: "group_social_reactions" | "group_social_comments",
-  columns: string,
-  groupId: string,
-  targets: readonly GroupSocialTarget[],
-) {
-  if (!supabase || !targets.length) return [] as Row[];
-  const groups = [...targetsByType(targets).entries()];
-  const result: Row[] = [];
-  // Keep both the target expression and returned row count bounded. A recap
-  // can include a large all-time feed, while a popular target can accumulate
-  // many comments/reactions over time; neither should become a table-wide
-  // response or monopolize the JS thread.
-  for (const [targetType, ids] of groups) {
-    for (let offset = 0; offset < ids.length; offset += SOCIAL_TARGETS_PER_REQUEST) {
-      const page = ids.slice(offset, offset + SOCIAL_TARGETS_PER_REQUEST);
-      const response = await supabase
-        .from(table)
-        .select(columns)
-        .eq("group_id", groupId)
-        .eq("target_type", targetType)
-        .in("target_id", page)
-        .order(table === "group_social_comments" ? "created_at" : "updated_at", {
-          ascending: false,
-        })
-        .limit(SOCIAL_ROWS_PER_REQUEST);
-      if (response.error) throw cloudError(response.error);
-      result.push(...(((response.data as Row[] | null) ?? [])));
-    }
-  }
-  return result;
-}
-
 export async function loadGroupSocialEngagement(
   groupId: string,
   targets: readonly GroupSocialTarget[],
-  options: { includeComments?: boolean } = {},
+  options: { includeComments?: boolean; signal?: AbortSignal } = {},
 ) {
-  const resolvedTargets = await resolveGroupSocialTargets(groupId, targets);
-  const [reactionRows, commentRows] = await Promise.all([
-    loadRowsForTargets<ReactionRow>(
-      "group_social_reactions",
-      "group_id, target_type, target_id, user_id, reaction, created_at, updated_at",
-      groupId,
-      resolvedTargets,
-    ),
-    options.includeComments === false
-      ? Promise.resolve([] as CommentRow[])
-      : loadRowsForTargets<CommentRow>(
-          "group_social_comments",
-          "id, group_id, target_type, target_id, user_id, content, created_at, updated_at",
-          groupId,
-          resolvedTargets,
-        ),
-  ]);
+  const resolvedTargets = await resolveGroupSocialTargets(groupId, targets, options.signal);
+  const rows: EngagementRow[] = [];
+  const uniqueTargets = [...targetsByType(resolvedTargets)].flatMap(([type, ids]) =>
+    ids.map((id) => ({ type, id })),
+  );
+  if (supabase) {
+    for (let offset = 0; offset < uniqueTargets.length; offset += SOCIAL_TARGETS_PER_REQUEST) {
+      const query = supabase.rpc("get_group_social_engagement", {
+        p_group_id: groupId,
+        p_targets: uniqueTargets.slice(offset, offset + SOCIAL_TARGETS_PER_REQUEST),
+        p_include_comments: options.includeComments !== false,
+      });
+      const response = await (options.signal ? query.abortSignal(options.signal) : query);
+      if (response.error) throw cloudError(response.error);
+      rows.push(...((response.data ?? []) as EngagementRow[]));
+    }
+  }
   return {
     resolvedTargets,
-    reactions: reactionRows.map(reactionFromRow),
-    comments: commentRows
-      .map(commentFromRow)
+    summaries: rows.map((row): GroupSocialSummary => ({
+      groupId,
+      targetType: row.target_type,
+      targetId: row.target_id,
+      reactionCounts: row.reaction_counts,
+      ownReaction: row.own_reaction?.reaction,
+      commentCount: Number(row.comment_count),
+    })),
+    reactions: rows.flatMap((row) => row.own_reaction ? [reactionFromRow(row.own_reaction)] : []),
+    commentPages: new Map(rows.map((row) => [
+      `${row.target_type}\u0000${row.target_id}`,
+      { comments: row.comments.map(commentFromRow), hasMore: row.has_more_comments },
+    ])),
+    comments: rows.flatMap((row) => row.comments.map(commentFromRow))
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
   };
+}
+
+export async function loadGroupSocialCommentsPage(
+  groupId: string,
+  target: GroupSocialTarget,
+  before?: Pick<GroupSocialComment, "id" | "createdAt">,
+  signal?: AbortSignal,
+): Promise<GroupSocialCommentPage> {
+  if (!supabase) return { comments: [], hasMore: false };
+  const query = supabase.rpc("list_group_social_comments_page", {
+    p_group_id: groupId,
+    p_target_type: target.type,
+    p_target_id: target.id,
+    p_before_created_at: before?.createdAt ?? null,
+    p_before_id: before?.id ?? null,
+    p_limit: 20,
+  });
+  const response = await (signal ? query.abortSignal(signal) : query);
+  if (response.error) throw cloudError(response.error);
+  const page = response.data as { comments: CommentRow[]; has_more: boolean };
+  return { comments: page.comments.map(commentFromRow), hasMore: page.has_more };
 }
 
 /**
@@ -307,21 +322,21 @@ export async function loadGroupSocialEngagement(
 export async function resolveMetricEntrySocialTarget(
   groupId: string,
   target: GroupSocialTarget,
-  options?: { force?: boolean },
+  options?: { force?: boolean; signal?: AbortSignal },
 ): Promise<GroupSocialTarget | undefined> {
   if (target.type !== "metric_entry") return target;
   if (target.cloudPublished && !options?.force) return target;
   if (!supabase || !target.ownerUserId) return undefined;
   const clientGeneratedId = target.clientGeneratedId ?? target.id;
-  const { data, error } = await supabase
+  const query = supabase
     .from("metric_entries")
     .select("id, metric_definitions!inner(group_id)")
     .eq("user_id", target.ownerUserId)
     .eq("client_generated_id", clientGeneratedId)
     .eq("visibility", "group")
     .eq("metric_definitions.group_id", groupId)
-    .limit(1)
-    .maybeSingle();
+    .limit(1);
+  const { data, error } = await (options?.signal ? query.abortSignal(options.signal) : query).maybeSingle();
   if (error) throw cloudError(error);
   const cloudId =
     data && typeof (data as { id?: unknown }).id === "string"

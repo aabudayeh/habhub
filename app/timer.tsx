@@ -691,7 +691,9 @@ export default function ActivityTimerPage() {
         )
       ) : (
         <>
-          <TutorialTarget id="timer-setup">
+          <TutorialTarget id="timer-setup" onTutorialActivate={() => {
+            if (tutorialSandbox) void start();
+          }}>
           <Card style={styles.setup}>
             {params.date ? (
               <Text style={[styles.helper, { color: colors.muted }]}>Planned for {plannedDate}. Confirm Start when you are ready.</Text>

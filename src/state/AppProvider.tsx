@@ -110,6 +110,7 @@ import {
   isPersonalSetupGroup,
   personalSetupMetricConfiguration,
 } from "@/src/domain/groupSetup";
+import { cloudPublicationGroups, trackerVisibilityWithdrawsAccess } from "@/src/domain/groupPublication";
 import { isCloudGroupId } from "@/src/cloud/groupCloud";
 import {
   isBloodPressureDiastolic,
@@ -1597,29 +1598,36 @@ function reducer(state: AppState, action: Action): AppState {
       );
       if (action.changes.defaultVisibility) {
         const changedAt = new Date().toISOString();
-        const privacyFenceRequired =
-          previousMetric?.defaultVisibility === "group" &&
-          action.changes.defaultVisibility !== "group" &&
-          isCloudGroupId(state.group.id);
+        const privacyFenceRequired = trackerVisibilityWithdrawsAccess(
+          previousMetric?.defaultVisibility,
+          action.changes.defaultVisibility,
+        );
         const pendingFencesByGroup = {
           ...(next.settings.pendingMetricPrivacyFenceIdsByGroup ?? {}),
         };
+        const privacyGroupIds = cloudPublicationGroups(state)
+          .filter((group) => (group.metricConfiguration ?? []).some(
+            (metric) => metric.id === action.metricId,
+          ))
+          .map((group) => group.id);
         if (privacyFenceRequired) {
-          pendingFencesByGroup[state.group.id] = [
-            ...new Set([
-              ...(pendingFencesByGroup[state.group.id] ?? []),
-              action.metricId,
-            ]),
-          ];
+          for (const groupId of privacyGroupIds)
+            pendingFencesByGroup[groupId] = [
+              ...new Set([
+                ...(pendingFencesByGroup[groupId] ?? []),
+                action.metricId,
+              ]),
+            ];
         } else if (
-          action.changes.defaultVisibility === "group" &&
-          isCloudGroupId(state.group.id)
+          action.changes.defaultVisibility === "group"
         ) {
-          const remaining = (pendingFencesByGroup[state.group.id] ?? []).filter(
-            (metricId) => metricId !== action.metricId,
-          );
-          if (remaining.length) pendingFencesByGroup[state.group.id] = remaining;
-          else delete pendingFencesByGroup[state.group.id];
+          for (const groupId of privacyGroupIds) {
+            const remaining = (pendingFencesByGroup[groupId] ?? []).filter(
+              (metricId) => metricId !== action.metricId,
+            );
+            if (remaining.length) pendingFencesByGroup[groupId] = remaining;
+            else delete pendingFencesByGroup[groupId];
+          }
         }
         const entries = next.entries.map((entry) =>
           entry.userId === state.currentUserId &&
@@ -3612,10 +3620,15 @@ export function AppProvider({
           await retireBackgroundWorkoutCompletionIfResolved(
             persisted.currentUserId,
           ).catch(() => false);
-          persistenceDirtyRef.current = false;
-          continue;
+          // Receipt cleanup yields too. A local edit during that await already
+          // belongs to this active writer; do not clear its dirty flag and
+          // strand it behind scheduleDeferredPersistence's coalescing guard.
+          if (revision === persistenceRevisionRef.current) {
+            persistenceDirtyRef.current = false;
+            continue;
+          }
         }
-        // State changed while AsyncStorage was writing. Yield again before the
+        // State changed while storage or receipt cleanup was waiting. Yield before the
         // trailing foreground serialization; a background transition can still
         // force this same gate immediately via persistenceDeferredRunRef.
         await deferForegroundTurn();

@@ -60,7 +60,7 @@ assert.match(
 );
 assert.match(
   source,
-  /<TutorialTarget id=\{tutorialId\} style=\{styles\.cellTarget\}>[\s\S]*?: uniformColumnShell \? \([\s\S]*?<View style=\{styles\.cellTarget\}>/,
+  /<TutorialTarget id=\{tutorialId\} style=\{styles\.cellTarget\}[\s\S]{0,500}\{cell\}[\s\S]*?: uniformColumnShell \? \([\s\S]*?<View style=\{styles\.cellTarget\}>/,
   "tutorial and ordinary Schedule cells must share the same flex shell so hour columns stay straight",
 );
 assert.match(

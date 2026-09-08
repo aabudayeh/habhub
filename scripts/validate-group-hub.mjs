@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import "./validate-group-schedule.mjs";
 
 import {
   canonicalGroupScheduleAllDayInstant,
@@ -183,7 +184,8 @@ assert.match(notes, /focusedNoteId/);
 assert.match(notes, /Opened from your updates/);
 assert.match(schedule, /useGroupSchedule/);
 assert.match(schedule, /canonicalGroupScheduleAllDayInstant/);
-assert.match(schedule, /friendlyDate\(displayDateKey, locale\)/);
+assert.match(schedule, /friendlyDate\(slot\.date, locale\)/);
+assert.match(schedule, /GroupScheduleCalendar/);
 assert.match(schedule, /focusedItemId/);
 assert.match(schedule, /Opened from your updates/);
 assert.match(recap, /story\.socialTarget/);
@@ -246,7 +248,7 @@ assert.match(
   "cached note and schedule rows must immediately enforce block access rules",
 );
 assert.match(socialHook, /group:\$\{groupId\}:social/);
-assert.match(socialHook, /const scopeKey = `\$\{state\.currentUserId\}\\u0000\$\{groupId\}`/);
+assert.match(socialHook, /const scopeKey = `\$\{state\.currentUserId\}\\u0000\$\{groupId\}\\u0000\$\{tutorial\.active\}/);
 assert.match(socialHook, /activeScopeRef\.current !== operationScopeKey/);
 assert.match(socialHook, /reactionWriteQueueRef\.current\.clear\(\)/);
 assert.match(socialHook, /safety\.hydrated \? blockedUsersKey : "safety-pending"/);
@@ -349,7 +351,7 @@ for (const fixture of [
 assert.match(hubHook, /creatorId: creatorAt\(2\)/);
 assert.match(
   hubHook,
-  /canonicalGroupScheduleAllDayInstant\(dateKeyWithOffset\(3\)\)/,
+  /canonicalGroupScheduleAllDayInstant\(\s*dateKeyWithOffset\(3\),?\s*\)/,
 );
 
 const migrationDirectory = path.join(root, "supabase", "migrations");

@@ -33,6 +33,7 @@ import { GoogleHealthTodayDisclosure } from "@/src/components/GoogleHealthTodayD
 import { HorizontalPager } from "@/src/components/HorizontalPager";
 import {
   LocalizedAlert as Alert,
+  localeForLanguage,
   useLocale,
   useLocalization,
 } from "@/src/i18n";
@@ -108,6 +109,8 @@ import {
 import { useFocusedCloudSyncPause } from "@/src/cloud/useFocusedCloudSyncPause";
 import { useApp } from "@/src/state/AppProvider";
 import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
+import { LiveSetupCoach } from "@/src/components/LiveSetupCoach";
+import { activeLiveSetupStep } from "@/src/domain/tutorialUsability";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import {
   CompletionFillMode,
@@ -184,6 +187,7 @@ function Today() {
     deleteMetric,
     updateMetric,
     updateSettings,
+    toggleTodo,
   } = useApp();
   const tutorialSandbox = useTutorialSandboxActive();
   const tutorial = useTutorial();
@@ -192,7 +196,7 @@ function Today() {
   const cloud = useCloudSyncActions();
   const colors = useAppColors();
   const accent = useGroupAccent();
-  const { height } = useWindowDimensions();
+  const { height, width: todayViewportWidth } = useWindowDimensions();
   const iosWebDevice = useMemo(() => {
     if (
       Platform.OS !== "web" ||
@@ -223,7 +227,7 @@ function Today() {
   const todaySummaryPinned =
     state.settings.pinTodayHeaderAndFeaturedCard === true;
   const stickyTodaySummary =
-    todaySummaryPinned && !tutorial.activeSession;
+    todaySummaryPinned && !tutorial.activeSession && !activeLiveSetupStep(state.settings);
   const heroLongPressRef = useRef(false);
   const [completionSortEnabled, setCompletionSortEnabled] = useState(true);
   const exitingEditMode = useRef(false);
@@ -827,7 +831,7 @@ function Today() {
             .split("|")
             .filter(Boolean);
           const newlyCompleted = completed.filter((id) => !previous.has(id));
-          if (newlyCompleted.length) {
+          if (newlyCompleted.length && !reduceMotion) {
             const newGoalIds = newlyCompleted.filter(
               (id) => !id.startsWith("todo:"),
             );
@@ -904,11 +908,13 @@ function Today() {
       celebrationStorageKey,
       goldGoalOrder.length,
       googleHealthTodayMemoryOnly,
+      reduceMotion,
       tutorialSandbox,
     ]),
   );
   const celebrateTodo = useCallback(
     (todoId: string) => {
+      if (!reduceMotion) {
       const duration = 2700;
       setCelebrationSpecial(false);
       setConfettiVisible(true);
@@ -927,6 +933,7 @@ function Today() {
         celebration.setValue(0);
         setConfettiVisible(false);
       }, duration + 500);
+      }
       if (tutorialSandbox) {
         if (todoId === "tutorial-todo-groceries")
           tutorial.reportEvent({
@@ -946,8 +953,15 @@ function Today() {
         })
         .catch(() => undefined);
     },
-    [celebration, celebrationStorageKey, tutorial, tutorialSandbox],
+    [celebration, celebrationStorageKey, reduceMotion, tutorial, tutorialSandbox],
   );
+  function completeTutorialTodo() {
+    if (!tutorialSandbox) return;
+    const todo = state.todos?.find((candidate) => candidate.id === "tutorial-todo-groceries");
+    if (!todo) return;
+    if (!todo.completedDates.includes(today)) toggleTodo(todo.id, today);
+    celebrateTodo(todo.id);
+  }
   const fittingPageCapacity = todayPageCapacity(
     height,
     state.settings.compactMode,
@@ -1099,7 +1113,9 @@ function Today() {
               ellipsizeMode="tail"
               style={[styles.greeting, { color: colors.ink }]}
             >
-              Hi, {memberDisplayName(state, user)}
+              {todayViewportWidth < 350
+                ? memberDisplayName(state, user)
+                : `${t("Hi")}, ${memberDisplayName(state, user)}`}
             </Text>
           </View>
           <View style={styles.headerActions}>
@@ -1161,8 +1177,13 @@ function Today() {
                 />
               </>
             )}
-            <TutorialTarget id="menu-button">
+            <TutorialTarget id="menu-button" onTutorialActivate={tutorialSandbox ? () => {
+              router.navigate("/menu");
+              tutorial.reportEvent({ actionId: "tutorial.navigation.open-menu", scope: "isolated-preview" });
+            } : undefined}>
             <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t("Open menu")}
               onPress={() => {
                 router.navigate("/menu");
                 tutorial.reportEvent({
@@ -1181,6 +1202,7 @@ function Today() {
             </TutorialTarget>
           </View>
         </View>
+        {!editing ? <LiveSetupCoach onEditToday={beginEditing} /> : null}
         <TutorialTarget id="today-hero">
         <AnimatedPressable
           testID="today-featured-card"
@@ -1413,7 +1435,7 @@ function Today() {
           </TutorialTarget>
         ) : null}
         {state.settings.todosBelowGoals === false ? (
-          <TutorialTarget id="today-todo-list">
+          <TutorialTarget id="today-todo-list" onTutorialActivate={tutorialSandbox ? completeTutorialTodo : undefined}>
           <TodoTodayList
             localDate={today}
             onComplete={celebrateTodo}
@@ -1426,18 +1448,22 @@ function Today() {
           </TutorialTarget>
         ) : null}
         <View style={styles.sectionRow}>
-          <TutorialTarget id="today-edit">
+          <TutorialTarget id="today-edit" onTutorialActivate={tutorialSandbox ? beginEditing : undefined}>
           <Pressable
             accessibilityLabel="Customize Today"
+            accessibilityRole="button"
             onPress={() => {
-              if (tutorialSandbox && !editing) beginEditing();
+              if (!editing) beginEditing();
             }}
             delayLongPress={325}
             onLongPress={() => {
               if (!editing) beginEditing();
             }}
           >
-            <Text style={[styles.section, { color: colors.ink }]}>Your day</Text>
+            <View style={styles.sectionTitleRow}>
+              <Text style={[styles.section, { color: colors.ink }]}>Your day</Text>
+              {!editing ? <Ionicons name="create-outline" size={15} color={colors.muted} /> : null}
+            </View>
           </Pressable>
           </TutorialTarget>
           {todayPageCount > 1 ? (
@@ -1600,6 +1626,12 @@ function Today() {
                 onRemove={() => remove(item)}
                 onPin={() => updateMetric(item.id, { pinnedTodayAt: item.pinnedTodayAt ? undefined : new Date().toISOString() })}
                 onTrackedToggle={() => {
+                  if (tutorialSandbox && tutorial.activeSession?.experienceMode === "watch") {
+                    setTrackedGoal(item.id, !isMetricTrackedOnDate(state, item, today), "today");
+                    if (item.id === "tutorial_meditation")
+                      tutorial.reportEvent({ actionId: "tutorial.today.toggle-tracked", scope: "isolated-preview" });
+                    return;
+                  }
                   if (isMetricTrackedOnDate(state, item, today)) {
                     Alert.alert(
                       `Stop tracking ${item.name}?`,
@@ -1724,7 +1756,7 @@ function Today() {
           </Pressable>
         ) : null}
         {state.settings.todosBelowGoals !== false ? (
-          <TutorialTarget id="today-todo-list">
+          <TutorialTarget id="today-todo-list" onTutorialActivate={tutorialSandbox ? completeTutorialTodo : undefined}>
             <View
               style={
                 todayUsesPages
@@ -2522,9 +2554,12 @@ function TrackerRow({
   tutorialReorder: boolean;
 }) {
   const locale = useLocale();
+  const { width: viewportWidth } = useWindowDimensions();
+  const narrow = viewportWidth < 350;
   const { t } = useLocalization();
   const tutorial = useTutorial();
   const lastTapRef = useRef(0);
+  const tutorialSandbox = useTutorialSandboxActive();
   const tapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressHandledRef = useRef(false);
   const [tapPressed, setTapPressed] = useState(false);
@@ -2712,15 +2747,15 @@ function TrackerRow({
         primary: fastingProgress?.active
           ? "Fast in progress"
           : fastingProgress?.startedAt
-            ? `${formatMetricValue(item, fastingProgress.minutes / 60)} fast`
+            ? `${formatMetricValue(item, fastingProgress.minutes / 60, locale)} fast`
             : "Ready to start",
         secondary: fastingProgress?.active
-          ? `${t("Started")} ${fastingStartDay} ${fastingStartClock ?? ""} · ${formatMetricValue(item, fastingProgress.minutes / 60)} ${t("elapsed")}`
+          ? `${t("Started")} ${fastingStartDay} ${fastingStartClock ?? ""} · ${formatMetricValue(item, fastingProgress.minutes / 60, locale)} ${t("elapsed")}`
           : fastingProgress?.startedAt
             ? fastingProgress.endedOutsideEatingWindow
               ? "Ended outside the eating window"
               : "Ended in the eating window"
-            : `${formatMetricValue(item, (fastingProgress?.targetMinutes ?? 16 * 60) / 60)} fast · ${formatMetricValue(item, (1440 - (fastingProgress?.targetMinutes ?? 16 * 60)) / 60)} eating window`,
+            : `${formatMetricValue(item, (fastingProgress?.targetMinutes ?? 16 * 60) / 60, locale)} fast · ${formatMetricValue(item, (1440 - (fastingProgress?.targetMinutes ?? 16 * 60)) / 60, locale)} eating window`,
       }
     : mergedCompoundValue
     ? {
@@ -2943,7 +2978,7 @@ function TrackerRow({
       {editing ? (
         <GestureDetector gesture={smoothDrag.gesture}>
         {tutorialReorder ? (
-          <TutorialTarget id="today-reorder">{dragHandle}</TutorialTarget>
+          <TutorialTarget id="today-reorder" onTutorialActivate={tutorialSandbox && count > 1 ? () => onMove(index === 0 ? 1 : index - 1) : undefined}>{dragHandle}</TutorialTarget>
         ) : dragHandle}
         </GestureDetector>
       ) : (
@@ -2988,7 +3023,7 @@ function TrackerRow({
               accessibilityLabel="Pinned"
             />
           ) : null}
-          {!editing && currentStreak > 0 ? (
+          {!editing && !narrow && currentStreak > 0 ? (
             <View style={styles.streakBadge} accessibilityLabel={`${currentStreak} day streak`}>
               <Ionicons name="flame" size={11} color={item.color} />
               <Text style={[styles.streakBadgeText, { color: item.color }]}>
@@ -3034,7 +3069,7 @@ function TrackerRow({
         {content.secondary ? (
           <Text
             style={[styles.secondary, { color: colors.muted }]}
-            numberOfLines={editing ? 2 : 1}
+            numberOfLines={editing || narrow ? 2 : 1}
           >
             {content.secondary}
           </Text>
@@ -3045,13 +3080,14 @@ function TrackerRow({
       applicable &&
       (!isFasting || Boolean(fastingProgress?.startedAt)) ? (
         <View
-          style={
+          style={[
             isFasting
               ? styles.fastingProgress
               : progressSubmetrics.length > 1 || diastolic
               ? styles.bpProgress
-              : styles.progress
-          }
+              : styles.progress,
+            narrow && !isFasting && styles.narrowProgress,
+          ]}
         >
           {isFasting && fastingProgress?.startedAt ? (
             <FastingProgressBar
@@ -3169,7 +3205,7 @@ function TrackerRow({
             <Ionicons name="create-outline" size={15} color={accent} />
           </Pressable>
           {tutorialGoalFlag ? (
-            <TutorialTarget id="today-goal-flag">
+            <TutorialTarget id="today-goal-flag" onTutorialActivate={tutorialSandbox ? onTrackedToggle : undefined}>
               {trackedToggle}
             </TutorialTarget>
           ) : trackedToggle}
@@ -3231,7 +3267,7 @@ function TrackerRow({
     </Reanimated.View>
   );
   return item.id === "steps" && tutorial.activeSession ? (
-    <TutorialTarget id="today-steps-tracker">{row}</TutorialTarget>
+    <TutorialTarget id="today-steps-tracker" onTutorialActivate={tutorialSandbox ? openDetails : undefined}>{row}</TutorialTarget>
   ) : row;
 }
 
@@ -3349,11 +3385,12 @@ function displayValue(
   day: string,
   weekly: ReturnType<typeof weeklyDeficitBalance>,
 ) {
+  const locale = localeForLanguage(state.settings.language);
   if (item.id === "weekly_deficit_balance")
     return `${Math.abs(Math.round(weekly.balance))} kcal`;
   return formatMetricValue(
     item,
-    safeMetricValue(state, item, state.currentUserId, day),
+    safeMetricValue(state, item, state.currentUserId, day), locale,
   );
 }
 function trackerCopy(
@@ -3413,13 +3450,13 @@ function trackerCopy(
     );
     return {
       primary: progress.hasMeasurement
-        ? formatMetricValue(item, progress.current)
+        ? formatMetricValue(item, progress.current, locale)
         : "Add a first reading",
       secondary: progress.hasMeasurement
         ? `${Math.round(progress.progress * 100)}% to ${formatMetricValue(
             item,
-            progress.target,
-          )} · ${formatMetricValue(item, progress.remaining)} remaining`
+            progress.target, locale,
+          )} · ${formatMetricValue(item, progress.remaining, locale)} remaining`
         : "Your first reading becomes the starting point",
     };
   }
@@ -3429,15 +3466,15 @@ function trackerCopy(
       secondary: "Tap to view or compare progress photos",
     };
   return {
-    primary: formatMetricValue(item, value),
+    primary: formatMetricValue(item, value, locale),
     secondary:
       item.goalEnabled === false
         ? "Tracking only"
         : item.goal.kind === "at_most"
           ? `${Math.max(0, target - value).toFixed(item.unit === "L" ? 1 : 0)} ${item.unit} remaining`
           : item.goal.kind === "at_least" && value > target
-            ? `${formatMetricValue(item, value - target)} above goal`
-          : `Goal ${formatMetricValue(item, target)}`,
+            ? `${formatMetricValue(item, value - target, locale)} above goal`
+          : `Goal ${formatMetricValue(item, target, locale)}`,
   };
 }
 function Celebration({
@@ -3861,7 +3898,7 @@ const styles = StyleSheet.create({
   dayEndChoice: { flex: 1, minHeight: 42, borderWidth: 1, borderRadius: 12, alignItems: "center", justifyContent: "center" },
   safe: { flex: 1 },
   todayGoldTint: { ...StyleSheet.absoluteFillObject },
-  page: { flexGrow: 1, paddingHorizontal: 14, paddingBottom: 16 },
+  page: { flexGrow: 1, width: "100%", maxWidth: 788, alignSelf: "center", paddingHorizontal: 14, paddingBottom: 16 },
   pinnedTodaySummary: {
     marginHorizontal: -14,
     paddingHorizontal: 14,
@@ -3869,16 +3906,16 @@ const styles = StyleSheet.create({
     elevation: 12,
   },
   header: {
-    height: 55,
+    minHeight: 62,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
   },
   headerIdentity: { flex: 1, minWidth: 0, paddingRight: 8 },
-  eyebrow: { fontSize: 8, fontWeight: "900", letterSpacing: 1.2 },
+  eyebrow: { fontSize: 10, fontWeight: "600", letterSpacing: 0.8 },
   greeting: {
-    fontSize: 19,
-    fontWeight: "900",
+    fontSize: 21,
+    fontWeight: "700",
     letterSpacing: -0.4,
     marginTop: 1,
   },
@@ -3889,8 +3926,8 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   headerIcon: {
-    width: 36,
-    height: 36,
+    width: 40,
+    height: 40,
     borderWidth: 1,
     borderRadius: 13,
     alignItems: "center",
@@ -3918,14 +3955,14 @@ const styles = StyleSheet.create({
   heroCopy: { flex: 1, minWidth: 0, paddingRight: 8 },
   heroEyebrow: {
     color: "rgba(255,255,255,.72)",
-    fontSize: 8,
-    fontWeight: "900",
-    letterSpacing: 1.1,
+    fontSize: 10,
+    fontWeight: "600",
+    letterSpacing: 0.8,
   },
   heroValue: {
     color: palette.white,
     fontSize: 30,
-    fontWeight: "900",
+    fontWeight: "700",
     lineHeight: 35,
     marginTop: 3,
   },
@@ -3941,8 +3978,8 @@ const styles = StyleSheet.create({
     minWidth: 0,
     flexShrink: 0,
     color: palette.white,
-    fontSize: 11,
-    fontWeight: "800",
+    fontSize: 12,
+    fontWeight: "600",
   },
   heroWeightInline: {
     minWidth: 0,
@@ -4073,7 +4110,7 @@ const styles = StyleSheet.create({
   },
   sparkles: { fontSize: 18 },
   sectionRow: {
-    height: 40,
+    minHeight: 46,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
@@ -4109,12 +4146,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  section: { fontSize: 13, fontWeight: "900" },
+  section: { fontSize: 14, fontWeight: "700" },
+  sectionTitleRow: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: 6 },
   hint: { fontSize: 8, fontWeight: "700" },
   filterButton: {
     maxWidth: "100%",
     flexShrink: 1,
-    minHeight: 28,
+    minHeight: 34,
     paddingHorizontal: 9,
     borderWidth: 1,
     borderRadius: 10,
@@ -4125,8 +4163,8 @@ const styles = StyleSheet.create({
   filterButtonText: {
     minWidth: 0,
     flexShrink: 1,
-    fontSize: 8,
-    fontWeight: "900",
+    fontSize: 10,
+    fontWeight: "600",
   },
   list: { flex: 1, gap: 6 },
   todayOverflowPage: { flexGrow: 0, flexShrink: 0 },
@@ -4184,11 +4222,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  name: { minWidth: 0, flexShrink: 1, fontSize: 11, fontWeight: "900" },
+  name: { minWidth: 0, flexShrink: 1, fontSize: 12, fontWeight: "600" },
   completedText: { textDecorationLine: "line-through", opacity: 0.68 },
-  primary: { fontSize: 14, fontWeight: "900", marginTop: 1 },
-  secondary: { fontSize: 8, lineHeight: 12, marginTop: 1 },
+  primary: { fontSize: 15, fontWeight: "700", marginTop: 2 },
+  secondary: { fontSize: 10, lineHeight: 14, marginTop: 2 },
   progress: { width: 108 },
+  narrowProgress: { width: 52 },
   fastingProgress: {
     width: 108,
     alignSelf: "stretch",

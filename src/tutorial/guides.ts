@@ -348,14 +348,14 @@ const LOG_STEPS = [
     id: "full.log.privacy",
     path: "/log",
     target: "log-visibility",
-    title: "Choose who can see this entry",
-    copy: "Private keeps the value account-only. Status shares goal state without the exact value. Group shares the exact value with authorized group members.",
+    title: "Choose this tracker’s sharing default",
+    copy: "Private keeps values account-only. Status shares completion without exact values. Group shares exact values with authorized members. Changing this tracker default also changes its existing entries.",
     primaryLabel: "Try the menu",
     required: false,
     navigation: { before: "/log?metric=tutorial_wellbeing" },
     practice: {
       actionId: "tutorial.log.visibility",
-      instruction: "Open the compact visibility menu and choose Status for the demo entry.",
+      instruction: "Choose Status for the demo tracker. This updates its shared visibility, including existing demo entries.",
     },
   }),
   step("timer", {
@@ -697,8 +697,9 @@ const GROUP_HUB_STEPS = [
   step("group-schedule", {
     id: "full.group-schedule.overview",
     path: "/group-schedule",
+    target: "group-schedule-calendar",
     title: "Keep shared plans together",
-    copy: "Group Schedule lists upcoming workouts, walks, check-ins and other plans in time order. Its shortcut can be shown, hidden or reordered from the group's display controls.",
+    copy: "See shared events and group to-dos in a month, week or day calendar. Tap a date or time slot to see its plans. Your private task reminders stay private.",
     primaryLabel: "Next",
     required: false,
     navigation: { before: "/group-schedule" },
@@ -706,10 +707,15 @@ const GROUP_HUB_STEPS = [
   step("group-schedule", {
     id: "full.group-schedule.edit",
     path: "/group-schedule",
+    target: "group-schedule-create",
     title: "Add an all-day or timed event",
-    copy: "Choose a start, optional end, all-day setting and useful notes. Creators and group admins can correct or remove an event for everyone.",
+    copy: "Choose a date, time and optional reminder. Each member opts into group event reminders separately. This preview opens a sample event without saving it; creators and admins can edit real shared events.",
     primaryLabel: "Next page",
     required: false,
+    practice: {
+      actionId: "tutorial.group-schedule.open-editor",
+      instruction: "Preview a timed group walk and its reminder. Nothing is saved or sent.",
+    },
   }),
   step("group-notes", {
     id: "full.group-notes.library",

@@ -2,7 +2,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as BackgroundTask from 'expo-background-task';
 import * as TaskManager from 'expo-task-manager';
 
-import { isCloudGroupId, pushCloudRecentActivity } from '@/src/cloud/groupCloud';
+import { pushCloudRecentActivity } from '@/src/cloud/groupCloud';
+import { backgroundGroupPublicationBatch, cloudPublicationGroups, stateForGroupPublication } from '@/src/domain/groupPublication';
 import { publishJoinedPublicChallengeTotals } from '@/src/cloud/publicChallengeProjection';
 import { dateKey } from '@/src/domain/date';
 import {
@@ -48,6 +49,7 @@ import { AppState, HealthDataType, HealthHistoryDays, HealthSyncSettings, SyncMo
 
 const TASK_NAME = 'paceboard-health-background-sync';
 const CLOUD_SYNC_CHECKPOINT_KEY_PREFIX = 'habhub-cloud-checkpoint-v1:';
+const GROUP_PUBLICATION_CURSOR_PREFIX = 'habhub-health-group-cursor-v1:';
 
 function startDate(
   lastSyncedAt: string | null,
@@ -393,23 +395,40 @@ TaskManager.defineTask(TASK_NAME, async () => {
       try {
         const { data } = await supabase.auth.getSession();
         if (data.session?.user.id === nextState.currentUserId) {
-          if (isCloudGroupId(nextState.group.id)) {
+          {
             const changedDates = [
               ...new Set(
                 revisionSafeEntriesWithFloors.map((entry) => entry.localDate),
               ),
             ].sort((left, right) => right.localeCompare(left));
-            const published = await pushCloudRecentActivity(
-              nextState,
-              2,
-              undefined,
-              changedDates,
-            );
-            if (published.updatedAt)
-              await AsyncStorage.setItem(
-                `${CLOUD_SYNC_CHECKPOINT_KEY_PREFIX}${nextState.currentUserId}`,
-                published.updatedAt,
-              );
+            const cursorKey = `${GROUP_PUBLICATION_CURSOR_PREFIX}${nextState.currentUserId}`;
+            const cursor = Number(await AsyncStorage.getItem(cursorKey) ?? 0);
+            const batch = backgroundGroupPublicationBatch(nextState, cursor);
+            for (const destination of batch.groups) {
+              const session = await supabase.auth.getSession();
+              if (session.data.session?.user.id !== nextState.currentUserId) break;
+              const live = parseAppState(await getAppStateStorageItem(APP_STORAGE_KEY));
+              if (!live || live.currentUserId !== nextState.currentUserId || !live.settings.healthSync.enabled) break;
+              const group = cloudPublicationGroups(live).find((item) => item.id === destination.id);
+              if (!group) continue;
+              try {
+                const published = await pushCloudRecentActivity(
+                  stateForGroupPublication(live, group),
+                  2,
+                  undefined,
+                  changedDates,
+                );
+                if (published.updatedAt)
+                  await AsyncStorage.setItem(
+                    `${CLOUD_SYNC_CHECKPOINT_KEY_PREFIX}${nextState.currentUserId}`,
+                    published.updatedAt,
+                  );
+              } catch {
+                // One unavailable group must not starve other memberships.
+                // Its ordinary foreground outbox and next round-robin pass retry.
+              }
+            }
+            await AsyncStorage.setItem(cursorKey, String(batch.nextCursor));
           }
           // Public participants may not share the creator's group. Refresh
           // their explicitly consented challenge aggregates in the same

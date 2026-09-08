@@ -11,6 +11,7 @@ import {
   GroupSocialTarget,
   isUnavailableGroupSocialTargetError,
   loadGroupSocialEngagement,
+  loadGroupSocialCommentsPage,
   resolveMetricEntrySocialTarget,
   saveGroupSocialReaction,
 } from "@/src/cloud/groupSocial";
@@ -34,6 +35,22 @@ import { moderateChatContent } from "@/src/safety/contentFilter";
 import { useUserSafety } from "@/src/safety/userSafety";
 import { useApp } from "@/src/state/AppProvider";
 import { useTutorialSandbox } from "@/src/tutorial/TutorialSandboxContext";
+import {
+  indexSocialRows,
+  mergeSocialComments,
+  restoreDeletedSocialComment,
+  socialRowTargetKey,
+  socialSummaryWithReaction,
+  type GroupSocialSummary,
+} from "@/src/domain/socialEngagement";
+
+type CommentPageState = {
+  before?: Pick<GroupSocialComment, "id" | "createdAt">;
+  oldest?: Pick<GroupSocialComment, "id" | "createdAt">;
+  hasMore: boolean;
+  loading?: boolean;
+  error?: string;
+};
 
 function targetKey(target: GroupSocialTarget) {
   return groupSocialTargetKey(target);
@@ -115,12 +132,11 @@ export function useGroupSocialEngagement(
   const cloud = useCloudSyncActions();
   const tutorial = useTutorialSandbox();
   const safety = useUserSafety(state.currentUserId, tutorial.active);
-  const scopeKey = `${state.currentUserId}\u0000${groupId}`;
   const blockedUsersKey = useMemo(
     () => [...safety.blockedUserIds].sort().join(","),
     [safety.blockedUserIds],
   );
-  const requestScopeKey = `${scopeKey}\u0000${
+  const scopeKey = `${state.currentUserId}\u0000${groupId}\u0000${tutorial.active}\u0000${
     safety.hydrated ? blockedUsersKey : "safety-pending"
   }`;
   const stableTargets = useMemo(
@@ -133,8 +149,14 @@ export function useGroupSocialEngagement(
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [targets.map(groupSocialTargetResolutionKey).sort().join("|")],
   );
+  const requestScopeKey = `${scopeKey}\u0000${includeComments}\u0000${stableTargets.map(groupSocialTargetResolutionKey).join("|")}`;
   const [reactions, setReactions] = useState<GroupSocialReaction[]>([]);
   const [comments, setComments] = useState<GroupSocialComment[]>([]);
+  const [summaries, setSummaries] = useState<GroupSocialSummary[]>([]);
+  const [commentPages, setCommentPages] = useState(new Map<string, CommentPageState>());
+  const commentPagesRef = useRef(commentPages);
+  commentPagesRef.current = commentPages;
+  const pageRequestsRef = useRef(new Map<string, AbortController>());
   const commentsRef = useRef(comments);
   commentsRef.current = comments;
   const [targetAliases, setTargetAliases] = useState(new Map<string, string>());
@@ -150,7 +172,12 @@ export function useGroupSocialEngagement(
   const requestRef = useRef<{
     scopeKey: string;
     promise: Promise<void>;
+    controller: AbortController;
+    refreshAgain: boolean;
   } | null>(null);
+  const pendingMutationsRef = useRef(new Set<symbol>());
+  const refreshQueuedRef = useRef(false);
+  const refreshRef = useRef<() => Promise<void>>(() => Promise.resolve());
   const requestGenerationRef = useRef(0);
   const reactionMutationGenerationRef = useRef(new Map<string, number>());
   const reactionWriteQueueRef = useRef(
@@ -166,10 +193,16 @@ export function useGroupSocialEngagement(
   activeScopeRef.current = scopeKey;
   const activeRequestScopeRef = useRef(requestScopeKey);
   activeRequestScopeRef.current = requestScopeKey;
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
   const cloudEnabled =
     !tutorial.active && Boolean(supabase) && isCloudGroupId(groupId);
 
   const refresh = useCallback(() => {
+    if (!mountedRef.current) return Promise.resolve();
     if (!cloudEnabled) {
       const seeded = demoGroupNoteEngagement(
         groupId,
@@ -183,6 +216,8 @@ export function useGroupSocialEngagement(
       setReactions(seeded.reactions);
       setComments(includeComments ? seeded.comments : []);
       setTargetAliases(new Map());
+      setSummaries([]);
+      setCommentPages(new Map());
       dataScopeKeyRef.current = scopeKey;
       setDataScopeKey(scopeKey);
       setLoading(false);
@@ -198,26 +233,58 @@ export function useGroupSocialEngagement(
       setReactions([]);
       setComments([]);
       setTargetAliases(new Map());
+      setSummaries([]);
+      setCommentPages(new Map());
       return Promise.resolve();
     }
-    if (requestRef.current?.scopeKey === requestScopeKey)
+    if (!safety.hydrated) return Promise.resolve();
+    if (pendingMutationsRef.current.size) {
+      refreshQueuedRef.current = true;
+      return Promise.resolve();
+    }
+    if (requestRef.current?.scopeKey === requestScopeKey) {
+      requestRef.current.refreshAgain = true;
       return requestRef.current.promise;
+    }
+    requestRef.current?.controller.abort();
     const generation = ++requestGenerationRef.current;
+    const controller = new AbortController();
     let request: Promise<void>;
     setLoading(true);
     request = loadGroupSocialEngagement(groupId, stableTargets, {
       includeComments,
+      signal: controller.signal,
     })
-      .then((next) => {
+      .then(async (next) => {
+        // A reader browsing an older page stays on that page as reactions arrive.
+        // Re-read that bounded page so deleted/blocked comments disappear too.
+        for (const [key, page] of commentPagesRef.current) {
+          if (!page.before || !next.commentPages.has(key)) continue;
+          const target = next.resolvedTargets.find((item) => persistedTargetKey(item) === key);
+          if (!target) continue;
+          const older = await loadGroupSocialCommentsPage(groupId, target, page.before, controller.signal);
+          next.commentPages.set(key, older);
+          next.comments = next.comments.filter((item) => socialRowTargetKey(item) !== key).concat(older.comments);
+        }
         if (
           requestGenerationRef.current !== generation ||
-          activeRequestScopeRef.current !== requestScopeKey
+          activeRequestScopeRef.current !== requestScopeKey ||
+          pendingMutationsRef.current.size
         )
           return;
         reactionsRef.current = next.reactions;
         setReactions(next.reactions);
         commentsRef.current = next.comments;
         setComments(next.comments);
+        setSummaries(next.summaries);
+        const pages = new Map([...next.commentPages].map(([key, page]) => [key, {
+          before: commentPagesRef.current.get(key)?.before,
+          oldest: page.comments[0],
+          hasMore: page.hasMore,
+          error: commentPagesRef.current.get(key)?.error,
+        }]));
+        commentPagesRef.current = pages;
+        setCommentPages(pages);
         const aliases = new Map(
           next.resolvedTargets.map((resolved, index) => [
             targetKey(stableTargets[index]),
@@ -239,6 +306,7 @@ export function useGroupSocialEngagement(
         setError(reason instanceof Error ? reason.message : String(reason));
       })
       .finally(() => {
+        const refreshAgain = requestRef.current?.promise === request && requestRef.current.refreshAgain;
         if (requestRef.current?.promise === request) requestRef.current = null;
         if (
           requestGenerationRef.current !== generation ||
@@ -246,8 +314,9 @@ export function useGroupSocialEngagement(
         )
           return;
         setLoading(false);
+        if (refreshAgain) void refreshRef.current();
       });
-    requestRef.current = { scopeKey: requestScopeKey, promise: request };
+    requestRef.current = { scopeKey: requestScopeKey, promise: request, controller, refreshAgain: false };
     return request;
   }, [
     cloudEnabled,
@@ -258,11 +327,40 @@ export function useGroupSocialEngagement(
     stableTargets,
     state.currentUserId,
     state.group.members,
+    safety.hydrated,
   ]);
+  refreshRef.current = refresh;
+
+  const beginMutation = useCallback((cancelCommentPages = true) => {
+    const token = Symbol("social-mutation");
+    pendingMutationsRef.current.add(token);
+    if (cancelCommentPages) {
+      for (const controller of pageRequestsRef.current.values()) controller.abort();
+      pageRequestsRef.current.clear();
+    }
+    requestGenerationRef.current += 1;
+    requestRef.current?.controller.abort();
+    requestRef.current = null;
+    refreshQueuedRef.current = true;
+    return token;
+  }, []);
+  const finishMutation = useCallback((token: symbol, operationScopeKey: string) => {
+    if (!mountedRef.current || activeScopeRef.current !== operationScopeKey) return;
+    pendingMutationsRef.current.delete(token);
+    if (!pendingMutationsRef.current.size && refreshQueuedRef.current) {
+      refreshQueuedRef.current = false;
+      void refreshRef.current();
+    }
+  }, []);
 
   useEffect(() => {
     requestGenerationRef.current += 1;
+    requestRef.current?.controller.abort();
     requestRef.current = null;
+    for (const controller of pageRequestsRef.current.values()) controller.abort();
+    pageRequestsRef.current.clear();
+    pendingMutationsRef.current.clear();
+    refreshQueuedRef.current = false;
     reactionsRef.current = [];
     commentsRef.current = [];
     targetAliasesRef.current = new Map();
@@ -272,15 +370,21 @@ export function useGroupSocialEngagement(
     setReactions([]);
     setComments([]);
     setTargetAliases(new Map());
+    setSummaries([]);
+    commentPagesRef.current = new Map();
+    setCommentPages(new Map());
     dataScopeKeyRef.current = scopeKey;
     setDataScopeKey(scopeKey);
     setError(undefined);
   }, [scopeKey]);
 
   useEffect(() => {
+    const pageRequests = pageRequestsRef.current;
     requestGenerationRef.current += 1;
-    if (requestRef.current?.scopeKey !== requestScopeKey)
+    if (requestRef.current?.scopeKey !== requestScopeKey) {
+      requestRef.current?.controller.abort();
       requestRef.current = null;
+    }
     const task =
       Platform.OS === "web"
         ? undefined
@@ -293,6 +397,10 @@ export function useGroupSocialEngagement(
     return () => {
       task?.cancel();
       requestGenerationRef.current += 1;
+      requestRef.current?.controller.abort();
+      requestRef.current = null;
+      for (const controller of pageRequests.values()) controller.abort();
+      pageRequests.clear();
     };
   }, [refresh, requestScopeKey]);
 
@@ -304,14 +412,14 @@ export function useGroupSocialEngagement(
       `group:${groupId}:social`,
       "social_updated",
       () => {
-        if (timer) clearTimeout(timer);
-        task?.cancel();
+        if (timer || task) return;
         timer = setTimeout(() => {
+          timer = undefined;
           if (Platform.OS === "web") {
             void refresh();
             return;
           }
-          task = scheduleResponsiveWork(() => void refresh(), {
+          task = scheduleResponsiveWork(() => { task = undefined; void refresh(); }, {
             minimumDelayMs: 80,
             maximumDelayMs: 2_000,
             minimumUserQuietMs: 650,
@@ -348,6 +456,50 @@ export function useGroupSocialEngagement(
     },
     [cloud, cloudEnabled, groupId, state.currentUserId],
   );
+
+  const adjustCommentCount = useCallback((key: string, amount: number) => {
+    setSummaries((current) => current.map((summary) =>
+      socialRowTargetKey(summary) === key
+        ? { ...summary, commentCount: Math.max(0, summary.commentCount + amount) }
+        : summary,
+    ));
+  }, []);
+
+  const loadCommentPage = useCallback(async (target: GroupSocialTarget, older = true) => {
+    if (!cloudEnabled || !includeComments) return;
+    const key = targetAliasesRef.current.get(targetKey(target)) ?? persistedTargetKey(target);
+    if (pageRequestsRef.current.has(key) || pendingMutationsRef.current.size) return;
+    const page = commentPagesRef.current.get(key);
+    const before = older ? page?.oldest : undefined;
+    if (older && (!page?.hasMore || !before)) return;
+    const operationRequestScope = activeRequestScopeRef.current;
+    const controller = new AbortController();
+    pageRequestsRef.current.set(key, controller);
+    const token = beginMutation(false);
+    const setPage = (next: CommentPageState) => {
+      const pages = new Map(commentPagesRef.current).set(key, next);
+      commentPagesRef.current = pages;
+      setCommentPages(pages);
+    };
+    setPage({ ...page, hasMore: page?.hasMore ?? false, loading: true, error: undefined });
+    try {
+      const resolved = await resolveMetricEntrySocialTarget(groupId, target, { signal: controller.signal });
+      if (!resolved) throw new Error("That shared item is no longer available.");
+      const next = await loadGroupSocialCommentsPage(groupId, resolved, before, controller.signal);
+      if (controller.signal.aborted || activeRequestScopeRef.current !== operationRequestScope) return;
+      commentsRef.current = commentsRef.current
+        .filter((item) => socialRowTargetKey(item) !== key)
+        .concat(next.comments);
+      setComments(commentsRef.current);
+      setPage({ before, oldest: next.comments[0], hasMore: next.hasMore });
+    } catch (reason) {
+      if (activeRequestScopeRef.current === operationRequestScope && !controller.signal.aborted)
+        setPage({ ...page, hasMore: page?.hasMore ?? false, error: reason instanceof Error ? reason.message : String(reason) });
+    } finally {
+      if (pageRequestsRef.current.get(key) === controller) pageRequestsRef.current.delete(key);
+      finishMutation(token, scopeKey);
+    }
+  }, [beginMutation, cloudEnabled, finishMutation, groupId, includeComments, scopeKey]);
 
   const react = useCallback(
     async (target: GroupSocialTarget, reaction: GroupSocialReactionKind) => {
@@ -425,14 +577,16 @@ export function useGroupSocialEngagement(
       reactionsRef.current = optimistic;
       setReactions(optimistic);
       if (!cloudEnabled) return;
+      const operationToken = beginMutation();
 
       // Serialize writes for one target. Rapid taps still paint immediately,
       // while the database always receives the user's choices in tap order.
       const previousWrite = reactionWriteQueueRef.current.get(mutationKey) ??
         Promise.resolve({});
       const write = previousWrite.catch(() => undefined).then(async () => {
+        if (!mountedRef.current || activeScopeRef.current !== operationScopeKey) return {};
         let resolvedTarget = await mutationTarget(target);
-        if (activeScopeRef.current !== operationScopeKey) return {};
+        if (!mountedRef.current || activeScopeRef.current !== operationScopeKey) return {};
         const resolvedTargetKey = persistedTargetKey(resolvedTarget);
         targetIds.add(resolvedTarget.id);
         setTargetAliases((current) => {
@@ -477,6 +631,7 @@ export function useGroupSocialEngagement(
             isUnavailableGroupSocialTargetError(reason)
           ) {
             resolvedTarget = await mutationTarget(target, true);
+            if (activeScopeRef.current !== operationScopeKey) return {};
             const saved = await saveGroupSocialReaction({
               groupId,
               target: resolvedTarget,
@@ -537,6 +692,7 @@ export function useGroupSocialEngagement(
             confirmedReactionByMutationRef.current,
             mutationKey,
           );
+        finishMutation(operationToken, operationScopeKey);
       }
     },
     [
@@ -548,6 +704,8 @@ export function useGroupSocialEngagement(
       safety.termsAccepted,
       state.currentUserId,
       scopeKey,
+      beginMutation,
+      finishMutation,
     ],
   );
 
@@ -579,17 +737,27 @@ export function useGroupSocialEngagement(
       commentsRef.current = [...commentsRef.current, pending];
       setComments(commentsRef.current);
       if (!cloudEnabled) return;
+      const countKey = targetAliasesRef.current.get(targetKey(target)) ?? persistedTargetKey(target);
+      adjustCommentCount(countKey, 1);
+      const operationToken = beginMutation();
+      const removePending = () => {
+        if (activeScopeRef.current !== operationScopeKey) return;
+        commentsRef.current = commentsRef.current.filter((item) => item.id !== pendingId);
+        setComments(commentsRef.current);
+        adjustCommentCount(countKey, -1);
+      };
       let resolvedTarget: GroupSocialTarget;
       try {
         resolvedTarget = await mutationTarget(target);
       } catch (reason) {
-        commentsRef.current = commentsRef.current.filter(
-          (item) => item.id !== pendingId,
-        );
-        setComments(commentsRef.current);
+        removePending();
+        finishMutation(operationToken, operationScopeKey);
         throw reason;
       }
-      if (activeScopeRef.current !== operationScopeKey) return;
+      if (activeScopeRef.current !== operationScopeKey) {
+        finishMutation(operationToken, operationScopeKey);
+        return;
+      }
       const requestedTargetKey = targetKey(target);
       const resolvedTargetKey = persistedTargetKey(resolvedTarget);
       setTargetAliases((current) => {
@@ -615,6 +783,7 @@ export function useGroupSocialEngagement(
             isUnavailableGroupSocialTargetError(reason)
           ) {
             resolvedTarget = await mutationTarget(target, true);
+            if (activeScopeRef.current !== operationScopeKey) return;
             saved = await addGroupSocialComment({
               groupId,
               target: resolvedTarget,
@@ -625,10 +794,20 @@ export function useGroupSocialEngagement(
           } else throw reason;
         }
         if (activeScopeRef.current === operationScopeKey) {
-          commentsRef.current = commentsRef.current.map((item) =>
-            item.id === pendingId ? saved.comment : item,
+          commentsRef.current = mergeSocialComments(
+            commentsRef.current.filter((item) => item.id !== pendingId),
+            [saved.comment],
           );
           setComments(commentsRef.current);
+          // A new reply belongs on the latest page even if the author was
+          // browsing older discussion when they opened the composer.
+          const pages = new Map(commentPagesRef.current);
+          const page = pages.get(resolvedTargetKey);
+          if (page?.before) {
+            pages.set(resolvedTargetKey, { ...page, before: undefined });
+            commentPagesRef.current = pages;
+            setCommentPages(pages);
+          }
         }
         if (saved.pushEventKey)
           void dispatchCommittedGroupPushEvent(saved.pushEventKey).catch(() =>
@@ -637,11 +816,10 @@ export function useGroupSocialEngagement(
         else if (saved.requiresOutboxDrain)
           void flushPendingGroupPushEvents().catch(() => undefined);
       } catch (reason) {
-        commentsRef.current = commentsRef.current.filter(
-          (item) => item.id !== pendingId,
-        );
-        setComments(commentsRef.current);
+        removePending();
         throw reason;
+      } finally {
+        finishMutation(operationToken, operationScopeKey);
       }
     },
     [
@@ -653,24 +831,37 @@ export function useGroupSocialEngagement(
       safety.termsAccepted,
       state.currentUserId,
       scopeKey,
+      adjustCommentCount,
+      beginMutation,
+      finishMutation,
     ],
   );
 
   const removeComment = useCallback(
     async (commentId: string) => {
-      const before = commentsRef.current;
-      commentsRef.current = before.filter((item) => item.id !== commentId);
+      const deleted = commentsRef.current.find((item) => item.id === commentId);
+      if (!deleted) return;
+      const operationScopeKey = scopeKey;
+      commentsRef.current = commentsRef.current.filter((item) => item.id !== commentId);
       setComments(commentsRef.current);
       if (!cloudEnabled) return;
+      const countKey = socialRowTargetKey(deleted);
+      adjustCommentCount(countKey, -1);
+      const operationToken = beginMutation();
       try {
         await deleteGroupSocialComment(commentId);
       } catch (reason) {
-        commentsRef.current = before;
-        setComments(before);
+        if (activeScopeRef.current === operationScopeKey) {
+          commentsRef.current = restoreDeletedSocialComment(commentsRef.current, deleted);
+          setComments(commentsRef.current);
+          adjustCommentCount(countKey, 1);
+        }
         throw reason;
+      } finally {
+        finishMutation(operationToken, operationScopeKey);
       }
     },
-    [cloudEnabled],
+    [adjustCommentCount, beginMutation, cloudEnabled, finishMutation, scopeKey],
   );
 
   const visibleReactions = useMemo(
@@ -691,30 +882,24 @@ export function useGroupSocialEngagement(
         : [],
     [comments, dataScopeKey, safety.blockedUserIds, scopeKey],
   );
-  const reactionsByTarget = useMemo(() => {
-    const map = new Map<string, GroupSocialReaction[]>();
-    for (const reaction of visibleReactions) {
-      if (reaction.groupId !== groupId) continue;
-      const key = persistedTargetKey({
-        type: reaction.targetType,
-        id: reaction.targetId,
-      });
-      map.set(key, [...(map.get(key) ?? []), reaction]);
+  const reactionsByTarget = useMemo(
+    () => indexSocialRows(visibleReactions.filter((row) => row.groupId === groupId)),
+    [groupId, visibleReactions],
+  );
+  const commentsByTarget = useMemo(
+    () => indexSocialRows(visibleComments.filter((row) => row.groupId === groupId)),
+    [groupId, visibleComments],
+  );
+  const summariesByTarget = useMemo(() => {
+    const result = new Map<string, GroupSocialSummary>();
+    if (dataScopeKey !== scopeKey) return result;
+    for (const summary of summaries) {
+      const key = socialRowTargetKey(summary);
+      const current = reactionsByTarget.get(key)?.find((row) => row.userId === state.currentUserId);
+      result.set(key, socialSummaryWithReaction(summary, current?.reaction));
     }
-    return map;
-  }, [groupId, visibleReactions]);
-  const commentsByTarget = useMemo(() => {
-    const map = new Map<string, GroupSocialComment[]>();
-    for (const item of visibleComments) {
-      if (item.groupId !== groupId) continue;
-      const key = persistedTargetKey({
-        type: item.targetType,
-        id: item.targetId,
-      });
-      map.set(key, [...(map.get(key) ?? []), item]);
-    }
-    return map;
-  }, [groupId, visibleComments]);
+    return result;
+  }, [dataScopeKey, reactionsByTarget, scopeKey, state.currentUserId, summaries]);
   const resolvedTargetKey = useCallback(
     (target: GroupSocialTarget) => {
       const key = targetKey(target);
@@ -724,10 +909,14 @@ export function useGroupSocialEngagement(
   );
 
   return {
+    interactionScopeKey: `${scopeKey}\u0000${safety.termsAccepted}`,
     reactions: visibleReactions,
     comments: visibleComments,
     reactionsByTarget,
     commentsByTarget,
+    summariesByTarget,
+    commentPages,
+    loadCommentPage,
     loading,
     error,
     refresh,

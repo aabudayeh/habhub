@@ -1239,14 +1239,9 @@ function RootNavigator() {
     rootSegment !== "update-password"
   )
     return <Redirect href={"/update-password" as never} />;
-  if (
-    (auth.status === "signedIn" || auth.status === "demo") &&
-    onboardingDone &&
-    rootSegment === "onboarding"
-  ) {
-    const target = safeDefaultLandingPage;
-    return <Redirect href={(target === "index" ? "/" : `/${target}`) as never} />;
-  }
+  // Onboarding owns its completed-entry redirect. Replacing this Stack as soon
+  // as its completion flag changes unmounts the finishing page before its
+  // final persistence flush; a remount can then hydrate the earlier snapshot.
   if (
     !onboardingDone &&
     onboardingMarker?.accountId === onboardingAccountId &&

@@ -1591,6 +1591,7 @@ function ChatScreen() {
                           commentsEnabled={false}
                           currentUserId={state.currentUserId}
                           members={state.group.members}
+                          summary={messageSocial.summariesByTarget.get(messageSocial.targetKey(chatMessageSocialTarget(message.senderId, message.id)))}
                           reactions={
                             messageSocial.reactionsByTarget.get(
                               messageSocial.targetKey(

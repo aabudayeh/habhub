@@ -368,7 +368,7 @@ assert.doesNotMatch(
   "content padding must not be globally erased to solve navigator safe-area ownership",
 );
 assert.match(screen, /segments\.join\("\/"\)\.includes\("\(tabs\)"\)/);
-assert.match(today, /page: \{ flexGrow: 1, paddingHorizontal: 14, paddingBottom: 16 \}/);
+assert.match(today, /page: \{ flexGrow: 1, width: "100%", maxWidth: 788, alignSelf: "center", paddingHorizontal: 14, paddingBottom: 16 \}/);
 assert.doesNotMatch(today, /styles\.webTabPage|webTabPage:/);
 assert.match(today, /contentInsetAdjustmentBehavior=\{[\s\S]{0,80}Platform\.OS === "web" \? "never"/);
 assert.match(today, /todayTileMaxHeight = iosWebDevice && todayUsesPages \? 96 : 88/);

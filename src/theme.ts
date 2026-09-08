@@ -4,7 +4,7 @@ import { accessibleThemeAccent } from "@/src/domain/colors";
 export const palette = {
   ink: "#081B49",
   muted: "#61708A",
-  faint: "#8B98AB",
+  faint: "#69798F",
   canvas: "#F4F7FB",
   card: "#FFFFFF",
   border: "#DFE6F0",
@@ -33,16 +33,16 @@ export const shadow = {
  * scale from page to page.
  */
 export const typography = {
-  pageTitle: { fontSize: 20, lineHeight: 24, fontWeight: "900" as const },
-  sectionTitle: { fontSize: 14, lineHeight: 18, fontWeight: "900" as const },
-  cardTitle: { fontSize: 12, lineHeight: 16, fontWeight: "900" as const },
-  body: { fontSize: 11, lineHeight: 16, fontWeight: "600" as const },
-  supporting: { fontSize: 9, lineHeight: 13, fontWeight: "700" as const },
+  pageTitle: { fontSize: 23, lineHeight: 29, fontWeight: "800" as const },
+  sectionTitle: { fontSize: 16, lineHeight: 22, fontWeight: "700" as const },
+  cardTitle: { fontSize: 14, lineHeight: 19, fontWeight: "700" as const },
+  body: { fontSize: 13, lineHeight: 20, fontWeight: "400" as const },
+  supporting: { fontSize: 11, lineHeight: 16, fontWeight: "500" as const },
   eyebrow: {
-    fontSize: 9,
-    lineHeight: 12,
-    fontWeight: "900" as const,
-    letterSpacing: 1.1,
+    fontSize: 10,
+    lineHeight: 14,
+    fontWeight: "700" as const,
+    letterSpacing: 0.9,
   },
 };
 
@@ -121,7 +121,7 @@ export function useAppColors() {
             border: "#283654",
             ink: "#F5F8FF",
             muted: "#B1BED2",
-            faint: "#8090AA",
+            faint: "#97A7C1",
             primary: accent,
             primarySoft: `${accent}30`,
           }

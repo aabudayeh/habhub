@@ -81,5 +81,5 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.challenge-notifications]
-# The hourly worker validates its independent high-entropy server secret.
+# Hourly challenge and minute-level calendar passes validate the same internal secret.
 verify_jwt = false

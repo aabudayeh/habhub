@@ -12,6 +12,7 @@ import {
 } from "@/src/types";
 import { dateKey, dateKeyWithOffset } from "@/src/domain/date";
 import { FOOD_NUTRIENTS } from "@/src/domain/food";
+import { DEMO_LINKED_NUTRIENTS, demoNutritionEntries } from "@/src/domain/demoNutrition";
 import { DEFAULT_WORKOUT_QUALIFICATION } from "@/src/domain/workoutQualification";
 import {
   DEMO_MEAL_URI,
@@ -1633,6 +1634,15 @@ function demoEntries(): MetricEntry[] {
       );
       result.push(
         entry(
+          `${localDate}-${userId}-sleep`,
+          "sleep",
+          userId,
+          Number((6.4 + cycle(day + memberIndex * 2 + 30, 8) * 0.25).toFixed(2)),
+          localDate,
+        ),
+      );
+      result.push(
+        entry(
           `${localDate}-${userId}-workout`,
           "workout",
           userId,
@@ -1755,18 +1765,20 @@ function demoEntries(): MetricEntry[] {
       ),
     );
   });
-  return result.map((item) => {
+  return result.flatMap((item) => {
     const replaced =
       item.id in replacements
         ? { ...item, value: replacements[item.id] }
         : item;
-    if (item.id === `${today}-ahmad-food`)
-      return {
-        ...replaced,
-        label: "Berry oat breakfast",
-        note: "Oats, yoghurt, berries, banana, and chia seeds",
-        imageUri: DEMO_MEAL_URI,
-      };
+    // The old standalone nutrient totals are replaced by linked meal sidecars,
+    // so opening a nutrient detail never counts the same intake twice.
+    if (DEMO_LINKED_NUTRIENTS.some(([id]) => id === item.metricId)) return [];
+    if (item.metricId === "food")
+      return demoNutritionEntries(replaced).map((meal) =>
+        meal.id === `${today}-ahmad-food`
+          ? { ...meal, imageUri: DEMO_MEAL_URI }
+          : meal,
+      );
     if (item.id === `${today}-sarah-steps`)
       return { ...replaced, note: "Walked home after work" };
     return replaced;
@@ -2349,7 +2361,7 @@ export function createInitialState(): AppState {
       badgePinnedByGroup: {},
       badgePinnedLimitByGroup: {},
       recapDateNavigatorCollapsed: true,
-      progressMetricIds: ["tracked_goals", "steps"],
+      progressMetricIds: ["tracked_goals", "steps", "water", "sleep"],
       progressPinnedMetricIds: [],
       performancePinnedMetricIds: [],
       leaderboardMetricIdsByGroup: { "weekend-warriors": ["__score", "steps"] },

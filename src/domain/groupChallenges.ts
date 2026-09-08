@@ -233,7 +233,7 @@ export function groupChallengeProgress(
           value,
           progress: outcome.progress,
           complete: outcome.complete,
-          valueLabel: formatMetricValue(metric, value),
+          valueLabel: formatMetricValue(metric, value, state.settings.language ?? "en"),
         };
       }
       const privateValue =

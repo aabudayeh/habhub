@@ -21,6 +21,7 @@ export { cleanRichNoteValue, richNoteHasText };
 export type RichNoteComposerHandle = {
   setBlock: (block: RichNoteBlock) => void;
   toggleInline: (style: RichNoteInline) => void;
+  formatAll: (style: RichNoteInline) => void;
   setTextColor: (color?: string) => void;
   insertLink: (text: string, url: string) => void;
   replaceHashtag: (label: string) => void;
@@ -58,6 +59,7 @@ export const RichNoteComposer = forwardRef<
     () => ({
       setBlock: (block) => editorRef.current?.setBlock(block),
       toggleInline: (style) => editorRef.current?.toggleInline(style),
+      formatAll: (style) => editorRef.current?.formatAll(style),
       setTextColor: (color) => editorRef.current?.setTextColor(color ?? null),
       insertLink: (text, url) => editorRef.current?.insertLink(text, url),
       replaceHashtag: (label) => editorRef.current?.replaceHashtag(label),

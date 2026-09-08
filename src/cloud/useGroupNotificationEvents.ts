@@ -23,7 +23,8 @@ function isUserAuthoredGroupEvent(event: GroupNotificationEvent) {
     event.kind === "group_note_created" ||
     event.kind === "group_note_updated" ||
     event.kind === "group_schedule_created" ||
-    event.kind === "group_schedule_updated"
+    event.kind === "group_schedule_updated" ||
+    event.kind === "group_schedule_reminder"
   );
 }
 
@@ -32,6 +33,7 @@ function preferenceAllowsEvent(
   preferences: GroupNotificationPreferences | undefined,
 ) {
   if (preferences?.enabled === false) return false;
+  if (event.kind === "group_schedule_reminder") return preferences?.scheduleReminders === true;
   if (
     (event.kind === "social_reaction" || event.kind === "social_comment") &&
     preferences?.socialReactions === false

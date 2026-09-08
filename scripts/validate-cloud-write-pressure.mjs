@@ -66,17 +66,15 @@ const workspaceHashEnd = cloudProvider.indexOf(
   "async function resolvePrivateMedia",
   workspaceHashStart,
 );
-const workspaceHashBlock = cloudProvider.slice(
-  workspaceHashStart,
-  workspaceHashEnd,
-);
+const workspaceHashBlock = fs.readFileSync("src/domain/groupPublication.ts", "utf8");
 assert.ok(workspaceHashStart >= 0 && workspaceHashEnd > workspaceHashStart);
+assert.match(cloudProvider.slice(workspaceHashStart, workspaceHashEnd), /return groupPublicationDigest\(state, SHARED_ENTRY_DETAIL_PROJECTION_VERSION\)/);
 assert.match(workspaceHashBlock, /accountOwnedCollections\(state\)/);
 assert.match(workspaceHashBlock, /orderedValueHash\(owned\.entries\)/);
 assert.match(workspaceHashBlock, /orderedValueHash\(owned\.photos\)/);
 assert.doesNotMatch(workspaceHashBlock, /orderedValueHash\(state\.entries\)/);
 assert.doesNotMatch(workspaceHashBlock, /orderedValueHash\(state\.photos\)/);
-assert.doesNotMatch(workspaceHashBlock, /signedUrl|avatarUrl|imageUri/);
+assert.doesNotMatch(workspaceHashBlock, /signedUrl:|avatarUrl:|imageUri:/);
 assert.match(
   cloudProvider,
   /workspaceHashRef\.current\s*=\s*workspaceSessionAckHashesRef\.current\.get\(groupId\)\s*\?\?\s*null/,

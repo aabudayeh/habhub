@@ -123,6 +123,10 @@ const reviewedOverrides = {
 };
 const outputDirectory = path.join(root, "src/i18n/tutorial");
 fs.mkdirSync(outputDirectory, { recursive: true });
+const previousEnglishPath = path.join(outputDirectory, "en.ts");
+const previousEnglish = fs.existsSync(previousEnglishPath)
+  ? require(previousEnglishPath).tutorialEnCatalog : {};
+const translateAll = process.argv.includes("--all");
 
 const keyOrder = entries.map(([key]) => key);
 const englishValues = entries.map(([, value]) => value);
@@ -133,16 +137,6 @@ function moduleSource(exportName, values, note) {
     .join("\n");
   return `/** ${note} */\nexport const ${exportName} = {\n${rows}\n} as const satisfies Readonly<Record<string, string>>;\n`;
 }
-
-fs.writeFileSync(
-  path.join(outputDirectory, "en.ts"),
-  moduleSource(
-    "tutorialEnCatalog",
-    englishValues,
-    "Canonical English copy keyed by durable guide, section and step ids.",
-  ),
-  "utf8",
-);
 
 function batches(values) {
   const output = [];
@@ -196,17 +190,29 @@ async function translateBatch(values, targetLanguage, attempt = 0) {
 }
 
 for (const [fileName, targetLanguage, exportName] of languages) {
-  const translated = [];
-  const chunks = batches(englishValues);
+  const outputPath = path.join(outputDirectory, `${fileName}.ts`);
+  const existing = fs.existsSync(outputPath) ? require(outputPath)[exportName] : {};
+  // Preserve existing reviewed translations when their English source has not
+  // changed. A three-line lesson edit should not rewrite the entire library.
+  const pendingIndexes = keyOrder.flatMap((key, index) =>
+    translateAll || !existing[key] || previousEnglish[key] !== englishValues[index]
+      ? [index] : [],
+  );
+  const translated = keyOrder.map((key) => existing[key]);
+  const pendingTranslations = [];
+  const chunks = batches(pendingIndexes.map((index) => englishValues[index]));
   for (let index = 0; index < chunks.length; index += 1) {
     process.stdout.write(
       `\r${fileName}: ${index + 1}/${chunks.length} translation batches`,
     );
-    translated.push(...(await translateBatch(chunks[index], targetLanguage)));
+    pendingTranslations.push(...(await translateBatch(chunks[index], targetLanguage)));
   }
   process.stdout.write("\n");
-  if (translated.length !== entries.length)
+  if (pendingTranslations.length !== pendingIndexes.length)
     throw new Error(`${fileName}: translation count mismatch`);
+  pendingIndexes.forEach((index, pendingIndex) => {
+    translated[index] = pendingTranslations[pendingIndex];
+  });
   for (const [key, value] of Object.entries(reviewedOverrides[fileName] ?? {})) {
     const keyIndex = keyOrder.indexOf(key);
     if (keyIndex < 0) throw new Error(`${fileName}: override key not found: ${key}`);
@@ -222,6 +228,18 @@ for (const [fileName, targetLanguage, exportName] of languages) {
     "utf8",
   );
 }
+
+// Advance the source baseline last: an interrupted translation run must keep
+// detecting its changed strings when resumed.
+fs.writeFileSync(
+  path.join(outputDirectory, "en.ts"),
+  moduleSource(
+    "tutorialEnCatalog",
+    englishValues,
+    "Canonical English copy keyed by durable guide, section and step ids.",
+  ),
+  "utf8",
+);
 
 console.log(
   `Generated ${entries.length} stable tutorial strings in English and ${languages.length} translated catalogs.`,

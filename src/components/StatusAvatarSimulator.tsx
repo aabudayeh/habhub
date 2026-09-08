@@ -7,7 +7,6 @@ import React, {
   useState,
 } from "react";
 import {
-  Modal,
   PanResponder,
   Platform,
   Pressable,
@@ -18,6 +17,7 @@ import {
 
 import { AppText as Text } from "@/src/components/AppText";
 import { BodyProgressAvatar } from "@/src/components/BodyProgressAvatar";
+import { TutorialModal as Modal } from "@/src/components/TutorialModal";
 import { GOAL_COMPLETE_COLOR } from "@/src/domain/colors";
 import {
   STATUS_AVATAR_SIMULATION_METRICS,
@@ -872,6 +872,9 @@ export function StatusAvatarSimulator({
                       </Text>
                       <Text style={[styles.infoDetail, { color: colors.muted }]}>
                         Weight uses your profile height for total size. Body fat and lean mass can be adjusted or disabled independently.
+                      </Text>
+                      <Text style={[styles.infoDetail, { color: colors.muted }]}>
+                        Fat and lean mass must fit within total weight. If inputs conflict, the preview limits lean mass to the remaining weight without changing your sliders. Lean mass includes more than muscle.
                       </Text>
                       <Text style={[styles.infoDetail, { color: colors.muted }]}>
                         C = logged. R is a general adult reference based on available profile details; missing details use adult defaults. It is not a medical target.
