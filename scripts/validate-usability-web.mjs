@@ -7,7 +7,10 @@ import { Buffer } from "node:buffer";
 const root = path.resolve(import.meta.dirname, "..");
 const baseUrl = process.env.HABHUB_USABILITY_URL ?? "http://127.0.0.1:8091";
 const port = Number(process.env.HABHUB_USABILITY_PORT ?? 9342);
-const output = path.join(root, "store", "exports", "usability-web");
+const hostedSmoke = process.env.HABHUB_USABILITY_HOSTED === "1";
+const baseOrigin = new URL(baseUrl).origin;
+assert.ok(!hostedSmoke || /^https:\/\/habhub(?:--[a-z0-9]+)?\.expo\.app$/.test(baseOrigin), "Hosted demo smoke tests are limited to HabHub hosting");
+const output = path.join(root, "store", "exports", hostedSmoke ? "usability-web-hosted" : "usability-web");
 const profiles = path.join(output, "profiles");
 fs.mkdirSync(profiles, { recursive: true });
 const profile = fs.mkdtempSync(path.join(profiles, "edge-"));
@@ -139,14 +142,26 @@ try {
   await Promise.all([browser.send("Page.enable"), browser.send("Runtime.enable")]);
   const pageIds = ["today", "status", "menu", "quick-guide", "notifications", "metric-editor", "settings", "display", "progress", "leaderboard", "chat", "workout", "challenges", "badges", "groups", "customize", "group-notes", "group-schedule", "recap-feed", "group-recap", "profile", "timer", "food", "todo"];
   await browser.send("Page.addScriptToEvaluateOnNewDocument", { source: `(() => {
-    if (!location.origin.startsWith('http://127.0.0.1')) return;
-    localStorage.setItem('paceboard-explicit-demo-mode-v1','true');
+    if (location.origin !== ${JSON.stringify(baseOrigin)}) return;
+    if (${hostedSmoke}) {
+      // Hosted checks must first opt into demo through the actual sign-in UI.
+      if (localStorage.getItem('paceboard-explicit-demo-mode-v1') !== 'true') return;
+    } else {
+      if (!location.origin.startsWith('http://127.0.0.1')) return;
+      localStorage.setItem('paceboard-explicit-demo-mode-v1','true');
+    }
     localStorage.setItem('metric-rally-onboarding-complete-v1:demo:ahmad', JSON.stringify({completed:true,version:4,completedAt:new Date().toISOString()}));
     for (const key of ['demo%3Aahmad','ahmad']) localStorage.setItem('metric-rally-tutorial-first-visits-v1:'+key, JSON.stringify({pageIds:${JSON.stringify(pageIds)},updatedAt:new Date().toISOString()}));
   })()` });
   await browser.send("Emulation.setLocaleOverride", { locale: "en-US" });
   await browser.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
-  for (const width of [320, 390, 1440]) {
+  if (hostedSmoke) {
+    await browser.send("Page.navigate", { url: `${baseUrl}/sign-in` });
+    await until(textPresent("Try the full demo first"), "hosted explicit-demo entry");
+    await tap(byText("Try the full demo first"), "Try the full demo first", false);
+    await until("localStorage.getItem('paceboard-explicit-demo-mode-v1') === 'true'", "real demo opt-in");
+  }
+  for (const width of hostedSmoke ? [390] : [320, 390, 1440]) {
     const mobile = width < 500;
     await browser.send("Emulation.setDeviceMetricsOverride", { width, height: mobile ? 844 : 1000, deviceScaleFactor: 1, mobile: false });
     await browser.send("Emulation.setTouchEmulationEnabled", { enabled: mobile });

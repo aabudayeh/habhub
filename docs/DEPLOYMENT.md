@@ -540,6 +540,13 @@ the new client. Preserve the existing backend privacy/reset fences. Private
 image paths stay uploader-bound, signed URLs require group authorization, and
 the old five-argument note save API remains compatible.
 
+Applied rollout evidence: all 115 local/remote migrations matched through
+`202609080011`; `group-note-media` was independently listed ACTIVE at version 1,
+and an unauthenticated live request returned `401 authentication_required`.
+Client rollback does not require dropping this additive schema. Preserve image
+ownership, staged-upload and retired-path records if reverting a client build;
+do not remove those tables/columns after users begin attaching images.
+
 The prior human avatar artwork replaces
 the rejected vector outline, and Menu no longer contains Find/Explore controls.
 Follow `docs/AVATAR_RESTORATION_1.0.21.md` and the provenance-checked capture

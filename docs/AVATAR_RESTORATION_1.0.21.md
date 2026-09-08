@@ -1,6 +1,7 @@
 # HabHub 1.0.21: original avatar, clean live setup and compact shared tools
 
 Branch: `codex/avatar-shape-restoration-20260908`, based on `043d609`.
+Runtime implementation commit: `15ede3d` (preceded by avatar restoration `83eca61`).
 
 ## User-directed correction
 
@@ -29,9 +30,9 @@ Branch: `codex/avatar-shape-restoration-20260908`, based on `043d609`.
    positively identified untouched legacy fixtures, and defer health connection
    prompts until guided setup ends. Preserve existing user records and edits.
 
-These additions supersede the earlier provisional media capture and screen
-checks below. All affected screenshots and the full walkthrough must be
-recaptured from the final runtime before release.
+All affected screenshots and the full walkthrough are regenerated from the
+same verified final runtime before release; older provisional media is not
+accepted as evidence for these additions.
 
 ## Implementation
 
@@ -92,25 +93,10 @@ layout/setup requests; final integration results are recorded separately below.
   male, 24,783 for female), with no earlier sprite preloads. This observed local
   transfer behavior, not a mobile-device benchmark or million-user load test.
   Evidence: `store/exports/avatar-artwork-web-network-390/report.json`.
-- General usability **21/21**, onboarding **12/12**, group calendar **9/9**,
-  each across the same three widths, with no recorded runtime errors. These
-  include compact Menu navigation, Guided/Classic differences and persisted
-  Skip all tutorials. Total with the avatar matrix: **58/58**.
-- Avatar calculations, simulator guards, tutorial engine/curriculum, menu
-  regression, TypeScript and focused ESLint checks passed. Expo Doctor passed
-  18/18; cloud configuration and the configured dependency audit passed.
-- The iOS JavaScript/Hermes structural export passed with 455 bundled assets,
-  including the original body artwork. It is not a signed iOS binary or device
-  test. The frozen web export passed and its served bytes were verified for
-  capture.
-- The refreshed 29 JPEG sources, 56 PNG deliverables and three montage masters
-  passed partial media validation. The 102-second feature tour uses the
-  restored silhouette and compact Menu; its Menu caption now describes profile
-  and settings rather than the removed directory.
 
-Pending the newly recorded full walkthrough, complete release gate and
-independent deployment/build checks. Release URLs and artifact identities will
-be recorded after those checks, not inferred from the previous release.
+The latest integration results below supersede earlier provisional browser
+matrices. Release URLs and artifact identities are recorded only after
+independent deployment/build checks, not inferred from the previous release.
 
 The additional Group Notes image feature requires migration
 `202609080011_group_note_images.sql` and the authenticated `group-note-media`
@@ -150,7 +136,68 @@ documented in `store/README.md`; a web pass is not a signed-device certification
 - Updated iOS structural export: **2,661 native modules**, **455 assets**, a
   **13.1 MB Hermes bundle**, and the embedded rich-editor DOM bundle exported.
   This precedes only the final menu-row reorder; no native integration changed.
+- Final Android structural export also passed after the menu reorder, including
+  its **13.1 MB Hermes bundle** and embedded rich-editor DOM assets. Neither
+  structural export substitutes for signed-binary installation or device tests.
 - Translation coverage: **2,971/2,971** detected UI keys across seven translated
   catalogs. Expo Doctor: **18/18**. Cloud configuration and the configured
-  production dependency audit passed. Complete release gate remains pending
-  the final continuous walkthrough and full marketing validation.
+  production dependency audit passed.
+- The complete `pnpm.cmd check:release` gate passed after the final recording:
+  media, database/privacy and account lifecycle fixtures, health and
+  notifications, multi-group projection, performance, TypeScript, ESLint and
+  final web export. The exported main web bundle is
+  `__common-c31201da64a5f85f4445f63dcc191376.js`.
+
+### Final marketing evidence
+
+- Recaptured and visually reviewed all **29** source JPEGs from the final
+  frozen runtime, including clean empty setup and the requested menu order.
+- Rebuilt **56** PNG deliverables and all three short H.264/AAC montage masters:
+  **29.9-second Apple preview**, **44.9-second Google preview**, and
+  **102-second comprehensive feature tour**.
+- Recorded the continuous interactive guide: **1,161.5 seconds** (approximately
+  **19 minutes 22 seconds**), **3,568 live captured frames**, **98 contiguous
+  lessons** and **19/19 actual practice demonstrations**. Representative final
+  video frames were reviewed for the restored original avatar, group calendar,
+  shared notes, Menu and formula practice.
+- Complete marketing validation passed for **29 JPEGs + 56 PNGs + 4 MP4s**.
+  The full-guide SHA-256 is
+  `9ed1c97587a360f85412890da45f6133839ab18318c8e1d5e5be23793bc619af`.
+  Capture, render and manifest proofs link the media to the verified served
+  runtime. Audio is intentionally silent AAC; there is no voiceover or music.
+
+### Release delivery
+
+- Production web: https://habhub.expo.app
+- Immutable 1.0.21 deployment: https://habhub--cv0csm4wr3.expo.app
+  (`cv0csm4wr3`, production deployment ID
+  `019fb768-cce3-754e-9099-805d22d6dcd2`). Both returned HTTP 200; the main,
+  onboarding, Menu, Group Notes and Group Schedule JavaScript responses matched
+  the checked local export byte-for-byte.
+- Hosted-site smoke test: **11/11** at 390 CSS pixels with **zero runtime
+  errors**, after entering credential-free demo through the real sign-in
+  button. It covers menu ordering, compact headers, rich/image group notes,
+  draft safeguards, help controls, challenge profiles and workout Done. The
+  initial local-only fixture correctly stayed at sign-in on hosting; the smoke
+  harness now explicitly enters demo instead of weakening app authentication.
+  Evidence: `store/exports/usability-web-hosted/report.json`.
+- New Android preview APK request:
+  https://expo.dev/accounts/sethpapa/projects/metrally/builds/f8b9fe9f-b49c-4086-a2dc-f6cb38fcc814
+  — version **1.0.21**, versionCode **73**, profile **preview**, independently
+  verified **IN_PROGRESS** after submission at `2026-09-08T23:09:11.143Z`.
+  Build source: `15ede3d0bb745b7254046969bc6dc8baab622511`. This is a new
+  uploaded build, not the prior version 1.0.20 APK. Its build page will provide
+  the artifact when EAS finishes; no completed APK or device test is implied.
+- The isolated source branch is pushed to
+  https://github.com/aabudayeh/habhub/tree/codex/avatar-shape-restoration-20260908
+  without merging the default branch. Unrelated local Supabase CLI state was
+  preserved and excluded from commits and EAS uploads.
+- Downloadable media archive: `store/exports/habhub-1.0.21-marketing.zip`.
+  Its packaging command verifies every archived file against the validated
+  manifest; previous versioned archives are preserved as recovery copies.
+
+Before store publication, complete the signed-device and store-responsibility
+checks in `store/README.md` and `docs/DEPLOYMENT.md`, especially background
+health-source behavior, push delivery/taps, native photo export, accessibility,
+and the signed iOS build. This release is not a claim of device certification
+or demonstrated million-user capacity.
