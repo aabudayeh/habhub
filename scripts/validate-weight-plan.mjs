@@ -229,12 +229,16 @@ assert.match(
 );
 assert.doesNotMatch(display, /Status Avatar widget|launcher' s widget picker|display-widgets-info/);
 
-assert.match(log, /selected\?\.id === "water" \? "0\.25" : ""/);
-assert.match(log, /function adjustWaterCups\(change: -1 \| 1\)/);
-assert.match(log, /accessibilityLabel="Remove 250 millilitres"/);
-assert.match(log, /accessibilityLabel="Add 250 millilitres"/);
-assert.match(log, /250 ml · 1 cup/);
+assert.match(
+  log,
+  /const quickEntryInitialValue = quickEntry[\s\S]{0,120}String\(quickEntry\.minimum \?\? quickEntry\.step\)/,
+  "Quick-entry trackers must initialize from their reusable configured minimum or step.",
+);
+assert.match(log, /function adjustQuickEntry\(change: -1 \| 1\)/);
+assert.match(log, /accessibilityLabel=\{`Remove one \$\{quickEntry\.stepLabel \|\| "step"\}`\}/);
+assert.match(log, /accessibilityLabel=\{`Add one \$\{quickEntry\.stepLabel \|\| "step"\}`\}/);
+assert.match(log, /quickEntryLabel\(quickEntrySteps, quickEntry\)/);
 
 console.log(
-  "Weight planning, directional weight tracking, dismissible completion, onboarding descriptions, and 250 ml water controls validated.",
+  "Weight planning, directional weight tracking, dismissible completion, onboarding descriptions, and reusable quick-entry controls validated.",
 );

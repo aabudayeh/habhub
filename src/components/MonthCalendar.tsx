@@ -249,6 +249,7 @@ export function MonthCalendar({
               key={day.key}
               id={tutorialDayTarget!}
               style={styles.tutorialDayTarget}
+              onTutorialActivate={() => onSelect(day.key)}
             >
               {dayButton}
             </TutorialTarget>

@@ -191,7 +191,8 @@ export function totalEnergyBurnedBreakdownEntries(
       : 0;
     const profile =
       state.energyProfiles?.[userId] ?? state.settings.energyProfile;
-    const unrecordedSteps = stepMetric
+    const unrecordedSteps =
+      stepMetric && state.settings.estimateUnrecordedSteps === true
       ? unrecordedStepActivity(
           entriesForUserDay(state.entries, userId, localDate),
           state.metrics,

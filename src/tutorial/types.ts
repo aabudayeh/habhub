@@ -1,5 +1,7 @@
 export type TutorialRoute = `/${string}` | "/";
 
+export type TutorialExperienceMode = "practice" | "watch";
+
 export type TutorialAnchor = {
   /** Registered TutorialTarget id. Omit for a centered explanation step. */
   target?: string;
@@ -88,6 +90,10 @@ export type ActiveTutorialSession = {
   stepId: string;
   stepIndex: number;
   runId: number;
+  /** Practice waits for the person; watch animates and advances the safe demo. */
+  experienceMode: TutorialExperienceMode;
+  /** First-visit page tours return to the page that launched them. */
+  returnPath?: string;
   demoAnchorDate: string;
   completedStepIds: string[];
   practiceActionIds: string[];
@@ -98,4 +104,6 @@ export type ActiveTutorialSession = {
 export type TutorialStartOptions = {
   resume?: boolean;
   stepId?: string;
+  mode?: TutorialExperienceMode;
+  returnPath?: string;
 };

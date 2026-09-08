@@ -20,8 +20,10 @@ import {
 } from "@/src/components/ui";
 import { dateKey, dateWithOffsetFrom, friendlyDate } from "@/src/domain/date";
 import {
+  averageCompletedExerciseWeight,
   averageGymRestSeconds,
   ExerciseObservation,
+  expandedGymExercises,
   exerciseHistory,
   exerciseIdentity,
   exerciseStats,
@@ -78,7 +80,7 @@ export default function GymExerciseScreen() {
             (!cutoff || session.localDate >= cutoff),
         )
         .flatMap((session) =>
-          session.exercises
+          expandedGymExercises(session.exercises)
             .filter((exercise) => exerciseIdentity(exercise) === key)
             .map((exercise) => ({ session, exercise })),
         )
@@ -107,6 +109,13 @@ export default function GymExerciseScreen() {
           : colors.border;
   const averageRest = averageGymRestSeconds(
     entries.map(({ exercise }) => exercise),
+  );
+  const averageSetWeight = averageCompletedExerciseWeight(
+    sessions.filter(
+      (session) => !cutoff || session.localDate >= cutoff,
+    ),
+    state.currentUserId,
+    key,
   );
 
   function saveGoal() {
@@ -164,6 +173,10 @@ export default function GymExerciseScreen() {
               ? `${stats.bestWeight.toFixed(1)} kg × ${stats.repsAtBestWeight}`
               : "—"
           }
+        />
+        <Stat
+          label={`Avg set load · ${period === 0 ? "all" : `${period}d`}`}
+          value={averageSetWeight ? `${averageSetWeight.toFixed(1)} kg` : "—"}
         />
         <Stat
           label="Est. 1RM"
@@ -495,7 +508,13 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     marginTop: 7,
   },
-  stats: { flexDirection: "row", flexWrap: "wrap", gap: 7 },
+  stats: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 7,
+    marginTop: 10,
+    marginBottom: 4,
+  },
   stat: { width: "48%", flexGrow: 1, padding: 10 },
   statValue: { fontSize: 15, fontWeight: "900" },
   small: { fontSize: 8, lineHeight: 12 },

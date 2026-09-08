@@ -291,6 +291,17 @@ function Today() {
       scope: "isolated-preview",
     });
   }, [reportTutorialEvent]);
+  const openViewFilterManager = useCallback(() => {
+    setShowViewFilters(false);
+    router.navigate({
+      pathname: "/view-filters",
+      params: { scope: "today" },
+    } as never);
+    reportTutorialEvent({
+      actionId: "tutorial.today.open-filter-manager",
+      scope: "isolated-preview",
+    });
+  }, [reportTutorialEvent]);
   const todaySwipeResponder = useMemo(
     () =>
       PanResponder.create({
@@ -1913,19 +1924,12 @@ function Today() {
                 ) : null}
               </Pressable>
             ))}
-            <TutorialTarget id="today-filter-manage">
+            <TutorialTarget
+              id="today-filter-manage"
+              onTutorialActivate={openViewFilterManager}
+            >
             <Pressable
-              onPress={() => {
-                setShowViewFilters(false);
-                router.navigate({
-                  pathname: "/view-filters",
-                  params: { scope: "today" },
-                } as never);
-                tutorial.reportEvent({
-                  actionId: "tutorial.today.open-filter-manager",
-                  scope: "isolated-preview",
-                });
-              }}
+              onPress={openViewFilterManager}
               style={[styles.manageFilters, { borderColor: accent }]}
             >
               <Ionicons name="settings-outline" size={15} color={accent} />

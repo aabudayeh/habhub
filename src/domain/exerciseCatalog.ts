@@ -432,6 +432,16 @@ for (const item of EXERCISE_CATALOG) {
   }
 }
 
+const sessionActivityKeys = new Set(
+  SESSION_ACTIVITY_EXERCISES.map((item) => item.key),
+);
+const sessionActivityAliases = SESSION_ACTIVITY_EXERCISES.flatMap((item) =>
+  [item.name, item.key, ...item.aliases, ...(item.health?.samsungTypes ?? [])]
+    .map(normalizedActivityName)
+    .filter((alias) => alias.length >= 3)
+    .map((alias) => ({ alias, item })),
+).sort((left, right) => right.alias.length - left.alias.length);
+
 const catalogByHealthConnectSession = new Map<number, ExerciseCatalogItem>();
 const catalogByHealthConnectSegment = new Map<number, ExerciseCatalogItem>();
 const catalogByAppleWorkout = new Map<number, ExerciseCatalogItem>();
@@ -460,6 +470,24 @@ export function appleWorkoutExercise(type: number) {
 
 export function exerciseFromActivityName(name?: string) {
   return name ? catalogByActivityName.get(normalizedActivityName(name)) : undefined;
+}
+
+/**
+ * Resolve a session activity from a user-facing workout label. Exact catalog
+ * names and aliases win; descriptive labels such as "Morning run" then use
+ * the longest whole-word activity alias. Callers can retain an explicitly
+ * selected activity as their fallback when no label is recognizable.
+ */
+export function inferSessionActivityFromName(name?: string) {
+  if (!name) return undefined;
+  const normalized = normalizedActivityName(name);
+  if (!normalized) return undefined;
+  const exact = catalogByActivityName.get(normalized);
+  if (exact && sessionActivityKeys.has(exact.key)) return exact;
+  const padded = ` ${normalized} `;
+  return sessionActivityAliases.find(({ alias }) =>
+    padded.includes(` ${alias} `),
+  )?.item;
 }
 
 export function catalogExercise(key?: string) {

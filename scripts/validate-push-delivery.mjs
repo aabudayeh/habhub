@@ -1258,8 +1258,8 @@ assert.match(
 );
 assert.match(
   recapScreen,
-  /if \(storyDeck\?\.key === storySourceKey\) return[\s\S]{0,260}!challengeCloud\.initialLoadComplete[\s\S]{0,100}!settledChallengeResults\.initialLoadComplete[\s\S]{0,360}setIndex\(0\)[\s\S]{0,120}setStoryDeck\(\{ key: storySourceKey, stories: sourceStories \}\)/,
-  "the story screen must wait for both first cloud reads and then freeze one coherent page-one deck",
+  /if \(storyDeck\?\.key === storySourceKey\) return[\s\S]{0,260}!challengeCloud\.initialLoadComplete[\s\S]{0,100}!settledChallengeResults\.initialLoadComplete[\s\S]{0,620}setIndex\([\s\S]{0,120}setStoryDeck\(\{ key: storySourceKey, stories: sourceStories \}\)/,
+  "the story screen must wait for both first cloud reads and then freeze one coherent deck",
 );
 assert.match(
   groupChallengesHook,
@@ -1746,7 +1746,17 @@ assert.match(
 );
 assert.match(groupNotificationHook, /loadedGroupId/);
 assert.match(accountNotificationHook, /loadAccountNotificationEvents/);
-assert.match(accountNotificationHook, /account:\$\{auth\.user\.id\}:group-notifications/);
+assert.match(
+  accountNotificationHook,
+  /const scopeKey = accountId \?\? "signed-out"/,
+  "the account feed must fail closed between signed-in identities",
+);
+assert.match(
+  accountNotificationHook,
+  /account:\$\{accountId\}:group-notifications/,
+  "account notification realtime must use the same scoped authenticated id",
+);
+assert.match(accountNotificationHook, /scopeRef\.current !== scopeKey/);
 
 console.log(
   "Push validation passed: native and Web Push account lifecycle, PWA service worker, staged canonical outbox, private challenge feed, cursor drain, and per-target retry checkpoints.",

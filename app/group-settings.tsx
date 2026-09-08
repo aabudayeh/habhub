@@ -637,6 +637,43 @@ export default function GroupSettings() {
               accent={accent}
             />
             <NotificationPreferenceRow
+              title="Notes & schedule"
+              detail="When a member adds or updates a shared note or event"
+              value={groupNotificationPreferences.workspaceUpdates !== false}
+              disabled={groupNotificationPreferences.enabled === false}
+              onValueChange={(workspaceUpdates) =>
+                patchGroupNotifications({ workspaceUpdates })
+              }
+              colors={colors}
+              accent={accent}
+            />
+            {state.group.groupTodosEnabled === true ? (
+              <>
+                <NotificationPreferenceRow
+                  title="Group To-Do updates"
+                  detail="When a member completes a task or everyone finishes"
+                  value={groupNotificationPreferences.todoUpdates !== false}
+                  disabled={groupNotificationPreferences.enabled === false}
+                  onValueChange={(todoUpdates) =>
+                    patchGroupNotifications({ todoUpdates })
+                  }
+                  colors={colors}
+                  accent={accent}
+                />
+                <NotificationPreferenceRow
+                  title="Group To-Do reminders"
+                  detail="Private device reminders you attached to this group's tasks"
+                  value={groupNotificationPreferences.todoReminders !== false}
+                  disabled={groupNotificationPreferences.enabled === false}
+                  onValueChange={(todoReminders) =>
+                    patchGroupNotifications({ todoReminders })
+                  }
+                  colors={colors}
+                  accent={accent}
+                />
+              </>
+            ) : null}
+            <NotificationPreferenceRow
               title="Lead changes"
               detail="First-place changes in selected leaderboard trackers"
               value={

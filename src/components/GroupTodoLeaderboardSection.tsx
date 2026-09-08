@@ -1,21 +1,22 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
-import { LayoutChangeEvent, Pressable, StyleSheet, View } from "react-native";
+import { LayoutChangeEvent, Modal, Pressable, ScrollView, StyleSheet, View } from "react-native";
 
 import { useGroupTodos } from "@/src/cloud/useGroupTodos";
 import { AppText as Text } from "@/src/components/AppText";
-import { useTodoCardPress } from "@/src/components/useTodoDoubleTap";
 import { useTodoSubtaskExpansion } from "@/src/components/useTodoSubtaskExpansion";
+import { useTodoCardPress } from "@/src/components/useTodoDoubleTap";
 import { useTodoItemVisibility } from "@/src/components/useTodoItemVisibility";
 import { dateKey } from "@/src/domain/date";
+import { memberDisplayName } from "@/src/domain/members";
 import {
   groupTodoAppearsOnDate,
   groupTodoCompletedOnDate,
   descendantTodoIds,
   todoLabels,
 } from "@/src/domain/todos";
-import { LocalizedAlert as Alert } from "@/src/i18n";
+import { LocalizedAlert as Alert, useLocale } from "@/src/i18n";
 import { useApp } from "@/src/state/AppProvider";
 import { useAppColors, useGroupAccent } from "@/src/theme";
 import { GroupTodoItem } from "@/src/types";
@@ -41,6 +42,7 @@ export function GroupTodoLeaderboardSection({
   const { state, updateSettings, deleteCalendarReminder } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const locale = useLocale();
   const enabled = state.group.groupTodosEnabled === true;
   const visible =
     state.settings.showGroupTodosByGroup?.[state.group.id] === true;
@@ -53,15 +55,31 @@ export function GroupTodoLeaderboardSection({
     `group:${state.currentUserId}:${state.group.id}`,
   );
   const [activeLabel, setActiveLabel] = useState<string>();
-  const today = dateKey();
+  const [completionTodoId, setCompletionTodoId] = useState<string>();
   const todoCardPress = useTodoCardPress<GroupTodoItem>({
-    onOpen: (todo) =>
-      router.navigate({
-        pathname: "/group-todo-editor",
-        params: { id: todo.id },
-      } as never),
+    onOpen: (todo) => {
+      if (editing) {
+        router.navigate({
+          pathname: "/group-todo-editor",
+          params: { id: todo.id },
+        } as never);
+        return;
+      }
+      setCompletionTodoId(todo.id);
+    },
     onComplete: (todo) => void groupTodos.toggle(todo),
   });
+  const completionTodo = completionTodoId
+    ? groupTodos.todos.find((todo) => todo.id === completionTodoId)
+    : undefined;
+  const today = dateKey();
+  const sharedCompletionAt =
+    completionTodo?.completionMode === "shared" &&
+    completionTodo.completedAt &&
+    (!completionTodo.recurrence ||
+      dateKey(new Date(completionTodo.completedAt)) === today)
+      ? completionTodo.completedAt
+      : undefined;
   const reminders = useMemo(
     () =>
       (state.calendarReminders ?? []).filter(
@@ -195,13 +213,15 @@ export function GroupTodoLeaderboardSection({
       <View key={todo.id} style={depth ? styles.subtaskBranch : undefined}>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={`Edit group to-do ${todo.title}`}
-          accessibilityHint="Tap once to edit. Double-tap quickly to complete."
+          accessibilityLabel={`${editing ? "Edit" : "View completion details for"} group to-do ${todo.title}`}
+          accessibilityHint={editing ? "Opens the group to-do editor." : "Shows who completed this task and when."}
           onPressIn={() => todoCardPress.onPressIn(todo)}
           onPress={() => todoCardPress.onPress(todo, done, !editing)}
-          onLongPress={() => {
-            todoCardPress.onLongPress(todo, onRequestEdit);
-          }}
+          onLongPress={() =>
+            todoCardPress.onLongPress(todo, () => {
+              if (!editing) onRequestEdit();
+            })
+          }
           delayLongPress={325}
           style={[
             styles.row,
@@ -453,6 +473,123 @@ export function GroupTodoLeaderboardSection({
           ) : null}
         </>
       )}
+      <Modal
+        transparent
+        animationType="fade"
+        visible={Boolean(completionTodo)}
+        onRequestClose={() => setCompletionTodoId(undefined)}
+      >
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Close completion details"
+          onPress={() => setCompletionTodoId(undefined)}
+          style={styles.completionBackdrop}
+        >
+          <Pressable
+            accessibilityRole="none"
+            onPress={(event) => event.stopPropagation()}
+            style={[styles.completionSheet, { backgroundColor: colors.card, borderColor: colors.border }]}
+          >
+            <View style={styles.completionHeader}>
+              <View style={styles.copy}>
+                <Text style={[styles.completionEyebrow, { color: accent }]}>COMPLETION DETAILS</Text>
+                <Text translate={false} style={[styles.completionTitle, { color: colors.ink }]}>{completionTodo?.title}</Text>
+              </View>
+              <Pressable accessibilityLabel="Close completion details" onPress={() => setCompletionTodoId(undefined)} style={styles.closeButton}>
+                <Ionicons name="close" size={18} color={colors.muted} />
+              </Pressable>
+            </View>
+            <ScrollView style={styles.completionScroll} contentContainerStyle={styles.completionList}>
+              {completionTodo?.completionMode === "shared" ? (
+                sharedCompletionAt ? (
+                  <CompletionMemberRow
+                    name={
+                      completionTodo.completedByUserId
+                        ? (() => {
+                            const member = state.group.members.find((item) => item.id === completionTodo.completedByUserId);
+                            return member ? memberDisplayName(state, member) : "Former member";
+                          })()
+                        : "Former member"
+                    }
+                    completedAt={sharedCompletionAt}
+                    locale={locale}
+                    colors={colors}
+                    accent={accent}
+                  />
+                ) : (
+                  <View style={styles.noCompletion}>
+                    <Ionicons name="time-outline" size={20} color={colors.faint} />
+                    <Text style={[styles.noCompletionTitle, { color: colors.ink }]}>Waiting for one group completion</Text>
+                    <Text style={[styles.noCompletionCopy, { color: colors.muted }]}>The first member to check this task completes it for everyone.</Text>
+                  </View>
+                )
+              ) : (
+                state.group.members.map((member) => {
+                  const completion = completionTodo?.completedBy.find(
+                    (item) =>
+                      item.userId === member.id &&
+                      (!completionTodo.recurrence || dateKey(new Date(item.completedAt)) === today),
+                  );
+                  return (
+                    <CompletionMemberRow
+                      key={member.id}
+                      name={memberDisplayName(state, member)}
+                      completedAt={completion?.completedAt}
+                      locale={locale}
+                      colors={colors}
+                      accent={accent}
+                    />
+                  );
+                })
+              )}
+            </ScrollView>
+            <View style={[styles.completionSummary, { borderTopColor: colors.border }]}>
+              <Text style={[styles.completionSummaryText, { color: colors.muted }]}>
+                {completionTodo?.completionMode === "shared"
+                  ? sharedCompletionAt
+                    ? "Completed for the whole group"
+                    : "Shared completion · one check finishes it"
+                  : `${completionTodo ? completionTodo.completedBy.filter((item) => !completionTodo.recurrence || dateKey(new Date(item.completedAt)) === today).length : 0} of ${state.group.members.length} members completed`}
+              </Text>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+    </View>
+  );
+}
+
+function CompletionMemberRow({
+  name,
+  completedAt,
+  locale,
+  colors,
+  accent,
+}: {
+  name: string;
+  completedAt?: string;
+  locale: string;
+  colors: ReturnType<typeof useAppColors>;
+  accent: string;
+}) {
+  const when = completedAt ? new Date(completedAt) : undefined;
+  const valid = when && Number.isFinite(when.getTime());
+  return (
+    <View style={[styles.completionMember, { borderColor: colors.border }]}>
+      <Ionicons name={valid ? "checkmark-circle" : "ellipse-outline"} size={20} color={valid ? accent : colors.faint} />
+      <View style={styles.copy}>
+        <Text translate={false} style={[styles.completionMemberName, { color: colors.ink }]}>{name}</Text>
+        <Text translate={false} style={[styles.completionMemberTime, { color: colors.muted }]}>
+          {valid
+            ? new Intl.DateTimeFormat(locale, {
+                month: "short",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+              }).format(when)
+            : "Not completed"}
+        </Text>
+      </View>
     </View>
   );
 }
@@ -484,4 +621,20 @@ const styles = StyleSheet.create({
   labelFilters: { flexDirection: "row", flexWrap: "wrap", gap: 5 },
   labelChip: { minHeight: 24, paddingHorizontal: 8, borderWidth: 1, borderRadius: 999, alignItems: "center", justifyContent: "center" },
   labelChipText: { fontSize: 7, fontWeight: "900" },
+  completionBackdrop: { flex: 1, backgroundColor: "rgba(5,14,36,.58)", alignItems: "center", justifyContent: "center", padding: 18 },
+  completionSheet: { width: "100%", maxWidth: 430, maxHeight: "78%", borderWidth: 1, borderRadius: 22, overflow: "hidden" },
+  completionHeader: { minHeight: 72, padding: 14, flexDirection: "row", alignItems: "center", gap: 10 },
+  completionEyebrow: { fontSize: 7, fontWeight: "900", letterSpacing: 1 },
+  completionTitle: { fontSize: 14, lineHeight: 19, fontWeight: "900", marginTop: 3 },
+  closeButton: { width: 36, height: 36, borderRadius: 12, alignItems: "center", justifyContent: "center" },
+  completionScroll: { flexGrow: 0 },
+  completionList: { paddingHorizontal: 14, paddingBottom: 12, gap: 6 },
+  completionMember: { minHeight: 54, borderWidth: 1, borderRadius: 14, paddingHorizontal: 11, flexDirection: "row", alignItems: "center", gap: 9 },
+  completionMemberName: { fontSize: 10, fontWeight: "900" },
+  completionMemberTime: { fontSize: 8, lineHeight: 11, marginTop: 2 },
+  noCompletion: { minHeight: 126, alignItems: "center", justifyContent: "center", padding: 18, gap: 5 },
+  noCompletionTitle: { fontSize: 11, fontWeight: "900", textAlign: "center" },
+  noCompletionCopy: { fontSize: 8, lineHeight: 12, textAlign: "center", maxWidth: 260 },
+  completionSummary: { minHeight: 48, borderTopWidth: StyleSheet.hairlineWidth, alignItems: "center", justifyContent: "center", paddingHorizontal: 14 },
+  completionSummaryText: { fontSize: 8, fontWeight: "800", textAlign: "center" },
 });

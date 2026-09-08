@@ -229,6 +229,19 @@ export type WorkoutQualification = {
   rules: WorkoutQualificationRule[];
 };
 
+export type MetricQuickEntry = {
+  /** A compact plus/minus control for repeatable quantities. */
+  kind: "stepper";
+  /** Amount added or removed by each press, expressed in the tracker's unit. */
+  step: number;
+  /** Smallest value accepted by the stepper. Defaults to one step. */
+  minimum?: number;
+  /** Optional upper bound for one entry. */
+  maximum?: number;
+  /** Human label for one step, such as cup, set, or focus block. */
+  stepLabel?: string;
+};
+
 export type MetricDefinition = {
   id: string;
   name: string;
@@ -266,6 +279,8 @@ export type MetricDefinition = {
   manualEntry?: boolean;
   /** Allow this numeric tracker to be selected by the activity timer. */
   timerEnabled?: boolean;
+  /** Optional reusable logging interaction, preserved when a tracker is duplicated. */
+  quickEntry?: MetricQuickEntry;
   /** Purpose-built defaults for an intermittent-fasting window tracker. */
   fastingSettings?: {
     /** Local HH:mm time at which the fasting window normally starts. */
@@ -640,7 +655,13 @@ export type GroupNotificationEvent = {
     | "challenge_reminder"
     | "challenge_result"
     | "social_reaction"
-    | "social_comment";
+    | "social_comment"
+    | "group_todo_completed"
+    | "group_todo_all_completed"
+    | "group_note_created"
+    | "group_note_updated"
+    | "group_schedule_created"
+    | "group_schedule_updated";
   challengeId?: string;
   /** Scored occurrence settled by the server, including recurring series. */
   occurrenceDate?: string;
@@ -654,11 +675,14 @@ export type GroupNotificationEvent = {
     | "photo_update"
     | "badge"
     | "group_challenge"
-    | "group_todo";
+    | "group_todo"
+    | "group_note"
+    | "chat_message"
+    | "group_schedule";
   targetId?: string;
   reaction?: "heart" | "thumbs_up" | "thumbs_down" | "cheer";
   /** Return a social interaction to the UI surface where it was made. */
-  interactionSurface?: "feed" | "leaderboard_log";
+  interactionSurface?: "feed" | "leaderboard_log" | "group_notes" | "chat";
   createdAt: string;
   readAt?: string;
 };
@@ -718,6 +742,39 @@ export type GroupTodoItem = {
   createdAt: string;
   updatedAt: string;
 };
+
+export type GroupScheduleItem = {
+  id: string;
+  groupId: string;
+  creatorId: string;
+  title: string;
+  notes?: string;
+  startsAt: string;
+  endsAt?: string;
+  allDay: boolean;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type GroupNote = {
+  id: string;
+  groupId: string;
+  creatorId: string;
+  title?: string;
+  body: string;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/** Personal ordering for the compact Leaderboard header. */
+export type GroupHubAction =
+  | "notifications"
+  | "recap"
+  | "challenges"
+  | "schedule"
+  | "notes";
 export type JournalNote = {
   id: string;
   userId: string;
@@ -755,6 +812,8 @@ export type TimerLap = { id: string; seconds: number; recordedAt: string };
 export type ActivityTimer = {
   id: string;
   metricId: string;
+  /** Calendar date chosen when the timer starts; stable across pause/resume and midnight. */
+  localDate?: string;
   mode: "stopwatch" | "countdown";
   targetSeconds?: number;
   autoLog: boolean;
@@ -766,6 +825,14 @@ export type ActivityTimer = {
   notificationId?: string;
   /** All scheduled threshold/completion alerts for the current run. */
   notificationIds?: string[];
+  /** Optional canonical Workout log created when this timed activity finishes. */
+  workout?: {
+    activityKey?: string;
+    name: string;
+    distanceKm?: number;
+    calories?: number;
+    intensity?: GymIntensity;
+  };
 };
 export type CalendarReminder = {
   id: string;
@@ -1188,6 +1255,11 @@ export type UserSettings = {
   groupTodosBelowTrackers?: boolean;
   /** Group To-Dos are personally hidden until a member explicitly reveals them. */
   showGroupTodosByGroup?: Record<string, boolean>;
+  /** The first two enabled actions stay pinned; the rest live in one overflow. */
+  groupHubActionOrderByGroup?: Record<string, GroupHubAction[]>;
+  /** Group Schedule and Notes are optional personal Leaderboard shortcuts. */
+  showGroupScheduleByGroup?: Record<string, boolean>;
+  showGroupNotesByGroup?: Record<string, boolean>;
   /** Personal ordering for mixed Schedule-page events. */
   calendarEventOrder?: string[];
   /** First visible hour in Schedule; earlier hours remain reachable by scrolling. */
@@ -1256,6 +1328,8 @@ export type UserSettings = {
   showWeightManagementSummary?: boolean;
   /** Whether logged active energy raises that day's food allowance. */
   foodGoalMode: FoodGoalMode;
+  /** Opt-in estimate of walking not already explained by recorded workouts. */
+  estimateUnrecordedSteps?: boolean;
   /** Remembered nutrients in the Food detail filter, including temporarily unavailable ones. */
   foodNutrientIds?: string[];
   /** Preferred multi-day nutrition visualization. */
@@ -1394,6 +1468,12 @@ export type GroupNotificationPreferences = {
   challengeReminders?: boolean;
   challengeResults?: boolean;
   challengeCadence?: "minimal" | "balanced" | "frequent";
+  /** Member completion and all-complete updates for collaborative tasks. */
+  todoUpdates?: boolean;
+  /** Private device reminders attached to this group's tasks. */
+  todoReminders?: boolean;
+  /** New and revised shared notes or schedule items. */
+  workspaceUpdates?: boolean;
 };
 
 export type TrackedGoalPeriod = { from: string; to?: string };
@@ -1494,6 +1574,7 @@ export type NewMetric = Pick<
   | "stepFallback"
   | "manualEntry"
   | "timerEnabled"
+  | "quickEntry"
   | "fastingSettings"
   | "submetrics"
   | "submetricDisplay"

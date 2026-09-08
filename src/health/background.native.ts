@@ -93,6 +93,7 @@ function applyBackgroundHealthRecords(
     sourcePreferences,
     healthFallbackContextForRead(state.entries, state.metrics, dataTypes),
     state.settings.stepCoveragePreferences,
+    state.settings.estimateUnrecordedSteps === true,
   );
   const stepMetricIds = dataTypes.includes('steps')
     ? metricIdsForHealthDataTypes(['steps'], state.metrics)
@@ -195,8 +196,8 @@ function applyBackgroundHealthRecords(
 }
 
 TaskManager.defineTask(TASK_NAME, async () => {
-  let previousStatus: PersistedHealthStatus = { lastSyncedAt: null };
   let statusUserId = "unknown";
+  let requestedHistorySelection: string | null = null;
   try {
     const provider = nativeHealthAdapter.provider;
     const stateJson = await getAppStateStorageItem(APP_STORAGE_KEY);
@@ -221,7 +222,6 @@ TaskManager.defineTask(TASK_NAME, async () => {
       try { status = JSON.parse(statusJson) as PersistedHealthStatus; }
       catch { status = { lastSyncedAt: null }; }
     }
-    previousStatus = status;
     const lastSuccessfulSync = status.lastSyncedAt
       ? new Date(status.lastSyncedAt).getTime()
       : 0;
@@ -240,7 +240,7 @@ TaskManager.defineTask(TASK_NAME, async () => {
     const historyDays = normalizeHealthHistoryDays(
       state.settings.healthHistoryDays,
     );
-    const requestedHistorySelection = healthHistorySelectionKey(
+    requestedHistorySelection = healthHistorySelectionKey(
       historyDays,
     );
     const from = startDate(
@@ -423,12 +423,34 @@ TaskManager.defineTask(TASK_NAME, async () => {
     }
     return BackgroundTask.BackgroundTaskResult.Success;
   } catch (error) {
-    if (statusUserId !== 'unknown')
+    if (statusUserId !== 'unknown' && requestedHistorySelection !== null)
       await runAppStateStorageMutation(async () => {
         const statusKey = `${HEALTH_STATUS_STORAGE_KEY}:${statusUserId}`;
-        const latestStatus =
-          parsePersistedHealthStatus(await AsyncStorage.getItem(statusKey)) ??
-          previousStatus;
+        const latestStatus = parsePersistedHealthStatus(
+          await AsyncStorage.getItem(statusKey),
+        );
+        // Reset deliberately removes this key. Never recreate it from the
+        // task's pre-read status after a delayed Health Connect failure.
+        if (!latestStatus || latestStatus.connectionEnabled === false) return;
+        const activeState = parseAppState(
+          await getAppStateStorageItem(APP_STORAGE_KEY),
+        );
+        if (activeState?.currentUserId !== statusUserId) return;
+        const activeSchedule = healthSyncSchedule(
+          activeState.settings.syncMode,
+          activeState.settings.healthSync.backgroundIntervalHours,
+        );
+        if (
+          !activeState.settings.healthSync.enabled ||
+          !activeState.settings.healthSync.backgroundAccess ||
+          !activeSchedule.requestsBackground ||
+          healthHistorySelectionKey(
+            normalizeHealthHistoryDays(
+              activeState.settings.healthHistoryDays,
+            ),
+          ) !== requestedHistorySelection
+        )
+          return;
         const retryAttempt = Math.min(
           8,
           (latestStatus.retryAttempt ?? 0) + 1,

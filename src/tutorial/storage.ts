@@ -5,9 +5,11 @@ import type {
   TutorialGuide,
   TutorialProgress,
 } from "./types";
+import { safeTutorialRoute } from "./session";
 
 const PROGRESS_PREFIX = "metric-rally-tutorial-progress-v1:";
 const ACTIVE_PREFIX = "metric-rally-active-tutorial-v1:";
+const FIRST_VISIT_PREFIX = "metric-rally-tutorial-first-visits-v1:";
 
 function accountPart(accountId: string) {
   return encodeURIComponent(accountId || "anonymous");
@@ -19,6 +21,10 @@ function progressKey(accountId: string, guideId: string) {
 
 function activeKey(accountId: string) {
   return `${ACTIVE_PREFIX}${accountPart(accountId)}`;
+}
+
+function firstVisitKey(accountId: string) {
+  return `${FIRST_VISIT_PREFIX}${accountPart(accountId)}`;
 }
 
 function parseObject(raw: string | null): Record<string, unknown> | null {
@@ -108,12 +114,35 @@ export async function readActiveTutorial(
     stepId: value.stepId,
     stepIndex,
     runId: value.runId,
+    experienceMode: value.experienceMode === "watch" ? "watch" : "practice",
+    returnPath:
+      typeof value.returnPath === "string" && safeTutorialRoute(value.returnPath)
+        ? value.returnPath
+        : undefined,
     demoAnchorDate: value.demoAnchorDate,
     completedStepIds: strings(value.completedStepIds),
     practiceActionIds: strings(value.practiceActionIds),
     startedAt: value.startedAt,
     updatedAt: value.updatedAt,
   };
+}
+
+/** Page-tour prompts are local, account-scoped UX state, never cloud data. */
+export async function readPromptedTutorialPages(accountId: string) {
+  const value = parseObject(await AsyncStorage.getItem(firstVisitKey(accountId)));
+  return strings(value?.pageIds);
+}
+
+export async function markTutorialPagePrompted(
+  accountId: string,
+  pageId: string,
+) {
+  const pageIds = await readPromptedTutorialPages(accountId);
+  if (pageIds.includes(pageId)) return;
+  await AsyncStorage.setItem(
+    firstVisitKey(accountId),
+    JSON.stringify({ pageIds: [...pageIds, pageId], updatedAt: new Date().toISOString() }),
+  );
 }
 
 export function writeActiveTutorial(

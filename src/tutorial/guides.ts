@@ -129,11 +129,29 @@ const TODAY_STEPS = [
     id: "full.today.filters",
     path: "/",
     target: "today-filter",
-    title: "Save focused views",
-    copy: "Filters can include selected trackers and selected to-dos. A saved view may stay available as a quick chip or remain hidden until you edit it.",
-    primaryLabel: "Open filters",
+    title: "Open your focused views",
+    copy: "Saved views keep a chosen set of trackers and to-dos one tap away without deleting or rearranging anything.",
+    primaryLabel: "Tap the view picker",
     required: false,
-    navigation: { after: "/view-filters?scope=today" },
+    practice: {
+      actionId: "tutorial.today.open-filter-sheet",
+      instruction: "Open the view picker to see your saved Today views.",
+      autoAdvance: true,
+    },
+  }),
+  step("today", {
+    id: "full.today.filter-menu",
+    path: "/",
+    target: "today-filter-manage",
+    title: "Manage reusable views",
+    copy: "Choose a saved view here, or open the manager to create, rename, hide and edit reusable combinations.",
+    primaryLabel: "Open the manager",
+    required: false,
+    practice: {
+      actionId: "tutorial.today.open-filter-manager",
+      instruction: "Tap Manage custom views to open the full view editor.",
+      autoAdvance: true,
+    },
   }),
   step("today", {
     id: "full.today.filter-manager",
@@ -188,6 +206,15 @@ const TODAY_STEPS = [
     copy: "BMI is the default. Body composition uses both body-fat and lean-mass readings when available; otherwise the avatar falls back safely to BMI.",
     primaryLabel: "Next module",
     required: false,
+  }),
+  step("status", {
+    id: "full.status.profile",
+    path: "/profile",
+    title: "Keep your body profile accurate",
+    copy: "Profile details personalize the avatar and improve nutrition, energy and workout estimates. You control what is filled in, and can update it whenever your body or goals change.",
+    primaryLabel: "Done",
+    required: false,
+    navigation: { before: "/profile" },
   }),
 ] as const;
 
@@ -458,6 +485,15 @@ const PERFORMANCE_STEPS = [
     primaryLabel: "Next module",
     required: false,
   }),
+  step("performance", {
+    id: "full.performance.vacation",
+    path: "/vacation",
+    title: "Pause streak pressure during a break",
+    copy: "Vacation mode protects eligible personal Today and Progress streaks for a planned break. It does not rewrite past entries or silently change group competition rules.",
+    primaryLabel: "Done",
+    required: false,
+    navigation: { before: "/vacation" },
+  }),
 ] as const;
 
 const SOCIAL_STEPS = [
@@ -631,6 +667,69 @@ const WORKOUT_STEPS = [
   }),
 ] as const;
 
+const GROUP_HUB_STEPS = [
+  step("group-recap", {
+    id: "full.group-recap.stories",
+    path: "/recap",
+    title: "Replay the group's story",
+    copy: "Recap turns shared activity into a short story and a chronological feed. Open it from the group toolbar whenever you want the context behind today's scores.",
+    primaryLabel: "Next",
+    required: false,
+    navigation: { before: "/recap" },
+  }),
+  step("group-recap", {
+    id: "full.group-recap.social",
+    path: "/recap",
+    title: "React once, everywhere",
+    copy: "Story and feed reactions, comments and shares point to the same group activity. A response in the story is reflected on its matching feed item instead of creating a duplicate conversation.",
+    primaryLabel: "Next page",
+    required: false,
+  }),
+  step("group-recap", {
+    id: "full.group-recap.feed",
+    path: "/recapfeed",
+    title: "Follow shared activity in the feed",
+    copy: "Filter the chronological group feed, then react, comment or share in context. Story and feed actions stay linked to the same activity instead of splitting the conversation.",
+    primaryLabel: "Done",
+    required: false,
+    navigation: { before: "/recapfeed" },
+  }),
+  step("group-schedule", {
+    id: "full.group-schedule.overview",
+    path: "/group-schedule",
+    title: "Keep shared plans together",
+    copy: "Group Schedule lists upcoming workouts, walks, check-ins and other plans in time order. Its shortcut can be shown, hidden or reordered from the group's display controls.",
+    primaryLabel: "Next",
+    required: false,
+    navigation: { before: "/group-schedule" },
+  }),
+  step("group-schedule", {
+    id: "full.group-schedule.edit",
+    path: "/group-schedule",
+    title: "Add an all-day or timed event",
+    copy: "Choose a start, optional end, all-day setting and useful notes. Creators and group admins can correct or remove an event for everyone.",
+    primaryLabel: "Next page",
+    required: false,
+  }),
+  step("group-notes", {
+    id: "full.group-notes.library",
+    path: "/group-notes",
+    title: "Build a shared group notebook",
+    copy: "Use Group Notes for plans, recipes, check-ins and ideas that should stay easy to find beyond chat. Its shortcut follows the same group display controls.",
+    primaryLabel: "Next",
+    required: false,
+    navigation: { before: "/group-notes" },
+  }),
+  step("group-notes", {
+    id: "full.group-notes.social",
+    path: "/group-notes",
+    title: "Discuss each note in place",
+    copy: "Every shared note has linked reactions, comments and sharing. The author or a group admin can edit or delete the note without mixing its discussion into unrelated chat.",
+    primaryLabel: "Next module",
+    required: false,
+  }),
+] as const;
+
 const CHAT_JOURNAL_STEPS = [
   step("chat", {
     id: "full.chat.conversations",
@@ -649,6 +748,15 @@ const CHAT_JOURNAL_STEPS = [
     copy: "The composer follows the native keyboard and returns smoothly when it hides. Notifications include the sender and message text when allowed.",
     primaryLabel: "Next",
     required: false,
+  }),
+  step("chat", {
+    id: "full.chat.safety",
+    path: "/safety",
+    title: "Use protected reporting and blocking",
+    copy: "Safety Center keeps reports private from the reported person, shows their review status, and lets you manage blocked accounts without exposing personal tracker data.",
+    primaryLabel: "Done",
+    required: false,
+    navigation: { before: "/safety" },
   }),
   step("journal", {
     id: "full.journal.library",
@@ -713,6 +821,15 @@ const SETTINGS_STEPS = [
     primaryLabel: "Open Customize",
     navigation: { before: "/menu", after: "/customize" },
   }),
+  step("menu", {
+    id: "full.menu.quick-guide",
+    path: "/quick-guide",
+    title: "Replay help whenever you need it",
+    copy: "Quick Guide offers short Watch and Practice tours by topic, plus advanced customization help. Replaying a guide uses demo data and leaves your own entries untouched.",
+    primaryLabel: "Done",
+    required: false,
+    navigation: { before: "/quick-guide" },
+  }),
   step("custom-metric", {
     id: "full.customize.overview",
     path: "/customize",
@@ -741,6 +858,15 @@ const SETTINGS_STEPS = [
     primaryLabel: "Next",
     required: false,
   }),
+  step("settings", {
+    id: "full.settings.legal-support",
+    path: "/legal-support",
+    title: "Find policy and support details",
+    copy: "Legal & support keeps privacy, terms, safety and help links separate from cloud controls, so account settings stay focused and assistance remains easy to find.",
+    primaryLabel: "Done",
+    required: false,
+    navigation: { before: "/legal-support" },
+  }),
   step("notifications", {
     id: "full.notifications.controls",
     path: "/notifications",
@@ -759,6 +885,15 @@ const SETTINGS_STEPS = [
     copy: "HabHub can request the Android battery-optimization settings so scheduled background sync is less likely to be delayed. The final choice happens in the operating-system page.",
     primaryLabel: "Next",
     required: false,
+  }),
+  step("notifications", {
+    id: "full.notifications.inbox",
+    path: "/alerts",
+    title: "Review updates without losing context",
+    copy: "Group, social and reminder updates collect here. Open an item to return to its source, mark it read, or clear old read items without deleting the underlying activity.",
+    primaryLabel: "Done",
+    required: false,
+    navigation: { before: "/alerts" },
   }),
   step("display", {
     id: "full.display.appearance",
@@ -931,7 +1066,7 @@ const METRIC_STEPS = [
 
 export const FULL_TUTORIAL_GUIDE: TutorialGuide = {
   id: "full-app",
-  version: 1,
+  version: 4,
   title: "Complete HabHub guide",
   detail: "Hands-on guidance for every major page, tracker type and advanced setting",
   icon: "map-outline",
@@ -952,6 +1087,9 @@ export const FULL_TUTORIAL_GUIDE: TutorialGuide = {
     { id: "comparison", title: "Friend comparison", detail: "Stats, charts and photos" },
     { id: "badges", title: "Badges", detail: "Cabinet, progress and showcase" },
     { id: "groups", title: "Groups", detail: "Membership and administration" },
+    { id: "group-recap", title: "Group recap", detail: "Stories, feed and linked conversations" },
+    { id: "group-schedule", title: "Group schedule", detail: "Shared all-day and timed plans" },
+    { id: "group-notes", title: "Group notes", detail: "Shared notes, reactions and comments" },
     { id: "workout", title: "Workout", detail: "Templates, sets, timers and history" },
     { id: "chat", title: "Chat", detail: "Group and direct conversations" },
     { id: "journal", title: "Journal", detail: "Rich notes, labels and drawing" },
@@ -971,6 +1109,7 @@ export const FULL_TUTORIAL_GUIDE: TutorialGuide = {
     ...PROGRESS_STEPS,
     ...PERFORMANCE_STEPS,
     ...SOCIAL_STEPS,
+    ...GROUP_HUB_STEPS,
     ...WORKOUT_STEPS,
     ...CHAT_JOURNAL_STEPS,
     ...SETTINGS_STEPS,
@@ -994,6 +1133,9 @@ const MODULE_ICONS: Readonly<Record<string, string>> = {
   comparison: "people-outline",
   badges: "ribbon-outline",
   groups: "people-circle-outline",
+  "group-recap": "sparkles-outline",
+  "group-schedule": "calendar-number-outline",
+  "group-notes": "document-text-outline",
   workout: "barbell-outline",
   chat: "chatbubbles-outline",
   journal: "journal-outline",

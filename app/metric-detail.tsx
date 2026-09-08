@@ -128,6 +128,11 @@ import {
   isFoodNutrientDetailEntry,
   isFoodNutrientTrackerId,
 } from "@/src/domain/food";
+import {
+  DailyNutrientReference,
+  dailyNutrientReference,
+  nutrientReferenceScaleValue,
+} from "@/src/domain/nutritionRequirements";
 import { trackerPresets } from "@/src/domain/trackerCatalog";
 import {
   metricLoggingDestination,
@@ -451,7 +456,11 @@ export default function TrackerDetail() {
         )
       : trackerEntries;
   const entries = (() => {
-    if (!tracker.stepFallback) return baseEntries;
+    if (
+      !tracker.stepFallback ||
+      state.settings.estimateUnrecordedSteps !== true
+    )
+      return baseEntries.filter((entry) => !isCalculatedStepFallback(entry));
     const stepMetric = state.metrics.find(
       (metric) =>
         metric.healthMapping?.dataType === "steps" &&
@@ -3293,6 +3302,31 @@ function FoodNutritionSection({
     },
     [anchorDate, open, state],
   );
+  const dailyEnergyReference = useMemo(() => {
+    const foodMetric = state.metrics.find((metric) => metric.id === "food");
+    return foodMetric
+      ? effectiveGoalTarget(
+          state,
+          foodMetric,
+          state.currentUserId,
+          anchorDate,
+        )
+      : 2000;
+  }, [anchorDate, state]);
+  const dailyReferences = useMemo(
+    () =>
+      Object.fromEntries(
+        FOOD_NUTRIENTS.flatMap((nutrient) => {
+          const reference = dailyNutrientReference(
+            nutrient.id,
+            state.settings.energyProfile,
+            dailyEnergyReference,
+          );
+          return reference ? [[nutrient.id, reference]] : [];
+        }),
+      ) as Partial<Record<FoodNutrientId, DailyNutrientReference>>,
+    [dailyEnergyReference, state.settings.energyProfile],
+  );
   const report = useMemo(
     () => {
       if (!open) return undefined;
@@ -3348,7 +3382,13 @@ function FoodNutritionSection({
             <Ionicons name="nutrition-outline" size={17} color={accent} />
           </View>
           <View style={styles.grow}>
-            <Text style={[styles.foodMacroTitle, { color: colors.ink }]}>Nutrition</Text>
+            <View style={styles.foodNutritionTitleRow}>
+              <Text style={[styles.foodMacroTitle, { color: colors.ink }]}>Nutrition</Text>
+              <InfoPopover
+                label="About daily nutrition references"
+                message="Daily reference compares your log with general non-pregnant age-, sex- and body-profile guidance from the National Academies Dietary Reference Intakes and current Dietary Guidelines. Your own tracker goal stays separate and editable. These references are educational, not medical advice; nutrients without a reliable total-intake reference show no made-up target."
+              />
+            </View>
             <Text style={[styles.foodMacroHint, { color: colors.muted }]}>Macros, vitamins, minerals and more</Text>
           </View>
           <Ionicons
@@ -3472,6 +3512,7 @@ function FoodNutritionSection({
                     <FoodNutrientProgress
                       key={nutrient.id}
                       nutrient={nutrient}
+                      reference={dailyReferences[nutrient.id]}
                       value={report.dayValues?.[nutrient.id] ?? 0}
                       locale={locale}
                       colors={colors}
@@ -3488,6 +3529,7 @@ function FoodNutritionSection({
                     <FoodNutrientProgress
                       key={nutrient.id}
                       nutrient={nutrient}
+                      reference={dailyReferences[nutrient.id]}
                       value={report.averageValues[nutrient.id] ?? 0}
                       locale={locale}
                       colors={colors}
@@ -3502,6 +3544,7 @@ function FoodNutritionSection({
                   bucketUnit={report.bucketUnit}
                   locale={locale}
                   colors={colors}
+                  references={dailyReferences}
                   onOpenNutrient={openNutrient}
                 />
               )}
@@ -3576,12 +3619,14 @@ function FoodMacroDonut({
 
 function FoodNutrientProgress({
   nutrient,
+  reference,
   value,
   locale,
   colors,
   onPress,
 }: {
   nutrient: FoodNutrientSummary;
+  reference?: DailyNutrientReference;
   value: number;
   locale: string;
   colors: ReturnType<typeof useAppColors>;
@@ -3589,9 +3634,18 @@ function FoodNutrientProgress({
 }) {
   const { t } = useLocalization();
   const goal = nutrient.goal;
-  const scale = Math.max(1, value * 1.08, (goal ?? 0) * 1.2);
+  const referenceValue = nutrientReferenceScaleValue(reference);
+  const scale = Math.max(
+    1,
+    value * 1.08,
+    (goal ?? 0) * 1.2,
+    referenceValue * 1.2,
+  );
   const fill = Math.min(1, Math.max(0, value / scale));
   const goalPosition = goal ? Math.min(1, Math.max(0, goal / scale)) : undefined;
+  const referencePosition = referenceValue
+    ? Math.min(1, Math.max(0, referenceValue / scale))
+    : undefined;
   const percentage = goal ? Math.round((value / goal) * 100) : undefined;
   return (
     <Pressable
@@ -3621,9 +3675,24 @@ function FoodNutrientProgress({
             ]}
           />
         ) : null}
+        {referencePosition !== undefined && referencePosition !== goalPosition ? (
+          <View
+            accessibilityLabel={`Daily reference ${formatNutrientReference(reference, nutrient.unit, locale)}`}
+            style={[
+              styles.foodMacroReferenceTick,
+              { left: `${referencePosition * 100}%`, borderColor: nutrient.color },
+            ]}
+          />
+        ) : null}
       </View>
-      {goal ? (
-        <Text style={[styles.foodMacroGoalCopy, { color: colors.faint }]}>Goal {formatNutrientValue(goal, nutrient.unit, locale)}</Text>
+      {goal || reference ? (
+        <Text style={[styles.foodMacroGoalCopy, { color: colors.faint }]}>
+          {goal ? `Your goal ${formatNutrientValue(goal, nutrient.unit, locale)}` : ""}
+          {goal && reference ? " · " : ""}
+          {reference
+            ? `Daily ref ${formatNutrientReference(reference, nutrient.unit, locale)}`
+            : ""}
+        </Text>
       ) : null}
     </Pressable>
   );
@@ -3635,6 +3704,7 @@ function FoodNutrientBars({
   bucketUnit,
   locale,
   colors,
+  references,
   onOpenNutrient,
 }: {
   buckets: FoodNutrientBucket[];
@@ -3642,6 +3712,7 @@ function FoodNutrientBars({
   bucketUnit: "day" | "month" | "year";
   locale: string;
   colors: ReturnType<typeof useAppColors>;
+  references: Partial<Record<FoodNutrientId, DailyNutrientReference>>;
   onOpenNutrient: (id: FoodNutrientId) => void;
 }) {
   const { t } = useLocalization();
@@ -3657,10 +3728,14 @@ function FoodNutrientBars({
       ),
     ]),
   ) as Partial<Record<FoodNutrientId, number>>;
-  const percentFor = (nutrient: FoodNutrientSummary, value: number) =>
-    nutrient.goal
-      ? (value / nutrient.goal) * 100
+  const comparisonFor = (nutrient: FoodNutrientSummary) =>
+    nutrient.goal ?? nutrientReferenceScaleValue(references[nutrient.id]);
+  const percentFor = (nutrient: FoodNutrientSummary, value: number) => {
+    const comparison = comparisonFor(nutrient);
+    return comparison
+      ? (value / comparison) * 100
       : (value / (nutrientMax[nutrient.id] ?? 1)) * 100;
+  };
   const percentages = buckets.flatMap((bucket) =>
     nutrients.flatMap((nutrient) => {
       const value = bucket.values[nutrient.id];
@@ -3686,7 +3761,7 @@ function FoodNutrientBars({
           >
             <View style={[styles.foodMacroDot, { backgroundColor: nutrient.color }]} />
             <Text translate={false} style={[styles.foodMacroBarLegendText, { color: colors.muted }]}>
-              {t(nutrient.label)} · {displayNutrientUnit(nutrient.unit)} · {nutrient.goal ? `${t("goal")} ${formatNutrientValue(nutrient.goal, nutrient.unit, locale)}` : t("range maximum")}
+              {t(nutrient.label)} · {displayNutrientUnit(nutrient.unit)} · {nutrient.goal ? `${t("your goal")} ${formatNutrientValue(nutrient.goal, nutrient.unit, locale)}` : references[nutrient.id] ? `${t("daily ref")} ${formatNutrientReference(references[nutrient.id], nutrient.unit, locale)}` : t("range maximum")}
             </Text>
           </Pressable>
         ))}
@@ -3783,7 +3858,7 @@ function FoodNutrientBars({
         </View>
       </View>
       <Text translate={false} style={[styles.foodMacroAxisCaption, { color: colors.faint }]}>
-        {t(axisLabel)} · {t("Goal bars show percent of goal; no-goal bars show percent of range maximum")}
+        {t(axisLabel)} · {t("Bars compare with your goal first, then the daily reference; otherwise the visible range")}
       </Text>
     </View>
   );
@@ -3791,6 +3866,24 @@ function FoodNutrientBars({
 
 function displayNutrientUnit(unit: FoodNutrientSummary["unit"]) {
   return unit === "mcg" ? "µg" : unit;
+}
+
+function formatNutrientReference(
+  reference: DailyNutrientReference | undefined,
+  unit: FoodNutrientSummary["unit"],
+  locale: string,
+) {
+  if (!reference) return "—";
+  if (reference.kind === "minimize") return "keep low";
+  if (reference.target !== undefined)
+    return formatNutrientValue(reference.target, unit, locale);
+  if (reference.min !== undefined && reference.max !== undefined)
+    return `${formatNutrientValue(reference.min, unit, locale)}–${formatNutrientValue(reference.max, unit, locale)}`;
+  if (reference.max !== undefined)
+    return `≤ ${formatNutrientValue(reference.max, unit, locale)}`;
+  if (reference.min !== undefined)
+    return `≥ ${formatNutrientValue(reference.min, unit, locale)}`;
+  return "—";
 }
 
 function formatNutrientValue(
@@ -5764,6 +5857,7 @@ const styles = StyleSheet.create({
   foodMacroDot: { width: 7, height: 7, borderRadius: 4 },
   foodMacroLegendName: { fontSize: 9, fontWeight: "900" },
   foodMacroLegendValue: { fontSize: 8, fontWeight: "700", marginTop: 1 },
+  foodNutritionTitleRow: { flexDirection: "row", alignItems: "center", gap: 5 },
   foodMacroCaption: { fontSize: 7.5, lineHeight: 11, textAlign: "center" },
   foodNutritionAverageCaption: { fontSize: 7.5, fontWeight: "800", textAlign: "center" },
   foodMacroProgressList: { gap: 10, marginTop: 2 },
@@ -5797,6 +5891,16 @@ const styles = StyleSheet.create({
     width: 2,
     borderRadius: 1,
     marginLeft: -1,
+  },
+  foodMacroReferenceTick: {
+    position: "absolute",
+    top: -2,
+    bottom: -2,
+    width: 5,
+    borderWidth: 1,
+    borderRadius: 3,
+    marginLeft: -2.5,
+    backgroundColor: "transparent",
   },
   foodMacroGoalCopy: { fontSize: 7, fontWeight: "800", textAlign: "right" },
   foodMacroEmpty: {

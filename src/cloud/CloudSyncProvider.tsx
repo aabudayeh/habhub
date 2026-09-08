@@ -89,6 +89,15 @@ import {
 } from "@/src/domain/groupSetup";
 import { upgradeStateV21 } from "@/src/domain/stateMigration";
 import { supabase } from "@/src/lib/supabase";
+import { useHealthSync } from "@/src/health/HealthSyncProvider";
+import {
+  HEALTH_STATUS_STORAGE_KEY,
+  healthPhysicalActivityMigrationKey,
+} from "@/src/health/constants";
+import {
+  cancelAllManagedLocalNotifications,
+  disablePushNotifications,
+} from "@/src/notifications/push";
 import { translateUiText } from "@/src/i18n";
 import {
   getPrivacyAwareUserSnapshot,
@@ -120,6 +129,7 @@ import {
   writeGroupActivityCache,
 } from "@/src/storage/groupActivityCache";
 import { onboardingCompletedLocally } from "@/src/storage/onboardingState";
+import { clearHomeScreenWidgetSnapshot } from "@/src/widgets";
 import {
   getLargeStorageItem,
   multiRemoveLargeStorage,
@@ -252,6 +262,7 @@ type CloudSyncContextValue = {
   pullLatest: () => Promise<void>;
   refreshDevices: () => Promise<void>;
   forgetDevice: (deviceId: string) => Promise<void>;
+  resetAccountData: () => Promise<void>;
   deleteAccount: () => Promise<void>;
   createGroup: (
     name: string,
@@ -277,6 +288,7 @@ type CloudSyncActions = Pick<
   | "pullLatest"
   | "refreshDevices"
   | "forgetDevice"
+  | "resetAccountData"
   | "deleteAccount"
   | "createGroup"
   | "joinGroup"
@@ -321,6 +333,7 @@ const disabledCloudContext: CloudSyncContextValue = {
   pullLatest: disabledCloudAction,
   refreshDevices: disabledCloudAction,
   forgetDevice: disabledCloudAction,
+  resetAccountData: disabledCloudAction,
   deleteAccount: disabledCloudAction,
   createGroup: disabledCloudAction,
   joinGroup: async () => "active",
@@ -370,7 +383,9 @@ async function getDeviceId() {
   return created;
 }
 
-function accountName(user: User, fallback: string) {
+type AccountIdentity = Pick<User, "id" | "user_metadata">;
+
+function accountName(user: AccountIdentity, fallback: string) {
   return suggestedAccountName(user) || fallback;
 }
 
@@ -668,6 +683,53 @@ async function writeGroupConfigurationAcks(
   );
 }
 
+async function clearAccountResetDeviceCaches(
+  accountId: string,
+  groupIds: readonly string[],
+  signedIn: boolean,
+) {
+  const directKeys = [
+    `${CLOUD_SYNC_CHECKPOINT_KEY_PREFIX}${accountId}`,
+    `${CLOUD_SNAPSHOT_ACK_KEY_PREFIX}${accountId}`,
+    `${CLOUD_SNAPSHOT_CURSOR_KEY_PREFIX}${accountId}`,
+    `${ACCOUNT_METADATA_ACK_KEY_PREFIX}${accountId}`,
+    `${HEALTH_STATUS_STORAGE_KEY}:${accountId}`,
+    healthPhysicalActivityMigrationKey(accountId),
+  ];
+  const allKeys = await AsyncStorage.getAllKeys();
+  const todoViewKeys = allKeys.filter(
+    (key) =>
+      key.includes(accountId) &&
+      (key.startsWith("@habhub/todo-subtask-expansion/v1:") ||
+        key.startsWith("@habhub/todo-item-visibility/v1:")),
+  );
+  const operations = await Promise.allSettled([
+    AsyncStorage.multiRemove([...new Set([...directKeys, ...todoViewKeys])]),
+    multiRemoveLargeStorage([
+      `${CLOUD_MERGE_BASE_KEY_PREFIX}${accountId}`,
+      ...LEGACY_CLOUD_MERGE_BASE_KEY_PREFIXES.map(
+        (prefix) => `${prefix}${accountId}`,
+      ),
+    ]),
+    deleteGoogleHealthStepCheckpoint(accountId),
+    deleteGoogleHealthGroupCheckpointsForAccount(accountId),
+    ...[...new Set(groupIds)].map((groupId) =>
+      removeGroupActivityCache(groupId),
+    ),
+    // A signed-in reset is also a durable push-off intent: clear scheduled
+    // reminders, native/web token identity, and its server registration. Demo
+    // mode has no authenticated registration to revoke.
+    signedIn
+      ? disablePushNotifications(accountId)
+      : cancelAllManagedLocalNotifications(accountId),
+    clearHomeScreenWidgetSnapshot(),
+  ]);
+  if (operations.some((result) => result.status === "rejected"))
+    throw new Error(
+      "Account data was cleared, but this device could not finish clearing every private cache. Retry Clear account data before using health or reminders again.",
+    );
+}
+
 function isDemoBoundState(state: AppState) {
   return (
     state.group.id === "weekend-warriors" ||
@@ -678,7 +740,7 @@ function isDemoBoundState(state: AppState) {
   );
 }
 
-function createCleanAccountState(user: User): AppState {
+function createCleanAccountState(user: AccountIdentity): AppState {
   const defaults = createInitialState();
   const today = dateKey();
   const name = accountName(user, "HabHub member");
@@ -734,6 +796,191 @@ function createCleanAccountState(user: User): AppState {
       metrics.map((metric) => [metric.id, []]),
     ),
     selectedGroupMetricId: "__score",
+    lastSavedAt: null,
+  };
+}
+
+type ResetStampedSettings = AppState["settings"] & {
+  /** Monotonic privacy fence set only by an explicit account-data reset. */
+  accountDataResetAt?: string;
+};
+
+function accountDataResetTimestamp(state: AppState) {
+  const value = (state.settings as ResetStampedSettings).accountDataResetAt;
+  if (!value) return 0;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function accountDataResetMarker(state: AppState) {
+  return (state.settings as ResetStampedSettings).accountDataResetAt;
+}
+
+function appendMissingByKey<T>(
+  primary: readonly T[],
+  secondary: readonly T[],
+  keyFor: (item: T) => string,
+) {
+  const seen = new Set(primary.map(keyFor));
+  const output = [...primary];
+  for (const item of secondary) {
+    const key = keyFor(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    output.push(item);
+  }
+  return output;
+}
+
+/**
+ * Build the local and cloud snapshot used by Settings > Clear account data.
+ * The account identity, memberships, and content already disclosed to a group
+ * remain available. Personal configuration, private rows, every health import,
+ * reminders, journals, timers, workouts, and device authorization are reset.
+ */
+function createResetAccountState(
+  current: AppState,
+  identity: AccountIdentity,
+  resetAt: string,
+): AppState {
+  const clean = createCleanAccountState(identity);
+  const userId = current.currentUserId;
+  // Current-user rows are deliberately reloaded from relational group tables
+  // after the reset. Keeping only peer caches here ensures an unsent/offline
+  // "group" item is cleared rather than accidentally published afterward.
+  const retainedEntries = current.entries.filter(
+    (entry) => entry.userId !== userId,
+  );
+  const retainedPhotos = current.photos.filter(
+    (photo) => photo.userId !== userId,
+  );
+  const retainedStatuses = current.dailyMetricStatuses.filter(
+    (status) => status.userId !== userId,
+  );
+  const retainedMessages = current.messages.filter(
+    (message) => message.senderId !== userId,
+  );
+
+  const personalGroup = clean.groups[0];
+  const retainedGroups = current.groups.filter(
+    (group) => !isPersonalSetupGroup(group),
+  );
+  const groups = [personalGroup, ...retainedGroups];
+  const activeGroup =
+    groups.find((group) => group.id === current.group.id) ?? personalGroup;
+
+  const referencedMetricIds = new Set([
+    ...retainedEntries.map((entry) => entry.metricId),
+    ...retainedStatuses.map((status) => status.metricId),
+    ...retainedGroups.flatMap((group) =>
+      (group.metricConfiguration ?? []).map((metric) => metric.id),
+    ),
+  ]);
+  const metricsById = new Map(
+    clean.metrics.map((metric) => [metric.id, metric] as const),
+  );
+  for (const group of retainedGroups) {
+    for (const metric of group.metricConfiguration ?? [])
+      metricsById.set(metric.id, metric);
+  }
+  for (const metric of current.metrics) {
+    if (!referencedMetricIds.has(metric.id)) continue;
+    const existing = metricsById.get(metric.id);
+    if (!existing) metricsById.set(metric.id, metric);
+    else if (metric.activeFrom < existing.activeFrom)
+      metricsById.set(metric.id, {
+        ...existing,
+        activeFrom: metric.activeFrom,
+      });
+  }
+  const metrics = [...metricsById.values()].map((metric, order) => ({
+    ...metric,
+    order,
+  }));
+  const settings = {
+    ...clean.settings,
+    // Completion is intentionally retained so a data reset does not trap an
+    // established member in first-run navigation. All actual choices reset.
+    onboardingComplete: current.settings.onboardingComplete,
+    onboardingVersion: current.settings.onboardingVersion,
+    tutorialComplete: current.settings.tutorialComplete,
+    advancedTutorialComplete: current.settings.advancedTutorialComplete,
+    accountDataResetAt: resetAt,
+  } as ResetStampedSettings;
+  const reset: AppState = {
+    ...clean,
+    group: activeGroup,
+    groups,
+    metrics,
+    entries: retainedEntries,
+    photos: retainedPhotos,
+    // Chat is shared content. Relational hydration remains authoritative, but
+    // retaining the local cache avoids a blank group immediately after reset.
+    messages: retainedMessages,
+    dailyMetricStatuses: retainedStatuses,
+    gymPlans: [],
+    gymSessions: [],
+    gymExerciseGoals: {},
+    todos: [],
+    journalNotes: [],
+    calendarReminders: [],
+    activityTimers: [],
+    activeTimer: undefined,
+    settings,
+    trackedGoalPeriods: Object.fromEntries(
+      metrics.map((metric) => [metric.id, []]),
+    ),
+    selectedGroupMetricId:
+      activeGroup.id === personalGroup.id
+        ? "__score"
+        : ((activeGroup.metricConfiguration ?? []).some(
+              (metric) => metric.id === "__score",
+            )
+          ? "__score"
+          : (activeGroup.metricConfiguration?.[0]?.id ?? "__score")),
+    lastSavedAt: null,
+  };
+  return applyAccountMemberProfile(reset, accountMemberProfile(current));
+}
+
+/**
+ * A newer reset marker is authoritative over every ordinary merge base. Keep
+ * only other members' relational cache rows; never resurrect this account's
+ * pre-reset settings, private rows, imported health data, or local outboxes.
+ */
+function acceptAccountResetState(
+  authoritative: AppState,
+  cached: AppState,
+): AppState {
+  if (authoritative.currentUserId !== cached.currentUserId)
+    return authoritative;
+  const userId = authoritative.currentUserId;
+  const entries = appendMissingByKey(
+    authoritative.entries,
+    cached.entries.filter((entry) => entry.userId !== userId),
+    (entry) => metricEntryKey(entry.userId, entry.id),
+  );
+  const photos = appendMissingByKey(
+    authoritative.photos,
+    cached.photos.filter((photo) => photo.userId !== userId),
+    (photo) => `${photo.userId}:${photo.id}`,
+  );
+  const messages = appendMissingByKey(
+    authoritative.messages,
+    cached.messages.filter((message) => message.senderId !== userId),
+    (message) => message.id,
+  ).sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+  const dailyMetricStatuses = appendMissingByKey(
+    authoritative.dailyMetricStatuses,
+    cached.dailyMetricStatuses.filter((status) => status.userId !== userId),
+    dailyStatusKey,
+  );
+  return {
+    ...authoritative,
+    entries,
+    photos,
+    messages,
+    dailyMetricStatuses,
     lastSavedAt: null,
   };
 }
@@ -1843,6 +2090,8 @@ function preserveLocalCurrentDayDeviceHealth(
   local: AppState,
 ): AppState {
   if (incoming.currentUserId !== local.currentUserId) return incoming;
+  if (accountDataResetTimestamp(incoming) > accountDataResetTimestamp(local))
+    return incoming;
   const entries = mergeLocalCurrentDayDeviceHealthEntries(
     incoming.entries,
     local.entries,
@@ -1865,6 +2114,12 @@ function mergeStates(
   local: AppState,
   base?: CloudMergeBase | null,
 ): AppState {
+  const remoteResetAt = accountDataResetTimestamp(remote);
+  const localResetAt = accountDataResetTimestamp(local);
+  if (remoteResetAt > localResetAt)
+    return acceptAccountResetState(remote, local);
+  if (localResetAt > remoteResetAt)
+    return acceptAccountResetState(local, remote);
   const groups = mergeById(remote.groups, local.groups);
   const profile = mergeAccountMemberProfile(
     accountMemberProfile(remote),
@@ -2084,6 +2339,8 @@ function preserveDeviceSettings(
   local: AppState,
 ): AppState {
   if (remote.currentUserId !== local.currentUserId) return remote;
+  if (accountDataResetTimestamp(remote) > accountDataResetTimestamp(local))
+    return remote;
   return {
     ...remote,
     settings: {
@@ -2105,6 +2362,12 @@ function preserveDeviceSettings(
  */
 function acceptCleanRemoteState(remote: AppState, local: AppState): AppState {
   if (remote.currentUserId !== local.currentUserId) return remote;
+  const remoteResetAt = accountDataResetTimestamp(remote);
+  const localResetAt = accountDataResetTimestamp(local);
+  if (remoteResetAt > localResetAt)
+    return acceptAccountResetState(remote, local);
+  if (localResetAt > remoteResetAt)
+    return acceptAccountResetState(local, remote);
   const userId = remote.currentUserId;
   const remoteWithDeviceSettings = preserveDeviceSettings(remote, local);
   // Personal setup groups are account-owned and therefore follow the remote
@@ -2427,6 +2690,7 @@ function mergeWorkspaceWithoutRegression(
         metric.gymMuscleGroups ?? shared.gymMuscleGroups,
       stepFallback: metric.stepFallback ?? shared.stepFallback,
       manualEntry: metric.manualEntry ?? shared.manualEntry,
+      quickEntry: metric.quickEntry ?? shared.quickEntry,
       sections: {
         ...shared.sections,
         today: metric.sections.today,
@@ -2672,6 +2936,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     stageState,
   } = useApp();
   const auth = useAuth();
+  const health = useHealthSync();
   const network = useNetInfo();
   const reachability = networkReachability(
     network.isConnected,
@@ -2737,6 +3002,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   const remoteInitializationPendingRef = useRef(false);
   const identityResetUserRef = useRef<string | null>(null);
   const syncPromiseRef = useRef<Promise<void> | null>(null);
+  const resetAccountDataPromiseRef = useRef<Promise<void> | null>(null);
   const pullLatestPromiseRef = useRef<Promise<void> | null>(null);
   const pullLatestQueuedRevisionRef = useRef(0);
   const pullLatestRef = useRef<
@@ -4078,6 +4344,8 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   ]);
 
   const pullLatest = useCallback((expectedRevision?: number): Promise<void> => {
+    if (resetAccountDataPromiseRef.current)
+      return resetAccountDataPromiseRef.current;
     if (pullLatestPromiseRef.current) {
       // Manual callers share the in-flight request. Realtime callers retain the
       // highest revision they need, so a trailing request is only made when the
@@ -4165,6 +4433,8 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     forceAttempt = false,
     manualAttempt = false,
   ) => {
+    if (resetAccountDataPromiseRef.current)
+      return resetAccountDataPromiseRef.current;
     if (!auth.user || !supabase || initializedUserRef.current !== auth.user.id)
       return;
     if (remoteInitializationPendingRef.current) {
@@ -7046,6 +7316,189 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     return () => clearInterval(timer);
   }, [auth.status, networkAvailable, state.group.id, touchPresence]);
 
+  const resetAccountData = useCallback((): Promise<void> => {
+    if (resetAccountDataPromiseRef.current)
+      return resetAccountDataPromiseRef.current;
+
+    const activeSync = syncPromiseRef.current;
+    const activePull = pullLatestPromiseRef.current;
+    const activeLeaderboardPublish = leaderboardPublishPromiseRef.current;
+    const activeChatPublish = chatOutboxPromiseRef.current;
+    let operation: Promise<void>;
+    operation = (async () => {
+      // Install the shared operation ref before provider effects can start any
+      // new snapshot, health, or foreground refresh.
+      await Promise.resolve();
+      const signedIn = auth.status === "signedIn" && Boolean(auth.user);
+      if (signedIn && (!supabase || !networkAvailableRef.current))
+        throw new Error(
+          "Connect to the internet before clearing cloud account data.",
+        );
+      // Establish the device-health privacy boundary before waiting for cloud
+      // outboxes. disconnect() invalidates its read generation synchronously
+      // and then waits for the captured native import to settle, so none of the
+      // work below can race with a late health reducer/status commit.
+      await health.disconnect();
+      await Promise.allSettled(
+        [
+          activeSync,
+          activePull,
+          activeLeaderboardPublish,
+          activeChatPublish,
+        ].filter((promise): promise is Promise<void> => promise !== null),
+      );
+
+      const current = stateRef.current;
+      const accountId = signedIn ? auth.user!.id : current.currentUserId;
+      if (
+        current.currentUserId !== accountId ||
+        (signedIn && initializedUserRef.current !== accountId)
+      )
+        throw new Error(
+          "The active account changed before the reset could begin. Try again.",
+        );
+      const profile = accountMemberProfile(current);
+      const identity: AccountIdentity = signedIn
+        ? auth.user!
+        : {
+            id: accountId,
+            user_metadata: profile?.name
+              ? { display_name: profile.name }
+              : {},
+          };
+      const resetAt = new Date(
+        Math.max(Date.now(), accountDataResetTimestamp(current) + 1),
+      ).toISOString();
+      const resetState = createResetAccountState(current, identity, resetAt);
+      const resetHash = stableHash(resetState);
+      const groupIds = current.groups.map((group) => group.id);
+
+      let remoteMetadata: SnapshotMetadata | null = null;
+      if (signedIn) {
+        const deviceId = deviceIdRef.current ?? (await getDeviceId());
+        deviceIdRef.current = deviceId;
+        const invocation = await supabase!.functions.invoke(
+          "reset-account-data",
+          {
+            body: {
+              payload: snapshotPayload(resetState),
+              deviceId,
+              schemaVersion: resetState.version,
+              resetAt,
+            },
+          },
+        );
+        if (invocation.error) throw invocation.error;
+        const result = invocation.data as Record<string, unknown> | null;
+        const revision = Number(result?.revision);
+        const updatedAt = result?.updatedAt;
+        const returnedResetAt = result?.resetAt;
+        if (
+          result?.reset !== true ||
+          !Number.isSafeInteger(revision) ||
+          revision < 1 ||
+          typeof updatedAt !== "string" ||
+          !Number.isFinite(Date.parse(updatedAt)) ||
+          returnedResetAt !== resetAt ||
+          accountDataResetMarker(resetState) !== resetAt
+        )
+          throw new Error("The server returned an invalid account reset receipt.");
+        remoteMetadata = {
+          revision,
+          updated_at: updatedAt,
+          device_id: deviceId,
+          schema_version: resetState.version,
+        };
+      }
+
+      // Persist the authoritative reset marker before clearing auxiliary
+      // stores. A crash can then restart only from the sanitized snapshot.
+      stateRef.current = resetState;
+      await replaceState(resetState, {
+        source: signedIn ? "cloud" : "local",
+        persistImmediately: true,
+        preserveDeviceHealthSync: false,
+        preserveDeviceHealthEntries: false,
+      });
+
+      let deviceCleanupError: unknown;
+      try {
+        await clearAccountResetDeviceCaches(accountId, groupIds, signedIn);
+      } catch (error) {
+        deviceCleanupError = error;
+      }
+
+      chatOutboxSeenRef.current.clear();
+      chatOutboxPendingRef.current.clear();
+      chatOutboxAttemptsRef.current.clear();
+      if (chatOutboxTimerRef.current) clearTimeout(chatOutboxTimerRef.current);
+      chatOutboxTimerRef.current = null;
+      workspaceUploadRequiredGroupsRef.current.clear();
+      activityVersionByGroupRef.current.clear();
+      activityCoverageSinceByGroupRef.current.clear();
+      historicalHydrationStartedRef.current.clear();
+      workspaceConflictGateRef.current = null;
+      cloudRetryAttemptRef.current = 0;
+      nextRetryAtRef.current = 0;
+      setNextRetryAt(0);
+      mergeBaseRef.current = null;
+      setDevices([]);
+      setErrorMessage(null);
+      setPendingChanges(false);
+
+      if (remoteMetadata) {
+        revisionRef.current = remoteMetadata.revision;
+        snapshotWriteTargetRevisionRef.current = 0;
+        hashRef.current = resetHash;
+        accountMetadataHashRef.current = accountMetadataHash(resetState);
+        workspaceHashRef.current = isCloudGroupId(resetState.group.id)
+          ? workspaceHash(resetState)
+          : null;
+        groupConfigurationHashRef.current = isCloudGroupId(
+          resetState.group.id,
+        )
+          ? groupConfigurationHash(resetState)
+          : null;
+        rememberCloudMergeBase(accountId, resetState);
+        await Promise.all([
+          writeCloudSnapshotAck(accountId, resetHash),
+          writeCloudSnapshotCursor(accountId, remoteMetadata, resetHash),
+          writeAccountMetadataAck(
+            accountId,
+            accountMetadataHashRef.current,
+          ),
+        ]);
+        recordServerSyncedAt(remoteMetadata.updated_at);
+        setStatus("synced");
+        if (isCloudGroupId(resetState.group.id))
+          hydrateGroupInBackground(resetState.group.id);
+      } else {
+        revisionRef.current = 0;
+        hashRef.current = resetHash;
+        accountMetadataHashRef.current = null;
+        workspaceHashRef.current = null;
+        groupConfigurationHashRef.current = null;
+        lastSyncedAtRef.current = null;
+        setLastSyncedAt(null);
+        setStatus("disabled");
+      }
+      if (deviceCleanupError) throw deviceCleanupError;
+    })().finally(() => {
+      if (resetAccountDataPromiseRef.current === operation)
+        resetAccountDataPromiseRef.current = null;
+    });
+    resetAccountDataPromiseRef.current = operation;
+    return operation;
+  }, [
+    auth.status,
+    auth.user,
+    health,
+    hydrateGroupInBackground,
+    recordServerSyncedAt,
+    rememberCloudMergeBase,
+    replaceState,
+  ]);
+
   const value = useMemo<CloudSyncContextValue>(
     () => ({
       status,
@@ -7082,6 +7535,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         if (error) throw error;
         await loadDevices();
       },
+      resetAccountData,
       deleteAccount: async () => {
         if (!supabase) throw new Error("Cloud is not configured.");
         const accountId = auth.user?.id ?? stateRef.current.currentUserId;
@@ -7438,6 +7892,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       performSync,
       prepareChatMessageMedia,
       pullLatest,
+      resetAccountData,
       refreshGroup,
       refreshGroupActivity,
       refreshMessages,
@@ -7458,6 +7913,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       pullLatest: () => latestValueRef.current.pullLatest(),
       refreshDevices: () => latestValueRef.current.refreshDevices(),
       forgetDevice: (deviceId) => latestValueRef.current.forgetDevice(deviceId),
+      resetAccountData: () => latestValueRef.current.resetAccountData(),
       deleteAccount: () => latestValueRef.current.deleteAccount(),
       createGroup: (name, options) =>
         latestValueRef.current.createGroup(name, options),

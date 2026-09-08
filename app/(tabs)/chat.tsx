@@ -38,6 +38,7 @@ import {
 } from "@/src/i18n";
 
 import { ExpandableImage } from "@/src/components/ExpandableImage";
+import { GroupSocialActionBar } from "@/src/components/GroupSocialActionBar";
 import { SafetyReportSheet } from "@/src/components/SafetyReportSheet";
 import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import { Avatar } from "@/src/components/ui";
@@ -56,6 +57,11 @@ import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext"
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { useCloudSyncActions } from "@/src/cloud/CloudSyncProvider";
 import { useGroupTodos } from "@/src/cloud/useGroupTodos";
+import { useGroupSocialEngagement } from "@/src/cloud/useGroupSocialEngagement";
+import {
+  chatMessageSocialTarget,
+  groupRecapStoryIdFromShareHighlight,
+} from "@/src/domain/groupSocialTarget";
 import { usePageSwipeGesture } from "@/src/components/usePageSwipeGesture";
 import { useSoftwareKeyboardVisibility } from "@/src/components/useSoftwareKeyboardVisibility";
 import { useTodoItemVisibility } from "@/src/components/useTodoItemVisibility";
@@ -93,12 +99,19 @@ function ChatScreen() {
     metricLogMemberId?: string | string[];
     metricLogTitle?: string | string[];
     metricLogShareAt?: string | string[];
+    groupId?: string | string[];
+    senderId?: string | string[];
+    conversationType?: string | string[];
   }>();
   const routeParam = (value?: string | string[]) =>
     Array.isArray(value) ? value[0] : value;
-  const requestedRecipient = Array.isArray(params.recipient)
-    ? params.recipient[0]
-    : params.recipient;
+  const requestedGroupId = routeParam(params.groupId);
+  const requestedSocialSender = routeParam(params.senderId);
+  const requestedRecipient =
+    routeParam(params.recipient) ??
+    (routeParam(params.conversationType) === "direct"
+      ? requestedSocialSender
+      : undefined);
   const requestedRecapHighlight = routeParam(params.recapHighlight);
   const requestedRecapTitle = routeParam(params.recapTitle);
   const requestedRecapAnchor = routeParam(params.recapAnchor);
@@ -124,6 +137,18 @@ function ChatScreen() {
   const colors = useAppColors();
   const locale = useLocale();
   const cloud = useCloudSyncActions();
+  const attemptedGroupSwitch = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (
+      !requestedGroupId ||
+      requestedGroupId === state.group.id ||
+      attemptedGroupSwitch.current === requestedGroupId ||
+      !state.groups.some((group) => group.id === requestedGroupId)
+    )
+      return;
+    attemptedGroupSwitch.current = requestedGroupId;
+    void cloud.switchGroup(requestedGroupId).catch(() => undefined);
+  }, [cloud, requestedGroupId, state.group.id, state.groups]);
   const refreshMessages = cloud.refreshMessages;
   const syncMessagesNow = cloud.syncMessagesNow;
   const refreshMessagesRef = useRef(refreshMessages);
@@ -506,6 +531,23 @@ function ChatScreen() {
         );
     },
     [scrollToNewestAfterLayout],
+  );
+  const messageSocialTargets = useMemo(
+    () =>
+      messages.flatMap((message) =>
+        message.senderId === "system"
+          ? []
+          : [chatMessageSocialTarget(message.senderId, message.id)],
+      ),
+    [messages],
+  );
+  // One shared, chunked reaction model and one group Broadcast subscription
+  // serve the visible thread. Bubbles never create listeners or comment reads.
+  const messageSocial = useGroupSocialEngagement(
+    state.group.id,
+    messageSocialTargets,
+    "chat",
+    false,
   );
   const handleThreadContentSizeChange = useCallback(() => {
     if (
@@ -1378,6 +1420,23 @@ function ChatScreen() {
                               onPress={() => {
                                 const attachment = sharedAttachment.attachment;
                                 if (attachment.kind === "recap") {
+                                  const storyId =
+                                    groupRecapStoryIdFromShareHighlight(
+                                      attachment.highlight,
+                                    );
+                                  if (storyId) {
+                                    router.navigate({
+                                      pathname: "/recap",
+                                      params: {
+                                        scope: attachment.scope,
+                                        story: storyId,
+                                        ...(attachment.anchor
+                                          ? { anchor: attachment.anchor }
+                                          : {}),
+                                      },
+                                    } as never);
+                                    return;
+                                  }
                                   router.navigate({
                                     pathname: "/(tabs)/recapfeed",
                                     params: {
@@ -1527,6 +1586,41 @@ function ChatScreen() {
                             )}
                           </Text>
                         </View>
+                        <GroupSocialActionBar
+                          compact
+                          commentsEnabled={false}
+                          currentUserId={state.currentUserId}
+                          members={state.group.members}
+                          reactions={
+                            messageSocial.reactionsByTarget.get(
+                              messageSocial.targetKey(
+                                chatMessageSocialTarget(
+                                  message.senderId,
+                                  message.id,
+                                ),
+                              ),
+                            ) ?? []
+                          }
+                          allowedReactions={["thumbs_up", "thumbs_down"]}
+                          onReact={(reaction) =>
+                            void messageSocial
+                              .react(
+                                chatMessageSocialTarget(
+                                  message.senderId,
+                                  message.id,
+                                ),
+                                reaction,
+                              )
+                              .catch((reason) =>
+                                Alert.alert(
+                                  "Reaction not saved",
+                                  reason instanceof Error
+                                    ? reason.message
+                                    : "Reconnect and try again.",
+                                ),
+                              )
+                          }
+                        />
                       </View>
                     </View>
                   </React.Fragment>
@@ -1827,6 +1921,8 @@ function ChatScreen() {
                 style={[styles.input, { color: colors.ink }]}
                 returnKeyType="send"
                 multiline
+                scrollEnabled
+                textAlignVertical="center"
                 submitBehavior={Platform.OS === "web" ? "newline" : "submit"}
               />
               <Pressable
@@ -2291,9 +2387,9 @@ const styles = StyleSheet.create({
   composer: {
     flexDirection: "row",
     alignItems: "flex-end",
-    gap: 6,
-    padding: 6,
-    borderRadius: 18,
+    gap: 5,
+    padding: 4,
+    borderRadius: 17,
     borderWidth: 1,
     borderColor: palette.border,
     backgroundColor: palette.canvas,
@@ -2326,10 +2422,12 @@ const styles = StyleSheet.create({
   input: {
     flex: 1,
     minHeight: 34,
-    maxHeight: 90,
+    maxHeight: 68,
     color: palette.ink,
     fontSize: 12,
-    paddingVertical: 8,
+    lineHeight: 17,
+    paddingVertical: 4,
+    paddingHorizontal: 2,
   },
   send: {
     width: 34,

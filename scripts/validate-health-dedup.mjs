@@ -1614,7 +1614,11 @@ const workoutEnergyState = {
   entries: currentDayWithWalkingWorkout,
   metrics: [...workoutFallbackMetrics, energyBurnedMetric],
   energyProfiles: { owner: energyProfile },
-  settings: { energyProfile, baselineCalories: 2_000 },
+  settings: {
+    energyProfile,
+    baselineCalories: 2_000,
+    estimateUnrecordedSteps: true,
+  },
 };
 const estimatedActiveEnergy = metricValue(
   workoutEnergyState,
@@ -1625,6 +1629,55 @@ const estimatedActiveEnergy = metricValue(
 assert.ok(
   estimatedActiveEnergy > 150,
   "profile-aware activity must retain both the workout and uncovered-step components",
+);
+const exactMeasuredWorkoutState = {
+  ...workoutEnergyState,
+  entries: [
+    {
+      id: "measured-duration-fraction",
+      metricId: "workout_duration",
+      userId: "owner",
+      value: 42.75,
+      localDate: "2026-08-13",
+      recordedAt: "2026-08-13T18:00:00.000Z",
+      visibility: "group",
+      source: "imported",
+    },
+    {
+      id: "measured-distance-fraction",
+      metricId: "workout_distance",
+      userId: "owner",
+      value: 2.45,
+      localDate: "2026-08-13",
+      recordedAt: "2026-08-13T18:00:00.000Z",
+      visibility: "group",
+      source: "imported",
+    },
+  ],
+  settings: {
+    ...workoutEnergyState.settings,
+    estimateUnrecordedSteps: false,
+  },
+};
+assert.equal(
+  metricValue(
+    exactMeasuredWorkoutState,
+    workoutFallbackMetrics[3],
+    "owner",
+    "2026-08-13",
+  ),
+  42.75,
+  "disabling estimated steps must retain measured workout-duration precision",
+);
+assert.equal(
+  metricValue(
+    exactMeasuredWorkoutState,
+    workoutFallbackMetrics[4],
+    "owner",
+    "2026-08-13",
+  ),
+  2.45,
+  "disabling estimated steps must retain measured workout-distance precision",
 );
 assert.equal(
   metricValue(
@@ -1891,6 +1944,27 @@ assert.equal(
 );
 const contextualFallbacks = stepOnlyRefreshWithWorkoutContext.filter((entry) =>
   entry.sourceRecordId?.startsWith("step-fallback:"),
+);
+const stepEstimateDisabled = mapHealthRecordsToEntries(
+  stepOnlyRefreshRecords,
+  "owner",
+  "group",
+  workoutFallbackMetrics,
+  70,
+  undefined,
+  healthFallbackContextForRead(
+    persistedWalkingWorkouts,
+    workoutFallbackMetrics,
+    ["steps"],
+  ),
+  undefined,
+  false,
+);
+assert.ok(
+  !stepEstimateDisabled.some((entry) =>
+    entry.sourceRecordId?.startsWith("step-fallback:"),
+  ),
+  "the account opt-out must retain measured Steps without materializing inferred activity rows",
 );
 const contextualFallbackValue = (metricId) =>
   contextualFallbacks.find((entry) => entry.metricId === metricId)?.value;
@@ -3647,7 +3721,7 @@ assert.match(
 );
 assert.match(
   healthProviderSource,
-  /const setHealthHistoryDays[\s\S]{0,2600}resetPersistedHistoryWork\(\)/,
+  /const setHealthHistoryDays[\s\S]{0,2600}resetPersistedHistoryWork\(operationFence, false\)/,
   "changing the native preference must clear pending historical work",
 );
 assert.match(
@@ -4034,7 +4108,7 @@ assert.match(
 );
 assert.match(
   healthProviderSource,
-  /FOREGROUND_STEPS_INTERACTION_MAX_WAIT_MS[\s\S]{0,7000}InteractionManager\.runAfterInteractions\(run\)[\s\S]{0,500}setTimeout\(/,
+  /FOREGROUND_STEPS_INTERACTION_MAX_WAIT_MS[\s\S]{0,10000}InteractionManager\.runAfterInteractions\(run\)[\s\S]{0,500}setTimeout\(/,
   "a continuous animation must not indefinitely strand today's user-visible Steps refresh",
 );
 const todayRefreshStart = healthProviderSource.indexOf(
@@ -4053,6 +4127,7 @@ const todayRefreshSource = healthProviderSource.slice(
   todayRefreshStart,
   repairStart,
 );
+const repairSource = healthProviderSource.slice(repairStart, fullSyncStart);
 const fullSyncSource = healthProviderSource.slice(fullSyncStart);
 assert.match(
   todayRefreshSource,
@@ -4065,7 +4140,7 @@ assert.match(
   "a full sync must queue behind a today-only refresh instead of being silently consumed",
 );
 assert.match(
-  healthProviderSource,
+  repairSource,
   /historicalStepRepairStart[\s\S]{0,3500}STEPS_REPAIR_CHUNK_DAYS[\s\S]{0,5000}stepsImportVersion: nextRepair/,
   "historical Steps repair must be versioned, chunked, and resumable",
 );
@@ -4080,17 +4155,17 @@ assert.match(
   "the persisted generic-history version must use the bounded coverage result",
 );
 assert.match(
-  healthProviderSource,
+  repairSource,
   /setCloudSyncPaused\('health-steps-repair', true\)[\s\S]{0,6500}setCloudSyncPaused\('health-steps-repair', false\)/,
   "each history repair batch must coalesce cloud publication and release its gate in finally",
 );
 assert.match(
-  healthProviderSource,
-  /STEPS_REPAIR_CHUNKS_PER_BATCH = 4[\s\S]{0,30000}batchIndex < STEPS_REPAIR_CHUNKS_PER_BATCH[\s\S]{0,5000}batchRecords\.push\(\.\.\.records\)[\s\S]{0,5000}scheduleStepsRepair\(STEPS_REPAIR_NEXT_CHUNK_DELAY_MS\)/,
+  repairSource,
+  /batchIndex < STEPS_REPAIR_CHUNKS_PER_BATCH[\s\S]{0,5000}batchRecords\.push\(\.\.\.records\)[\s\S]{0,5000}scheduleStepsRepair\(STEPS_REPAIR_NEXT_CHUNK_DELAY_MS\)/,
   "historical repair must merge four native slices into one foreground-friendly batch",
 );
 assert.match(
-  healthProviderSource,
+  repairSource,
   /batchThrough \?\?= aggregateRangeThroughLocalDate\(chunkEnd\)[\s\S]{0,2500}dateKey\(batchFrom\)[\s\S]{0,500}throughDate: batchThrough/,
   "a merged repair batch must replace the exact oldest-to-newest local-day window",
 );

@@ -11,6 +11,7 @@ import {
   useWebBeforeUnload,
 } from "@/src/components/useWebBeforeUnload";
 import { TodoSubtaskEditorSection } from "@/src/components/TodoSubtaskEditorSection";
+import { TodoBatchImportSection } from "@/src/components/TodoBatchImportSection";
 import { useTodoLabelDoubleTap } from "@/src/components/useTodoDoubleTap";
 import { Card, Chip, IconButton, PageHeader, Screen } from "@/src/components/ui";
 import { useGroupTodos } from "@/src/cloud/useGroupTodos";
@@ -272,6 +273,43 @@ export default function GroupTodoEditor() {
       },
     });
     return editorDraftId;
+  };
+  const stageBatchOutline = (
+    items: Parameters<React.ComponentProps<typeof TodoBatchImportSection>["onImport"]>[0],
+  ) => {
+    if (!items.length || !canEdit) return;
+    const consumeFirstRoot = !existing && !draft.title.trim();
+    const anchorId = consumeFirstRoot ? undefined : stageCurrentDraft();
+    if (!consumeFirstRoot && !anchorId) return;
+    const draftIdByKey = new Map<string, string>();
+    items.forEach((item, index) => {
+      const importedId =
+        consumeFirstRoot && index === 0
+          ? editorDraftId
+          : newTodoEditorDraftId("group-todo-batch");
+      draftIdByKey.set(item.key, importedId);
+      const importedParentId = item.parentKey
+        ? draftIdByKey.get(item.parentKey)
+        : consumeFirstRoot
+          ? resolvedParentId
+          : anchorId;
+      const importedDraft: Draft = {
+        ...emptyDraft(),
+        title: item.title,
+      };
+      upsertTodoEditorDraft(editorTreeId, {
+        id: importedId,
+        parentId: importedParentId,
+        title: item.title,
+        value: { draft: importedDraft },
+      });
+    });
+    if (consumeFirstRoot)
+      setDraft((current) => ({
+        ...current,
+        title: items[0].title,
+        description: "",
+      }));
   };
   const persistGroupDraft = (
     value: GroupTodoEditorDraftPayload,
@@ -572,23 +610,18 @@ export default function GroupTodoEditor() {
           style={[styles.noteInput, { color: colors.ink, borderColor: colors.border }]}
         />
         {labels.length ? (
-          <>
-            <View style={styles.wrap}>
-              {labels.map((label) => (
-                <Chip
-                  key={label}
-                  label={`#${label}`}
-                  selected
-                  size="small"
-                  onPress={() => onLabelTap(label)}
-                />
-              ))}
-            </View>
-            <Text style={[styles.help, { color: colors.muted }]}>Double-tap a label to remove it, or delete its #label text.</Text>
-          </>
-        ) : (
-          <Text style={[styles.help, { color: colors.muted }]}>#labels are parsed automatically for quick filters.</Text>
-        )}
+          <View style={styles.wrap}>
+            {labels.map((label) => (
+              <Chip
+                key={label}
+                label={`#${label}`}
+                selected
+                size="small"
+                onPress={() => onLabelTap(label)}
+              />
+            ))}
+          </View>
+        ) : null}
         <Text style={[styles.label, { color: colors.ink }]}>Priority</Text>
         <View style={styles.wrap}>
           {(["low", "normal", "high", "urgent"] as const).map((priority) => (
@@ -602,6 +635,14 @@ export default function GroupTodoEditor() {
           ))}
         </View>
       </Card>
+
+      {canEdit ? (
+        <TodoBatchImportSection
+          group
+          disabled={saving}
+          onImport={stageBatchOutline}
+        />
+      ) : null}
 
       <Card style={styles.form}>
         <Text style={[styles.label, { color: colors.ink }]}>Repeat</Text>
@@ -764,7 +805,7 @@ export default function GroupTodoEditor() {
 
       <TodoSubtaskEditorSection
         items={
-          existing || stagedNode
+          existing || stagedNode || draft.title.trim()
             ? [
                 ...groupTodos.todos.filter(
                   (todo) =>

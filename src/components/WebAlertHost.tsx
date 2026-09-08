@@ -39,6 +39,7 @@ export function WebAlertHost() {
         : [{ text: t("OK") }],
     [active, t],
   );
+  const stackActions = buttons.length > 2;
   const close = useCallback(() => {
     setQueue((current) => current.slice(1));
   }, []);
@@ -95,7 +96,7 @@ export function WebAlertHost() {
               {active.message}
             </Text>
           ) : null}
-          <View style={styles.actions}>
+          <View style={[styles.actions, stackActions && styles.actionsStacked]}>
             {buttons.map((button, index) => {
               const destructive = button.style === "destructive";
               const cancel = button.style === "cancel";
@@ -114,6 +115,7 @@ export function WebAlertHost() {
                   }}
                   style={({ pressed }) => [
                     styles.button,
+                    stackActions ? styles.buttonStacked : styles.buttonPaired,
                     {
                       backgroundColor: buttonBackground,
                       borderColor: cancel ? colors.border : buttonBackground,
@@ -180,12 +182,11 @@ const styles = StyleSheet.create({
   actions: {
     marginTop: 6,
     flexDirection: "row",
-    flexWrap: "wrap",
-    justifyContent: "flex-end",
+    alignItems: "stretch",
     gap: 9,
   },
+  actionsStacked: { flexDirection: "column" },
   button: {
-    minWidth: 96,
     minHeight: 42,
     paddingHorizontal: 16,
     paddingVertical: 10,
@@ -194,5 +195,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  buttonPaired: { flex: 1, minWidth: 0 },
+  buttonStacked: { width: "100%" },
   buttonText: { fontSize: 14, fontWeight: "800" },
 });

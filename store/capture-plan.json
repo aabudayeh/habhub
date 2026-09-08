@@ -1,116 +1,78 @@
 {
-  "version": 3,
+  "version": 6,
   "fixture": {
-    "source": "Credential-free synthetic demo state from src/data/seed.ts and src/data/demoAssets.ts",
-    "captureDate": "2026-09-04",
+    "source": "Fresh credential-free synthetic demo state from the release-candidate web app",
+    "captureScript": "scripts/capture-marketing-web.mjs",
+    "interactiveCaptureScript": "scripts/capture-interactive-guide-web.mjs",
+    "captureDate": "2026-09-08",
+    "viewport": "420x911",
     "requirements": [
-      "real running HabHub UI",
+      "real running HabHub UI only",
       "synthetic names, entries, meals, and progress photos only",
-      "tutorial overlay hidden",
-      "no debug or network error UI",
-      "no Android-only or unverified feature claims"
+      "tutorial overlay hidden except in the deliberate Quick Guide scene",
+      "no debug, error, personal-account, or network-dependent UI",
+      "Today demo navigation excludes optional Schedule, Journal, and Performance tabs",
+      "every caption is traceable to controls visible in its source capture",
+      "the interactive guide is a continuous live Edge/CDP recording of the real Watch tutorial, not a still-screen montage",
+      "the Today continuity probe must observe /, /view-filters, /, then /status before recording the full guide",
+      "tutorial-opened sheets and modals must close when their lesson ends so later pages remain visible"
     ]
   },
-  "screenshots": [
-    {
-      "order": 1,
-      "id": "today-personalized",
-      "headline": "YOUR DAY, YOUR WAY",
-      "route": "/",
-      "show": ["3 of 7 goals hit", "two to-dos", "steps", "food", "daily deficit", "water"],
-      "platforms": ["apple", "google"]
-    },
-    {
-      "order": 2,
-      "id": "tracker-history",
-      "headline": "TRACK ANYTHING",
-      "route": "/metric-detail",
-      "show": ["steps value", "weekly history", "line chart", "bar chart", "entries"],
-      "platforms": ["apple", "google"]
-    },
-    {
-      "order": 3,
-      "id": "progress-grid",
-      "headline": "SEE THE PATTERN",
-      "route": "/insights",
-      "show": ["weekly grid", "tracked-goals summary", "steps summary"],
-      "platforms": ["apple", "google"]
-    },
-    {
-      "order": 4,
-      "id": "photo-collage",
-      "headline": "PHOTO PROGRESS, SIDE BY SIDE",
-      "route": "/insights",
-      "show": ["five-photo timeline", "two-photo comparison", "collage"],
-      "platforms": ["apple", "google"],
-      "disclosure": "Synthetic demo imagery",
-      "excluded": ["native video export buttons"]
-    },
-    {
-      "order": 5,
-      "id": "workout",
-      "headline": "TRAIN WITH A PLAN",
-      "route": "/gym",
-      "show": ["logged workout", "exercise sets", "time remaining", "history totals"],
-      "platforms": ["apple", "google"]
-    },
-    {
-      "order": 6,
-      "id": "leaderboard",
-      "headline": "PROGRESS TOGETHER",
-      "route": "/group",
-      "show": ["four-person ranking", "overall score", "steps", "sync freshness"],
-      "platforms": ["apple", "google"]
-    },
-    {
-      "order": 7,
-      "id": "challenges",
-      "headline": "CHALLENGE YOUR CREW",
-      "route": "/challenges",
-      "show": ["active step challenge", "four-person standings", "share to chat"],
-      "platforms": ["apple", "google"]
-    },
-    {
-      "order": 8,
-      "id": "schedule",
-      "headline": "REMEMBER THE ROUTINE",
-      "route": "/calendar",
-      "show": ["month schedule", "goals", "reminders", "to-dos"],
-      "platforms": ["apple", "google"]
-    },
-    {
-      "order": 9,
-      "id": "journal",
-      "headline": "REFLECT, THEN ADJUST",
-      "route": "/journal",
-      "show": ["training note", "meal note", "synthetic meal photo"],
-      "platforms": ["apple"]
-    },
-    {
-      "order": 10,
-      "id": "group-chat",
-      "headline": "ENCOURAGEMENT IN ONE PLACE",
-      "route": "/chat",
-      "show": ["private group", "synthetic encouragement", "quick actions"],
-      "platforms": ["apple"],
-      "releaseGate": "Revalidate reporting, blocking, moderation, and Terms acceptance before submission"
-    },
-    {
-      "order": 11,
-      "id": "badges",
-      "headline": "MOMENTUM YOU CAN SEE",
-      "route": "/badges",
-      "show": ["earned badges", "milestone progress"],
-      "platforms": ["video"]
-    },
-    {
-      "order": 12,
-      "id": "status-avatar",
-      "headline": "A PROFILE THAT EVOLVES",
-      "route": "/status",
-      "show": ["custom avatar", "goal progress rings"],
-      "platforms": ["video"]
-    }
+  "deliverables": {
+    "appleScreenshots": { "count": 10, "format": "24-bit PNG", "size": "1260x2736", "path": "store/exports/apple/iphone-6.9/en-US" },
+    "googleScreenshots": { "count": 8, "format": "24-bit PNG", "size": "1080x1920", "path": "store/exports/google/phone/en-US" },
+    "googleFeatureGraphic": { "count": 1, "format": "24-bit PNG", "size": "1024x500", "path": "store/exports/google/feature-graphic/en-US/habhub-feature-graphic-1024x500.png" },
+    "socialHighlights": { "count": 4, "format": "24-bit PNG", "size": "1080x1350", "path": "store/exports/social/en-US" },
+    "applePreview": { "format": "H.264/AAC MP4", "size": "886x1920", "durationSeconds": 29.9, "maximumFrameRate": 30, "audio": "captions-first with an intentionally silent AAC track; no music or voiceover license is implied", "path": "store/exports/video/apple/en-US/habhub-apple-master-886x1920.mp4" },
+    "googleAd": { "format": "H.264/AAC MP4", "size": "1080x1920", "durationSeconds": 44.9, "maximumFrameRate": 30, "audio": "captions-first with an intentionally silent AAC track; no music or voiceover license is implied", "path": "store/exports/video/google/en-US/habhub-google-master-1080x1920.mp4" },
+    "featureTour": { "format": "H.264/AAC MP4", "size": "1080x1920", "durationSeconds": 99, "maximumFrameRate": 30, "presentation": "still-screen branded montage", "motion": "subtle centered zoom", "interactionCallouts": true, "audio": "captions-first with an intentionally silent AAC track; no music or voiceover license is implied", "intendedUse": "long-form product/support/organic campaign; not an Apple app preview", "path": "store/exports/video/feature-tour/en-US/habhub-comprehensive-feature-tour-1080x1920.mp4" },
+    "interactiveGuide": { "format": "H.264/AAC MP4", "size": "1080x1920", "minimumDurationSeconds": 180, "maximumDurationSeconds": 900, "maximumFrameRate": 30, "presentation": "continuous live Edge/CDP capture of the real full-app Watch tutorial", "motion": "real app transitions and tutorial animation at normal motion", "interaction": "animated tutorial pointer, automatic page transitions, and isolated tutorial practice actions", "audio": "intentionally silent AAC track; no music or voiceover license is implied", "intendedUse": "full product walkthrough, support, or organic campaign; not an Apple app preview", "path": "store/exports/video/interactive-guide/en-US/habhub-full-interactive-guide-1080x1920.mp4" }
+  },
+  "storeScreenshots": [
+    { "order": 1, "id": "today-personalized", "source": "01-today.jpg", "route": "/", "headline": "YOUR DAY, YOUR WAY", "platforms": ["apple", "google"] },
+    { "order": 2, "id": "tracker-history", "source": "02-tracker-history.jpg", "route": "/metric-detail?metric=steps", "headline": "TRACK ANYTHING", "platforms": ["apple", "google"] },
+    { "order": 3, "id": "progress-grid", "source": "03-progress-grid.jpg", "route": "/insights", "headline": "SEE THE PATTERN", "platforms": ["apple", "google"] },
+    { "order": 4, "id": "photo-collage", "source": "04-photo-collage.jpg", "route": "/metric-detail?metric=progress_photo", "headline": "PHOTO PROGRESS, SIDE BY SIDE", "platforms": ["apple", "google"], "disclosure": "Synthetic demo imagery" },
+    { "order": 5, "id": "workout", "source": "05-workout.jpg", "route": "/gym", "headline": "TRAIN WITH A PLAN", "platforms": ["apple", "google"] },
+    { "order": 6, "id": "leaderboard", "source": "10-leaderboard.jpg", "route": "/group", "headline": "PROGRESS TOGETHER", "platforms": ["apple", "google"] },
+    { "order": 7, "id": "challenges", "source": "11-challenges.jpg", "route": "/challenges", "headline": "CHALLENGE YOUR CREW", "platforms": ["apple", "google"] },
+    { "order": 8, "id": "recap-social", "source": "19-recap-social.jpg", "route": "/recap?scope=group", "headline": "EVERY WIN HAS A STORY", "platforms": ["apple", "google"] },
+    { "order": 9, "id": "custom-tracker", "source": "15-custom-tracker.jpg", "route": "/metric-editor?id=water&duplicate=1", "headline": "MAKE THE TRACKER YOURS", "platforms": ["apple"] },
+    { "order": 10, "id": "guided-learning", "source": "12-quick-guide.jpg", "route": "/quick-guide", "headline": "LEARN BY DOING", "platforms": ["apple"] }
+  ],
+  "featureTourScenes": [
+    { "id": "today-overview", "source": "01-today.jpg", "route": "/", "covers": ["Today", "goals", "to-dos"] },
+    { "id": "today-edit", "source": "13-today-edit.jpg", "route": "/", "covers": ["edit mode", "pin", "hide", "reorder"] },
+    { "id": "goals-versus-todos", "source": "01-today.jpg", "route": "/", "covers": ["optional goals", "optional to-dos"] },
+    { "id": "todo-batch", "source": "14-todo-batch.jpg", "route": "/todo-editor", "covers": ["batch to-dos", "sub-to-dos", "labels"] },
+    { "id": "todo-staged", "source": "14-todo-staged.jpg", "route": "/todo-editor", "covers": ["staged outline", "nested sub-to-dos", "review before save"] },
+    { "id": "tracker-detail", "source": "02-tracker-history.jpg", "route": "/metric-detail?metric=steps", "covers": ["tracker history", "entries"] },
+    { "id": "history-charts", "source": "02-tracker-history.jpg", "route": "/metric-detail?metric=steps", "covers": ["line chart", "bar chart", "goals"] },
+    { "id": "duplicate-style", "source": "15-custom-tracker.jpg", "route": "/metric-editor?id=water&duplicate=1", "covers": ["duplicate tracker style", "custom tracker"] },
+    { "id": "food-nutrition", "source": "16-food-nutrition.jpg", "route": "/metric-detail?metric=food", "covers": ["nutrition", "daily references", "personal goals"] },
+    { "id": "activity-timer", "source": "17-workout-timer.jpg", "route": "/timer?metric=workout_duration", "covers": ["stopwatch", "countdown", "activity choice"] },
+    { "id": "timer-workout", "source": "17-workout-timer.jpg", "route": "/timer?metric=workout_duration", "covers": ["workout name", "distance", "energy estimate"] },
+    { "id": "workout-plan", "source": "05-workout.jpg", "route": "/gym", "covers": ["workout templates", "session plan"] },
+    { "id": "workout-live", "source": "05-workout.jpg", "route": "/gym", "covers": ["sets", "rest timer", "live workout"] },
+    { "id": "exercise-progress", "source": "18-exercise-progress.jpg", "route": "/gym-exercise?key=back_squat", "covers": ["average set load", "one-rep max", "exercise goals"] },
+    { "id": "progress-grid", "source": "03-progress-grid.jpg", "route": "/insights", "covers": ["grid map", "calendar progress"] },
+    { "id": "photo-timeline", "source": "04-photo-timeline.jpg", "route": "/metric-detail?metric=progress_photo", "covers": ["five synthetic progress photos", "timeline"] },
+    { "id": "photo-compare", "source": "04-photo-collage.jpg", "route": "/metric-detail?metric=progress_photo", "covers": ["photo comparison", "collage"] },
+    { "id": "avatar", "source": "08-status-avatar.jpg", "route": "/status", "covers": ["custom avatar", "body profile"] },
+    { "id": "leaderboard", "source": "10-leaderboard.jpg", "route": "/group", "covers": ["leaderboard", "privacy", "sync freshness"] },
+    { "id": "challenges", "source": "11-challenges.jpg", "route": "/challenges", "covers": ["challenges", "participants", "standings"] },
+    { "id": "recap", "source": "19-recap-social.jpg", "route": "/recap?scope=group", "covers": ["stories", "feed", "linked reactions", "comments", "comment composer"] },
+    { "id": "group-schedule", "source": "20-group-schedule.jpg", "route": "/group-schedule", "covers": ["group schedule", "shared events"] },
+    { "id": "group-notes", "source": "21-group-notes.jpg", "route": "/group-notes", "covers": ["group notes", "reactions", "comments", "sharing"] },
+    { "id": "chat", "source": "09-chat.jpg", "route": "/chat", "covers": ["group chat", "direct chat", "message reactions"] },
+    { "id": "badges", "source": "06-badges.jpg", "route": "/badges", "covers": ["badges", "milestones", "showcase"] },
+    { "id": "schedule", "source": "07-schedule.jpg", "route": "/calendar", "covers": ["optional schedule", "reminders", "to-dos"] },
+    { "id": "journal", "source": "07-journal.jpg", "route": "/journal", "covers": ["optional journal", "labels", "images"] },
+    { "id": "notifications", "source": "22-notifications.jpg", "route": "/notifications", "covers": ["notification controls", "quiet hours", "reminders"] },
+    { "id": "display", "source": "23-display-settings.jpg", "route": "/display-settings", "covers": ["display settings", "page order", "navigation"] },
+    { "id": "profile-behavior", "source": "24-profile-behavior.jpg", "route": "/profile", "covers": ["food-goal behavior", "unrecorded-step estimate"] },
+    { "id": "quick-guides", "source": "12-quick-guide.jpg", "route": "/quick-guide", "covers": ["page tutorials", "watch mode", "practice mode"] },
+    { "id": "menu", "source": "25-menu.jpg", "route": "/menu", "covers": ["optional pages", "settings", "legal and support"] }
   ],
   "featureGraphic": {
     "platform": "google",
@@ -118,5 +80,12 @@
     "headline": "TRACK ANYTHING.",
     "composition": "HabHub mark with real Today, progress-grid, and photo-progress panels",
     "disclosure": "REAL APP | SYNTHETIC DEMO DATA"
-  }
+  },
+  "signedDeviceCaptureGates": [
+    { "feature": "Android background Health Connect and Samsung Health-source preference", "requiredEvidence": "signed Android build, granted history/background permissions, app process absent, timestamped before/after source data", "status": "required-before-advertising" },
+    { "feature": "local and push notification delivery, reminder taps, and quiet hours", "requiredEvidence": "signed iOS and Android device recordings with real notification surfaces", "status": "required-before-advertising-delivery-timing" },
+    { "feature": "Android home-screen widgets", "requiredEvidence": "signed Android launcher recording for every promoted widget size", "status": "required-before-adding-to-video" },
+    { "feature": "native progress-photo video export", "requiredEvidence": "signed Android capture of export, saved media, playback, permission denial and retry", "status": "required-before-adding-to-video" },
+    { "feature": "iOS connected-health import", "requiredEvidence": "signed iPhone recording of Apple Health permissions and imported history", "status": "required-before-adding-to-video" }
+  ]
 }

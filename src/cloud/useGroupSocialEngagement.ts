@@ -49,6 +49,57 @@ function reactionPersistedTargetKey(
   return `${reaction.targetType}\u0000${reaction.targetId}`;
 }
 
+function demoGroupNoteEngagement(
+  groupId: string,
+  targets: readonly GroupSocialTarget[],
+  currentUserId: string,
+  memberIds: readonly string[],
+) {
+  const noteTargets = targets.filter((target) => target.type === "group_note");
+  const actors = [...new Set([currentUserId, ...memberIds.filter(Boolean)])];
+  const now = Date.now();
+  const reactions: GroupSocialReaction[] = [];
+  const comments: GroupSocialComment[] = [];
+  const reactionKinds: GroupSocialReactionKind[] = [
+    "cheer",
+    "heart",
+    "thumbs_up",
+  ];
+  const commentCopy = [
+    "I’m in — I’ll bring water for the walk.",
+    "The crispy tofu option sounds perfect.",
+    "Love the ten-minute rule. Small wins still count!",
+  ];
+  noteTargets.forEach((target, index) => {
+    actors.slice(0, Math.min(2, actors.length)).forEach((userId, actorIndex) => {
+      const createdAt = new Date(
+        now - (index * 95 + actorIndex * 18 + 12) * 60_000,
+      ).toISOString();
+      reactions.push({
+        groupId,
+        targetType: "group_note",
+        targetId: target.id,
+        userId,
+        reaction: reactionKinds[(index + actorIndex) % reactionKinds.length],
+        createdAt,
+        updatedAt: createdAt,
+      });
+    });
+    const createdAt = new Date(now - (index * 110 + 35) * 60_000).toISOString();
+    comments.push({
+      id: `demo-note-comment-${index}-${groupId}`,
+      groupId,
+      targetType: "group_note",
+      targetId: target.id,
+      userId: actors[(index + 1) % actors.length] ?? currentUserId,
+      content: commentCopy[index % commentCopy.length],
+      createdAt,
+      updatedAt: createdAt,
+    });
+  });
+  return { reactions, comments };
+}
+
 /**
  * One bounded engagement model shared by recap cards and Leaderboard logs.
  * The hook never fetches target content; callers must already possess the
@@ -58,11 +109,20 @@ export function useGroupSocialEngagement(
   groupId: string,
   targets: readonly GroupSocialTarget[],
   interactionSurface: GroupSocialInteractionSurface = "feed",
+  includeComments = true,
 ) {
   const { state } = useApp();
   const cloud = useCloudSyncActions();
   const tutorial = useTutorialSandbox();
   const safety = useUserSafety(state.currentUserId, tutorial.active);
+  const scopeKey = `${state.currentUserId}\u0000${groupId}`;
+  const blockedUsersKey = useMemo(
+    () => [...safety.blockedUserIds].sort().join(","),
+    [safety.blockedUserIds],
+  );
+  const requestScopeKey = `${scopeKey}\u0000${
+    safety.hydrated ? blockedUsersKey : "safety-pending"
+  }`;
   const stableTargets = useMemo(
     () =>
       [...targets]
@@ -82,9 +142,15 @@ export function useGroupSocialEngagement(
   targetAliasesRef.current = targetAliases;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
+  const [dataScopeKey, setDataScopeKey] = useState(scopeKey);
+  const dataScopeKeyRef = useRef(dataScopeKey);
+  dataScopeKeyRef.current = dataScopeKey;
   const reactionsRef = useRef(reactions);
   reactionsRef.current = reactions;
-  const requestRef = useRef<Promise<void> | null>(null);
+  const requestRef = useRef<{
+    scopeKey: string;
+    promise: Promise<void>;
+  } | null>(null);
   const requestGenerationRef = useRef(0);
   const reactionMutationGenerationRef = useRef(new Map<string, number>());
   const reactionWriteQueueRef = useRef(
@@ -96,32 +162,58 @@ export function useGroupSocialEngagement(
   const confirmedReactionByMutationRef = useRef(
     new Map<string, GroupSocialReaction | undefined>(),
   );
-  const activeGroupRef = useRef(groupId);
-  activeGroupRef.current = groupId;
+  const activeScopeRef = useRef(scopeKey);
+  activeScopeRef.current = scopeKey;
+  const activeRequestScopeRef = useRef(requestScopeKey);
+  activeRequestScopeRef.current = requestScopeKey;
   const cloudEnabled =
     !tutorial.active && Boolean(supabase) && isCloudGroupId(groupId);
 
   const refresh = useCallback(() => {
-    if (!cloudEnabled || !stableTargets.length) {
+    if (!cloudEnabled) {
+      const seeded = demoGroupNoteEngagement(
+        groupId,
+        stableTargets,
+        state.currentUserId,
+        state.group.members.map((member) => member.id),
+      );
+      reactionsRef.current = seeded.reactions;
+      commentsRef.current = includeComments ? seeded.comments : [];
+      targetAliasesRef.current = new Map();
+      setReactions(seeded.reactions);
+      setComments(includeComments ? seeded.comments : []);
+      setTargetAliases(new Map());
+      dataScopeKeyRef.current = scopeKey;
+      setDataScopeKey(scopeKey);
       setLoading(false);
       setError(undefined);
-      if (!stableTargets.length) {
-        reactionsRef.current = [];
-        commentsRef.current = [];
-        targetAliasesRef.current = new Map();
-        setReactions([]);
-        setComments([]);
-        setTargetAliases(new Map());
-      }
       return Promise.resolve();
     }
-    if (requestRef.current) return requestRef.current;
+    if (!stableTargets.length) {
+      setLoading(false);
+      setError(undefined);
+      reactionsRef.current = [];
+      commentsRef.current = [];
+      targetAliasesRef.current = new Map();
+      setReactions([]);
+      setComments([]);
+      setTargetAliases(new Map());
+      return Promise.resolve();
+    }
+    if (requestRef.current?.scopeKey === requestScopeKey)
+      return requestRef.current.promise;
     const generation = ++requestGenerationRef.current;
     let request: Promise<void>;
     setLoading(true);
-    request = loadGroupSocialEngagement(groupId, stableTargets)
+    request = loadGroupSocialEngagement(groupId, stableTargets, {
+      includeComments,
+    })
       .then((next) => {
-        if (requestGenerationRef.current !== generation) return;
+        if (
+          requestGenerationRef.current !== generation ||
+          activeRequestScopeRef.current !== requestScopeKey
+        )
+          return;
         reactionsRef.current = next.reactions;
         setReactions(next.reactions);
         commentsRef.current = next.comments;
@@ -134,24 +226,61 @@ export function useGroupSocialEngagement(
         );
         targetAliasesRef.current = aliases;
         setTargetAliases(aliases);
+        dataScopeKeyRef.current = scopeKey;
+        setDataScopeKey(scopeKey);
         setError(undefined);
       })
       .catch((reason) => {
-        if (requestGenerationRef.current !== generation) return;
+        if (
+          requestGenerationRef.current !== generation ||
+          activeRequestScopeRef.current !== requestScopeKey
+        )
+          return;
         setError(reason instanceof Error ? reason.message : String(reason));
       })
       .finally(() => {
-        if (requestGenerationRef.current !== generation) return;
-        if (requestRef.current === request) requestRef.current = null;
+        if (requestRef.current?.promise === request) requestRef.current = null;
+        if (
+          requestGenerationRef.current !== generation ||
+          activeRequestScopeRef.current !== requestScopeKey
+        )
+          return;
         setLoading(false);
       });
-    requestRef.current = request;
+    requestRef.current = { scopeKey: requestScopeKey, promise: request };
     return request;
-  }, [cloudEnabled, groupId, stableTargets]);
+  }, [
+    cloudEnabled,
+    groupId,
+    includeComments,
+    requestScopeKey,
+    scopeKey,
+    stableTargets,
+    state.currentUserId,
+    state.group.members,
+  ]);
 
   useEffect(() => {
     requestGenerationRef.current += 1;
     requestRef.current = null;
+    reactionsRef.current = [];
+    commentsRef.current = [];
+    targetAliasesRef.current = new Map();
+    reactionMutationGenerationRef.current.clear();
+    reactionWriteQueueRef.current.clear();
+    confirmedReactionByMutationRef.current.clear();
+    setReactions([]);
+    setComments([]);
+    setTargetAliases(new Map());
+    dataScopeKeyRef.current = scopeKey;
+    setDataScopeKey(scopeKey);
+    setError(undefined);
+  }, [scopeKey]);
+
+  useEffect(() => {
+    requestGenerationRef.current += 1;
+    if (requestRef.current?.scopeKey !== requestScopeKey)
+      requestRef.current = null;
     const task =
       Platform.OS === "web"
         ? undefined
@@ -165,7 +294,7 @@ export function useGroupSocialEngagement(
       task?.cancel();
       requestGenerationRef.current += 1;
     };
-  }, [refresh]);
+  }, [refresh, requestScopeKey]);
 
   useEffect(() => {
     if (!cloudEnabled) return;
@@ -226,11 +355,17 @@ export function useGroupSocialEngagement(
         throw new Error("Safety settings are still loading. Try again shortly.");
       if (cloudEnabled && !safety.termsAccepted)
         throw new Error("Accept the community Terms before reacting.");
-      const operationGroupId = groupId;
+      const operationScopeKey = scopeKey;
       const requestedTargetKey = targetKey(target);
-      const knownPersistedKey = targetAliasesRef.current.get(requestedTargetKey);
+      const currentDataMatchesScope = dataScopeKeyRef.current === scopeKey;
+      const knownPersistedKey = currentDataMatchesScope
+        ? targetAliasesRef.current.get(requestedTargetKey)
+        : undefined;
       const targetIds = new Set([target.id]);
-      const existing = reactionsRef.current.find(
+      const currentReactions = currentDataMatchesScope
+        ? reactionsRef.current
+        : [];
+      const existing = currentReactions.find(
         (item) =>
           item.userId === state.currentUserId &&
           item.targetType === target.type &&
@@ -238,9 +373,9 @@ export function useGroupSocialEngagement(
             reactionPersistedTargetKey(item) === knownPersistedKey),
       );
       const nextReaction = existing?.reaction === reaction ? undefined : reaction;
-      const before = reactionsRef.current;
+      const before = currentReactions;
       const now = new Date().toISOString();
-      const mutationKey = `${operationGroupId}\u0000${requestedTargetKey}\u0000${state.currentUserId}`;
+      const mutationKey = `${operationScopeKey}\u0000${requestedTargetKey}`;
       if (
         cloudEnabled &&
         !reactionWriteQueueRef.current.has(mutationKey) &&
@@ -297,7 +432,7 @@ export function useGroupSocialEngagement(
         Promise.resolve({});
       const write = previousWrite.catch(() => undefined).then(async () => {
         let resolvedTarget = await mutationTarget(target);
-        if (activeGroupRef.current !== operationGroupId) return {};
+        if (activeScopeRef.current !== operationScopeKey) return {};
         const resolvedTargetKey = persistedTargetKey(resolvedTarget);
         targetIds.add(resolvedTarget.id);
         setTargetAliases((current) => {
@@ -372,7 +507,7 @@ export function useGroupSocialEngagement(
           void flushPendingGroupPushEvents().catch(() => undefined);
       } catch (reason) {
         if (
-          activeGroupRef.current === operationGroupId &&
+          activeScopeRef.current === operationScopeKey &&
           reactionMutationGenerationRef.current.get(mutationKey) ===
             mutationGeneration
         ) {
@@ -412,6 +547,7 @@ export function useGroupSocialEngagement(
       safety.hydrated,
       safety.termsAccepted,
       state.currentUserId,
+      scopeKey,
     ],
   );
 
@@ -427,7 +563,7 @@ export function useGroupSocialEngagement(
         throw new Error("Safety settings are still loading. Try again shortly.");
       if (cloudEnabled && !safety.termsAccepted)
         throw new Error("Accept the community Terms before commenting.");
-      const operationGroupId = groupId;
+      const operationScopeKey = scopeKey;
       const now = new Date().toISOString();
       const pendingId = `local-comment-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
       const pending: GroupSocialComment = {
@@ -453,7 +589,7 @@ export function useGroupSocialEngagement(
         setComments(commentsRef.current);
         throw reason;
       }
-      if (activeGroupRef.current !== operationGroupId) return;
+      if (activeScopeRef.current !== operationScopeKey) return;
       const requestedTargetKey = targetKey(target);
       const resolvedTargetKey = persistedTargetKey(resolvedTarget);
       setTargetAliases((current) => {
@@ -488,7 +624,7 @@ export function useGroupSocialEngagement(
             });
           } else throw reason;
         }
-        if (activeGroupRef.current === operationGroupId) {
+        if (activeScopeRef.current === operationScopeKey) {
           commentsRef.current = commentsRef.current.map((item) =>
             item.id === pendingId ? saved.comment : item,
           );
@@ -516,6 +652,7 @@ export function useGroupSocialEngagement(
       safety.hydrated,
       safety.termsAccepted,
       state.currentUserId,
+      scopeKey,
     ],
   );
 
@@ -538,15 +675,21 @@ export function useGroupSocialEngagement(
 
   const visibleReactions = useMemo(
     () =>
-      reactions.filter(
-        (reaction) => !safety.blockedUserIds.has(reaction.userId),
-      ),
-    [reactions, safety.blockedUserIds],
+      dataScopeKey === scopeKey
+        ? reactions.filter(
+            (reaction) => !safety.blockedUserIds.has(reaction.userId),
+          )
+        : [],
+    [dataScopeKey, reactions, safety.blockedUserIds, scopeKey],
   );
   const visibleComments = useMemo(
     () =>
-      comments.filter((comment) => !safety.blockedUserIds.has(comment.userId)),
-    [comments, safety.blockedUserIds],
+      dataScopeKey === scopeKey
+        ? comments.filter(
+            (comment) => !safety.blockedUserIds.has(comment.userId),
+          )
+        : [],
+    [comments, dataScopeKey, safety.blockedUserIds, scopeKey],
   );
   const reactionsByTarget = useMemo(() => {
     const map = new Map<string, GroupSocialReaction[]>();
@@ -575,9 +718,9 @@ export function useGroupSocialEngagement(
   const resolvedTargetKey = useCallback(
     (target: GroupSocialTarget) => {
       const key = targetKey(target);
-      return targetAliases.get(key) ?? key;
+      return dataScopeKey === scopeKey ? (targetAliases.get(key) ?? key) : key;
     },
-    [targetAliases],
+    [dataScopeKey, scopeKey, targetAliases],
   );
 
   return {

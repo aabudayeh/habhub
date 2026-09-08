@@ -307,7 +307,7 @@ const fullSyncStart = healthProvider.indexOf(
 assert.ok(repairStart >= 0 && fullSyncStart > repairStart);
 const repair = healthProvider.slice(repairStart, fullSyncStart);
 assert.equal(
-  repair.match(/await importHealthEntries\(/g)?.length ?? 0,
+  repair.match(/\(\) => importHealthEntries\(/g)?.length ?? 0,
   1,
   "one repair batch must cause one reducer/render pass, not one per native slice",
 );
@@ -322,7 +322,7 @@ assert.ok(
 );
 assert.match(
   repair,
-  /setCloudSyncPaused\('health-steps-repair', true\)[\s\S]{0,300}await importHealthEntries\(/,
+  /setCloudSyncPaused\('health-steps-repair', true\)[\s\S]{0,500}runCurrentHealthImport\([\s\S]{0,200}\(\) => importHealthEntries\(/,
   "the cloud gate must remain open during native history reads",
 );
 

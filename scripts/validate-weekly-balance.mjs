@@ -433,13 +433,35 @@ assert.equal(
     energyUserId,
     energyDate,
   ),
-  expectedActiveEnergy,
-  "active energy must combine measured workout calories with a fresh uncovered-step estimate without reusing a stale materialized fallback",
+  300,
+  "active energy must use measured workout calories only while unrecorded-step estimation remains at its default-off setting",
 );
 assert.equal(
   metricValue(stepAwareState, energyMetric, energyUserId, energyDate),
+  baseline + 300,
+  "total energy must not infer unrecorded-step activity before the user opts in",
+);
+const stepAwareOptInState = {
+  ...stepAwareState,
+  settings: {
+    ...stepAwareState.settings,
+    estimateUnrecordedSteps: true,
+  },
+};
+assert.equal(
+  metricValue(
+    stepAwareOptInState,
+    stepAwareExerciseMetric,
+    energyUserId,
+    energyDate,
+  ),
+  expectedActiveEnergy,
+  "opted-in active energy must combine measured workout calories with a fresh uncovered-step estimate without reusing a stale materialized fallback",
+);
+assert.equal(
+  metricValue(stepAwareOptInState, energyMetric, energyUserId, energyDate),
   baseline + expectedActiveEnergy,
-  "total energy must combine BMR, measured workout calories, and uncovered-step activity",
+  "opted-in total energy must combine BMR, measured workout calories, and uncovered-step activity",
 );
 
 const coldStartProfile = {

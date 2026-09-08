@@ -1,5 +1,6 @@
 import type {
   ActiveTutorialSession,
+  TutorialExperienceMode,
   TutorialGuide,
   TutorialProgress,
   TutorialStep,
@@ -110,6 +111,8 @@ export function createTutorialSession(
     now?: string;
     runId?: number;
     demoAnchorDate?: string;
+    mode?: TutorialExperienceMode;
+    returnPath?: string;
   },
 ): ActiveTutorialSession {
   const now = options?.now ?? new Date().toISOString();
@@ -130,6 +133,10 @@ export function createTutorialSession(
     stepId: guide.steps[stepIndex]?.id ?? "",
     stepIndex,
     runId: options?.runId ?? Date.now(),
+    experienceMode: options?.mode ?? "practice",
+    returnPath: safeTutorialRoute(options?.returnPath)
+      ? options.returnPath.trim()
+      : undefined,
     demoAnchorDate:
       options?.demoAnchorDate ??
       dateKey(),

@@ -21,6 +21,7 @@ import {
 
 import { AppText as Text, AppTextInput as TextInput } from "@/src/components/AppText";
 import { CheerIcon } from "@/src/components/CheerIcon";
+import { GroupSocialActionBar } from "@/src/components/GroupSocialActionBar";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import { DateRangeNavigator, PeriodChoiceBar } from "@/src/components/PeriodNavigator";
 import { SafetyReportSheet } from "@/src/components/SafetyReportSheet";
@@ -44,7 +45,16 @@ import {
   RecapFeedItem,
   RecapScope,
 } from "@/src/domain/recaps";
-import type { GroupSocialTargetType } from "@/src/domain/groupSocialTarget";
+import {
+  recapStoryAutoplayEnabled,
+  remainingRecapStoryDurationMs,
+} from "@/src/domain/recapStoryPlayback";
+import {
+  groupRecapStoryIdFromShareHighlight,
+  groupRecapStoryShareHighlight,
+  type GroupSocialTargetType,
+} from "@/src/domain/groupSocialTarget";
+import { memberDisplayName } from "@/src/domain/members";
 import { LocalizedAlert as Alert, useLocale, useTranslation } from "@/src/i18n";
 import { useUserSafety } from "@/src/safety/userSafety";
 import { useApp } from "@/src/state/AppProvider";
@@ -89,11 +99,20 @@ function recapFeedImageUri(item: RecapFeedItem) {
 
 export default function StoryRecapScreen() {
   const { state } = useApp();
+  const tutorialSandbox = useTutorialSandboxActive();
+  const safety = useUserSafety(state.currentUserId, tutorialSandbox);
   const { width } = useWindowDimensions();
-  const params = useLocalSearchParams<{ scope?: string; anchor?: string }>();
+  const params = useLocalSearchParams<{
+    scope?: string;
+    anchor?: string;
+    story?: string;
+  }>();
   const scope: RecapScope = params.scope === "group" ? "group" : "personal";
   const anchor = params.anchor || dateKey();
-  const storySourceKey = `${scope}:${state.currentUserId}:${state.group.id}:${anchor}`;
+  const requestedStoryId = groupRecapStoryIdFromShareHighlight(
+    params.story ? `story:${params.story}` : undefined,
+  );
+  const storySourceKey = `${scope}:${state.currentUserId}:${state.group.id}:${anchor}:${requestedStoryId ?? ""}`;
   const challengeCloud = useGroupChallenges(
     scope === "group" ? state.group.id : "",
   );
@@ -135,9 +154,35 @@ export default function StoryRecapScreen() {
   const stories =
     storyDeck?.key === storySourceKey ? storyDeck.stories : [];
   const [index, setIndex] = useState(0);
+  const [storySocialError, setStorySocialError] = useState(false);
+  const [storyGestureActive, setStoryGestureActive] = useState(false);
+  const [storySocialInteractionActive, setStorySocialInteractionActive] =
+    useState(false);
+  const [storyCommentReport, setStoryCommentReport] = useState<{
+    comment: GroupSocialComment;
+    displayName: string;
+  }>();
+  const [storyCommentReportBusy, setStoryCommentReportBusy] = useState(false);
   const touchStartX = useRef(0);
   const progress = useRef(new Animated.Value(0)).current;
   const story = stories[index];
+  const storyTargets = stories.flatMap((item) =>
+    item.socialTarget ? [item.socialTarget] : [],
+  );
+  const storySocial = useGroupSocialEngagement(
+    scope === "group" ? state.group.id : "",
+    storyTargets,
+    "feed",
+  );
+  const storySocialKey = story?.socialTarget
+    ? storySocial.targetKey(story.socialTarget)
+    : story?.id;
+  const storyPlaybackEnabled = recapStoryAutoplayEnabled({
+    storyCount: stories.length,
+    gestureActive: storyGestureActive,
+    socialInteractionActive: storySocialInteractionActive,
+    reportOpen: Boolean(storyCommentReport),
+  });
 
   useEffect(() => {
     if (storyDeck?.key === storySourceKey) return;
@@ -150,13 +195,17 @@ export default function StoryRecapScreen() {
     // Freeze one coherent deck for this open story session. Realtime updates
     // may prepend new challenge/result cards, but they must not shift the
     // visible page beneath the user or flash page two before page one.
-    setIndex(0);
+    const requestedIndex = requestedStoryId
+      ? sourceStories.findIndex((candidate) => candidate.id === requestedStoryId)
+      : -1;
+    setIndex(requestedIndex >= 0 ? requestedIndex : 0);
     setStoryDeck({ key: storySourceKey, stories: sourceStories });
   }, [
     challengeCloud.initialLoadComplete,
     scope,
     settledChallengeResults.initialLoadComplete,
     sourceStories,
+    requestedStoryId,
     storyDeck?.key,
     storySourceKey,
   ]);
@@ -172,18 +221,39 @@ export default function StoryRecapScreen() {
   }
 
   useEffect(() => {
-    if (!stories.length) return;
     progress.setValue(0);
-    const animation = Animated.timing(progress, {
-      toValue: 1,
-      duration: 6500,
-      useNativeDriver: false,
+  }, [progress, story?.id]);
+
+  useEffect(() => {
+    if (!storyPlaybackEnabled) {
+      progress.stopAnimation();
+      return;
+    }
+    let disposed = false;
+    let animation: ReturnType<typeof Animated.timing> | undefined;
+    progress.stopAnimation((currentProgress) => {
+      if (disposed) return;
+      const remainingMs = remainingRecapStoryDurationMs(currentProgress);
+      if (remainingMs <= 0) {
+        setIndex((value) => (value + 1) % stories.length);
+        return;
+      }
+      animation = Animated.timing(progress, {
+        toValue: 1,
+        duration: remainingMs,
+        useNativeDriver: false,
+      });
+      animation.start(({ finished }) => {
+        if (finished && !disposed)
+          setIndex((value) => (value + 1) % stories.length);
+      });
     });
-    animation.start(({ finished }) => {
-      if (finished) setIndex((value) => (value + 1) % stories.length);
-    });
-    return () => animation.stop();
-  }, [index, progress, stories.length]);
+    return () => {
+      disposed = true;
+      animation?.stop();
+      progress.stopAnimation();
+    };
+  }, [progress, stories.length, story?.id, storyPlaybackEnabled]);
 
   useEffect(() => {
     if (index < stories.length) return;
@@ -229,9 +299,11 @@ export default function StoryRecapScreen() {
       <View
         onStartShouldSetResponder={() => true}
         onResponderGrant={(event) => {
+          setStoryGestureActive(true);
           touchStartX.current = event.nativeEvent.pageX;
         }}
         onResponderRelease={(event) => {
+          setStoryGestureActive(false);
           const x = event.nativeEvent.pageX;
           const delta = x - touchStartX.current;
           if (delta > 35) previous();
@@ -239,6 +311,7 @@ export default function StoryRecapScreen() {
           else if (x < width / 2) previous();
           else next();
         }}
+        onResponderTerminate={() => setStoryGestureActive(false)}
       >
         <Card
           style={[
@@ -262,6 +335,125 @@ export default function StoryRecapScreen() {
           <Text style={storyStyles.brand}>HABHUB</Text>
         </Card>
       </View>
+      {scope === "group" && story.socialTarget ? (
+        <View style={storyStyles.socialCard}>
+          <GroupSocialActionBar
+            key={storySocialKey}
+            currentUserId={state.currentUserId}
+            members={state.group.members}
+            state={state}
+            inverse
+            reactions={
+              storySocial.reactionsByTarget.get(
+                storySocial.targetKey(story.socialTarget),
+              ) ?? []
+            }
+            comments={
+              storySocial.commentsByTarget.get(
+                storySocial.targetKey(story.socialTarget),
+              ) ?? []
+            }
+            onReact={(reaction) => {
+              setStorySocialError(false);
+              void storySocial.react(story.socialTarget!, reaction).catch(() => setStorySocialError(true));
+            }}
+            onComment={async (content) => {
+              setStorySocialError(false);
+              try {
+                await storySocial.comment(story.socialTarget!, content);
+              } catch (reason) {
+                setStorySocialError(true);
+                throw reason;
+              }
+            }}
+            onDeleteComment={storySocial.removeComment}
+            onReportComment={(comment) => {
+              const author = state.group.members.find(
+                (member) => member.id === comment.userId,
+              );
+              setStoryCommentReport({
+                comment,
+                displayName: author
+                  ? memberDisplayName(state, author)
+                  : "Member",
+              });
+            }}
+            onInteractionChange={setStorySocialInteractionActive}
+            onShare={() => {
+              const shareHighlight =
+                story.feedItemId ?? groupRecapStoryShareHighlight(story.id);
+              if (!shareHighlight) return;
+              const attachment = {
+                kind: "recap" as const,
+                scope: "group" as const,
+                highlight: shareHighlight,
+                anchor: story.localDate ?? anchor,
+                title: story.title,
+              };
+              stageChatShareImage(
+                state.currentUserId,
+                state.group.id,
+                attachment,
+                undefined,
+              );
+              router.navigate({
+                pathname: "/(tabs)/chat",
+                params: {
+                  recapHighlight: shareHighlight,
+                  recapTitle: story.title,
+                  recapAnchor: story.localDate ?? anchor,
+                  recapShareAt: Date.now().toString(),
+                },
+              } as never);
+            }}
+          />
+          {storySocialError ? (
+            <Text style={storyStyles.socialError}>Could not save that interaction. Tap again to retry.</Text>
+          ) : null}
+        </View>
+      ) : null}
+      <SafetyReportSheet
+        visible={Boolean(storyCommentReport)}
+        title="Report comment"
+        subject={storyCommentReport?.displayName ?? "Member"}
+        demoMode={safety.mode === "demo"}
+        busy={storyCommentReportBusy}
+        onClose={() => {
+          if (!storyCommentReportBusy) setStoryCommentReport(undefined);
+        }}
+        onSubmit={(reason, details) => {
+          const selected = storyCommentReport;
+          if (!selected) return;
+          setStoryCommentReportBusy(true);
+          void safety
+            .reportComment({
+              groupId: state.group.id,
+              commentId: selected.comment.id,
+              authorId: selected.comment.userId,
+              reportedDisplayName: selected.displayName,
+              reason,
+              details,
+            })
+            .then(() => {
+              setStoryCommentReport(undefined);
+              Alert.alert(
+                safety.mode === "demo"
+                  ? "Demo report saved"
+                  : "Report submitted",
+                safety.mode === "demo"
+                  ? "This preview report stays on this device."
+                  : "Your report is in HabHub's protected operator queue. An eligible group moderator may also review it, but the reported person cannot review their own report.",
+              );
+            })
+            .catch((error) =>
+              Alert.alert(
+                "Report not submitted",
+                error instanceof Error ? error.message : "Try again.",
+              ),
+            )
+            .finally(() => setStoryCommentReportBusy(false));
+        }}
+      />
       {scope === "group" ? (
         <Pressable
           accessibilityRole="button"
@@ -1062,6 +1254,19 @@ const storyStyles = StyleSheet.create({
     justifyContent: "center",
   },
   feedButtonText: { color: palette.ink, fontSize: 13, fontWeight: "900" },
+  socialCard: {
+    marginTop: 10,
+    paddingHorizontal: 10,
+    borderRadius: 16,
+    backgroundColor: "#081B49",
+  },
+  socialError: {
+    color: "#FFD7D7",
+    fontSize: 8,
+    lineHeight: 12,
+    textAlign: "center",
+    paddingBottom: 8,
+  },
   note: {
     color: palette.muted,
     fontSize: 9,

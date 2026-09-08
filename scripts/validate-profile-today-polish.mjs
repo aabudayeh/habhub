@@ -83,6 +83,21 @@ assert.match(
   "The existing featured-card height contract must remain unchanged.",
 );
 assert.match(
+  seedSource,
+  /estimateUnrecordedSteps:\s*false/,
+  "Unrecorded-step estimation must remain opt-in for new and demo accounts.",
+);
+assert.match(
+  profileSource,
+  /title="Food & step calculations"[\s\S]{0,1800}label="About food-goal behavior"[\s\S]{0,2400}label="About unrecorded-step calculations"[\s\S]{0,1200}updateSettings\(\{ estimateUnrecordedSteps \}\)/,
+  "Profile must keep both calculation behaviors in one collapsed, explained section.",
+);
+assert.match(
+  profilePageSource,
+  /<EnergyProfileEditor\/>[\s\S]{0,100}<ProfileBehaviorEditor\/>/,
+  "The collapsed calculation-behavior editor must follow the body profile.",
+);
+assert.match(
   todaySource,
   /const heroVisualProgress\s*=\s*[\s\S]{0,160}Math\.round\([\s\S]{0,80}\* 100\) === 0[\s\S]{0,40}\? 0/,
   "A Featured value displayed as 0% must normalize to an exactly empty visual state.",

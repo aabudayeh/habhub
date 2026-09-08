@@ -252,7 +252,7 @@ export function groupTodoCompletedOnDate(
 
 /** Fail closed when a private reminder references a disabled or missing group. */
 export function groupTodoReminderFeatureEnabled(
-  state: Pick<AppState, "group" | "groups">,
+  state: Pick<AppState, "group" | "groups" | "settings">,
   reminder: Pick<CalendarReminder, "groupId" | "groupTodoId">,
 ) {
   if (!reminder.groupTodoId) return true;
@@ -261,5 +261,11 @@ export function groupTodoReminderFeatureEnabled(
     state.group.id === reminder.groupId
       ? state.group
       : state.groups.find((candidate) => candidate.id === reminder.groupId);
-  return group?.groupTodosEnabled === true;
+  const preferences =
+    state.settings.notifications.groupPreferencesByGroup?.[reminder.groupId];
+  return (
+    group?.groupTodosEnabled === true &&
+    preferences?.enabled !== false &&
+    preferences?.todoReminders !== false
+  );
 }

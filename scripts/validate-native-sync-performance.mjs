@@ -42,20 +42,21 @@ const replaceStateCalls = [
 ].map((match) => match[0]);
 assert.equal(
   replaceStateCalls.length,
-  36,
+  37,
   "update the source-classification fixture when replaceState calls change",
 );
 replaceStateCalls.forEach((call, index) =>
   assert.match(
     call,
-    /source:\s*(?:"(?:cloud|local)"|[A-Za-z][\w]*\s*\?\s*"local"\s*:\s*"cloud")/,
+    /source:\s*(?:"(?:cloud|local)"|[A-Za-z][\w]*\s*\?\s*"(?:local|cloud)"\s*:\s*"(?:cloud|local)")/,
     `replaceState call ${index + 1} must explicitly classify its source`,
   ),
 );
 assert.equal(
   (cloudProvider.match(/source:\s*"local"/g)?.length ?? 0) +
-    (cloudProvider.match(/source:\s*[A-Za-z][\w]*\s*\?\s*"local"\s*:\s*"cloud"/g)?.length ?? 0),
-  12,
+    (cloudProvider.match(/source:\s*[A-Za-z][\w]*\s*\?\s*"local"\s*:\s*"cloud"/g)?.length ?? 0) +
+    (cloudProvider.match(/source:\s*[A-Za-z][\w]*\s*\?\s*"cloud"\s*:\s*"local"/g)?.length ?? 0),
+  13,
   "local/hybrid outbox replacements must retain their publication signal",
 );
 assert.match(cloudProvider, /replaceState\(evicted, \{ source: "local" \}\)/);

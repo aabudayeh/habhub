@@ -282,71 +282,6 @@ export default function GroupMemberProfile() {
         </View>
       </Card>
 
-      {!isSelf ? (
-        <Card style={styles.safetyCard}>
-          <View style={styles.safetyHeading}>
-            <View
-              style={[
-                styles.safetyIcon,
-                { backgroundColor: colors.primarySoft },
-              ]}
-            >
-              <Ionicons
-                name={blocked ? "shield" : "shield-outline"}
-                size={20}
-                color={blocked ? palette.red : colors.primary}
-              />
-            </View>
-            <View style={styles.heroCopy}>
-              <Text style={[styles.levelTitle, { color: colors.ink }]}>Community safety</Text>
-              <Text style={[styles.badgeDetail, { color: colors.muted }]}>
-                {blocked
-                  ? "Blocked · this member's messages are hidden on your device."
-                  : "Report a concern or block contact without leaving this profile."}
-              </Text>
-            </View>
-          </View>
-          <View style={styles.safetyActions}>
-            <Button
-              label="Message"
-              icon="chatbubble-outline"
-              size="small"
-              variant="secondary"
-              disabled={blocked}
-              onPress={() =>
-                router.navigate({
-                  pathname: "/chat",
-                  params: { recipient: member.id },
-                } as never)
-              }
-            />
-            <Button
-              label="Report member"
-              icon="flag-outline"
-              size="small"
-              variant="ghost"
-              disabled={safetyBusy}
-              onPress={() => setReportOpen(true)}
-            />
-            <Button
-              label={blocked ? "Unblock" : "Block"}
-              icon={blocked ? "person-add-outline" : "person-remove-outline"}
-              size="small"
-              variant={blocked ? "ghost" : "danger"}
-              loading={safetyBusy}
-              onPress={confirmBlockChange}
-            />
-            <Button
-              label="Safety Center"
-              icon="shield-checkmark-outline"
-              size="small"
-              variant="ghost"
-              onPress={() => router.push("/safety" as never)}
-            />
-          </View>
-        </Card>
-      ) : null}
-
       <Card style={styles.levelCard}>
         <View style={styles.levelHeading}>
           <View style={[styles.levelIcon, { backgroundColor: colors.primarySoft }]}>
@@ -454,6 +389,78 @@ export default function GroupMemberProfile() {
           </Card>
         </View>
       </TutorialTarget>
+      {!isSelf ? (
+        <Card style={styles.safetyCard}>
+          <View style={styles.safetyHeading}>
+            <View
+              style={[
+                styles.safetyIcon,
+                { backgroundColor: colors.primarySoft },
+              ]}
+            >
+              <Ionicons
+                name={blocked ? "shield" : "shield-outline"}
+                size={20}
+                color={blocked ? palette.red : colors.primary}
+              />
+            </View>
+            <View style={styles.heroCopy}>
+              <Text style={[styles.levelTitle, { color: colors.ink }]}>Community safety</Text>
+              <Text style={[styles.badgeDetail, { color: colors.muted }]}>
+                {blocked
+                  ? "Blocked · this member's messages are hidden on your device."
+                  : "Report a concern or block contact without leaving this profile."}
+              </Text>
+            </View>
+          </View>
+          <View style={styles.safetyActions}>
+            <View style={styles.safetyAction}>
+              <Button
+                label="Message"
+                icon="chatbubble-outline"
+                size="small"
+                variant="secondary"
+                disabled={blocked}
+                onPress={() =>
+                  router.navigate({
+                    pathname: "/chat",
+                    params: { recipient: member.id },
+                  } as never)
+                }
+              />
+            </View>
+            <View style={styles.safetyAction}>
+              <Button
+                label="Report member"
+                icon="flag-outline"
+                size="small"
+                variant="ghost"
+                disabled={safetyBusy}
+                onPress={() => setReportOpen(true)}
+              />
+            </View>
+            <View style={styles.safetyAction}>
+              <Button
+                label={blocked ? "Unblock" : "Block"}
+                icon={blocked ? "person-add-outline" : "person-remove-outline"}
+                size="small"
+                variant={blocked ? "ghost" : "danger"}
+                loading={safetyBusy}
+                onPress={confirmBlockChange}
+              />
+            </View>
+            <View style={styles.safetyAction}>
+              <Button
+                label="Safety Center"
+                icon="shield-checkmark-outline"
+                size="small"
+                variant="ghost"
+                onPress={() => router.push("/safety" as never)}
+              />
+            </View>
+          </View>
+        </Card>
+      ) : null}
       <SafetyReportSheet
         visible={reportOpen}
         title="Report member"
@@ -495,9 +502,9 @@ const styles = StyleSheet.create({
   safetyActions: {
     flexDirection: "row",
     flexWrap: "wrap",
-    justifyContent: "flex-end",
     gap: 7,
   },
+  safetyAction: { flexGrow: 1, flexBasis: "47%", minWidth: 126 },
   levelCard: { gap: 10, padding: 15, marginBottom: 12 },
   levelHeading: { flexDirection: "row", alignItems: "center", gap: 10 },
   levelIcon: { width: 38, height: 38, borderRadius: 12, alignItems: "center", justifyContent: "center" },

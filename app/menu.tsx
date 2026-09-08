@@ -6,6 +6,7 @@ import {
   PanResponder,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   View,
 } from "react-native";
@@ -45,6 +46,12 @@ const items = [
     detail: "Switch, invite, join, or manage group scoring",
     icon: "people-outline" as const,
     path: "/groups" as const,
+  },
+  {
+    label: "Legal & support",
+    detail: "Policies, community safety, account help and support",
+    icon: "shield-checkmark-outline" as const,
+    path: "/legal-support" as const,
   },
   {
     label: "Quick guide",
@@ -169,7 +176,7 @@ export default function MenuScreen() {
           <Ionicons name="chevron-forward" size={19} color={colors.faint} />
         </Pressable>
         </TutorialTarget>
-        <View style={styles.list}>
+        <ScrollView style={styles.menuScroll} contentContainerStyle={styles.list}>
           {items.map((item) => {
             const row = (
               <Pressable
@@ -217,7 +224,7 @@ export default function MenuScreen() {
               </React.Fragment>
             );
           })}
-        </View>
+        </ScrollView>
       </SafeAreaView>
     </View>
   );
@@ -271,7 +278,8 @@ const styles = StyleSheet.create({
   name: { color: palette.ink, fontSize: 18, fontWeight: "900" },
   meta: { color: palette.muted, fontSize: 12, marginTop: 2 },
   original: { color: palette.faint, fontSize: 10, marginTop: 1 },
-  list: { paddingVertical: 14, gap: 6 },
+  menuScroll: { flex: 1 },
+  list: { paddingVertical: 14, paddingBottom: 24, gap: 6 },
   item: {
     minHeight: 70,
     flexDirection: "row",

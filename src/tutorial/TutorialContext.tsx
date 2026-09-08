@@ -60,7 +60,10 @@ type TutorialContextValue = {
   transitionDurationMs: number;
   progressByGuide: Record<string, TutorialProgress | undefined>;
   hydrated: boolean;
-  startGuide: (guideId: string, options?: TutorialStartOptions) => boolean;
+  startGuide: (
+    guideId: string,
+    options?: TutorialStartOptions,
+  ) => ActiveTutorialSession | undefined;
   nextStep: () => boolean;
   previousStep: () => boolean;
   finishGuide: () => void;
@@ -341,15 +344,17 @@ export function TutorialProvider({
   const startGuide = useCallback(
     (guideId: string, options?: TutorialStartOptions) => {
       const guide = guideMap.get(guideId);
-      if (!guide?.steps.length) return false;
+      if (!guide?.steps.length) return undefined;
       const session = createTutorialSession(guide, {
         progress: progressByGuide[guide.id],
         resume: options?.resume,
         stepId: options?.stepId,
+        mode: options?.mode,
+        returnPath: options?.returnPath,
       });
       enterSession(session);
       persistSession(session);
-      return true;
+      return session;
     },
     [enterSession, guideMap, persistSession, progressByGuide],
   );

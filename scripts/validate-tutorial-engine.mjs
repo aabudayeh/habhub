@@ -41,6 +41,10 @@ const todaySource = fs.readFileSync("app/(tabs)/index.tsx", "utf8");
 const metricDetailSource = fs.readFileSync("app/metric-detail.tsx", "utf8");
 const menuSource = fs.readFileSync("app/menu.tsx", "utf8");
 const customizeSource = fs.readFileSync("app/customize.tsx", "utf8");
+const monthCalendarSource = fs.readFileSync(
+  "src/components/MonthCalendar.tsx",
+  "utf8",
+);
 
 assert.equal(tutorialRoutePath("/metric-detail?id=screen-time"), "/metric-detail");
 assert.equal(tutorialRoutePath("/insights/#grid"), "/insights");
@@ -351,8 +355,18 @@ assert.match(
 );
 assert.match(
   spotlightSource,
-  /setTimeout\(\(\) => \{[\s\S]{0,180}InteractionManager\.runAfterInteractions\([\s\S]{0,120}router\.navigate\(route as never\)[\s\S]{0,120}, 900\)/,
-  "Route enforcement must wait for the real control and native interactions before navigating.",
+  /if \(Platform\.OS === "web"\) \{[\s\S]{0,80}navigateIfCurrent\(\);[\s\S]{0,180}InteractionManager\.runAfterInteractions\(navigateIfCurrent\)/,
+  "Web route enforcement must bypass an indefinitely busy InteractionManager while native keeps its modal-safety delay.",
+);
+assert.match(
+  spotlightSource,
+  /if \(navigated \|\| currentStepIdentity\.current !== stepIdentity\) return;/,
+  "A delayed route recovery must never navigate for a stale tutorial step.",
+);
+assert.match(
+  spotlightSource,
+  /nativeNavigationWatchdog = setTimeout\(navigateIfCurrent, 1_400\)/,
+  "Native route recovery must bound InteractionManager waiting.",
 );
 assert.match(spotlightSource, /settledPath\.current === pathname/);
 assert.match(spotlightSource, /reduceMotion \? 0 : samePage \? 460 : 950/);
@@ -443,6 +457,16 @@ assert.match(
   "Tutorial and ordinary filter activation must share one handler",
 );
 assert.match(
+  todaySource,
+  /id="today-filter-manage"[\s\S]{0,120}onTutorialActivate=\{openViewFilterManager\}[\s\S]{0,160}onPress=\{openViewFilterManager\}/,
+  "Watch mode and an ordinary tap must share the filter-manager route action.",
+);
+assert.match(
+  monthCalendarSource,
+  /id=\{tutorialDayTarget!\}[\s\S]{0,120}onTutorialActivate=\{\(\) => onSelect\(day\.key\)\}/,
+  "The Progress day lesson must expose its real date-navigation action to Watch mode.",
+);
+assert.match(
   spotlightSource,
   /accessibilityViewIsModal\s+aria-modal/,
   "The tutorial must remain an accessibility modal during real pointer practice",
@@ -490,7 +514,7 @@ assert.doesNotMatch(
   /transitionDurationMs \* 2/,
   "Exit navigation must happen while the transition curtain is fully covered",
 );
-assert.match(quickGuideSource, /startGuide\(guide\.id, \{ resume \}\)/);
+assert.match(quickGuideSource, /startGuide\(guide\.id, \{ resume, mode \}\)/);
 assert.match(quickGuideSource, /progressByGuide/);
 
 const scanned = [

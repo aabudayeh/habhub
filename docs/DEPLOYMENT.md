@@ -298,6 +298,104 @@ token for destructive delivery testing.
 
 ## 6. Build and deploy
 
+### Coordinated group-productivity and account-reset rollout
+
+The September 8 release candidate adds these two migrations to an environment
+that is already current through `202609050002_google_health_history_window.sql`:
+
+- `202609080003_group_hub_social_productivity.sql` adds RLS-protected group
+  notes and schedule items, revision-checked mutation RPCs, linked social
+  targets for notes/chat, compact workspace invalidations, and canonical
+  notification/outbox events for group notes, schedule changes, social actions,
+  and group to-do completion.
+- `202609080004_reset_account_private_data.sql` adds the server-only private
+  account-data reset RPC and a monotonic reset marker that prevents a stale
+  device snapshot from restoring data after a reset. The reset keeps the auth
+  identity, memberships, and retained shared manual content; it removes private
+  data, imported health data, reminders/preferences, device/push state, private
+  or unlisted templates, and mutable challenge projections.
+
+A fresh Supabase project must still apply every repository migration in
+timestamp order. For an existing production project, use this exact rollout:
+
+1. Run `pnpm.cmd check:release`, confirm database backups/PITR and a tested
+   restore procedure, record the release commit, and capture the current linked
+   migration list. Do not test the destructive reset with a production user.
+2. Quiesce group push dispatch with the
+   `push_dispatch_configuration.emitters_active = false` procedure in section
+   5. Leave it off until the matching `send-push` function is deployed and its
+   test-account checks pass.
+3. Preview the database change. On a project already current through
+   `202609050002`, the dry run must list exactly `202609080003` followed by
+   `202609080004`; stop if it contains an unexpected, missing, or reordered
+   migration.
+
+   ```powershell
+   pnpm.cmd exec supabase migration list --linked
+   pnpm.cmd exec supabase db push --dry-run --linked --yes
+   ```
+
+4. Apply both migrations as one coordinated database step, then confirm both
+   timestamps appear in the remote column. Do not deploy only `202609080003`
+   and open the new client to users; the same client also exposes account reset
+   and requires `202609080004`.
+
+   ```powershell
+   pnpm.cmd exec supabase db push --linked --yes
+   pnpm.cmd exec supabase migration list --linked
+   ```
+
+5. Deploy `reset-account-data` only after `202609080004` is present, then deploy
+   the matching `send-push` revision only after `202609080003` is present.
+
+   ```powershell
+   pnpm.cmd exec supabase functions deploy reset-account-data --project-ref YOUR_PROJECT_REF
+   pnpm.cmd exec supabase functions deploy send-push --project-ref YOUR_PROJECT_REF
+   ```
+
+6. With disposable test accounts, verify RLS and revision conflicts for group
+   notes/schedule; linked reactions/comments; actor exclusion and block
+   filtering; group to-do completion/all-complete preferences; and notification
+   deep links. Export the reset test account first, invoke **Clear account
+   data**, and verify the sign-in, memberships, and retained shared manual
+   content remain while private/health/reminder/device state is absent on a
+   second signed-in device. Also confirm a malformed reset request fails closed
+   and a pre-reset offline snapshot cannot overwrite the reset marker.
+7. Resume `emitters_active` only after the updated push path succeeds for a
+   real Expo test token and a Web Push test subscription. Verify the row after
+   setting it to `true`, then confirm preference-off and blocked-recipient tests
+   suppress delivery.
+8. Export and deploy the web client from the recorded release commit, verify the
+   deployment returned by EAS rather than an older URL, and smoke-test the
+   production origin with two accounts. Request Android/iOS builds from that
+   same commit; record each build ID and wait for `FINISHED` before treating the
+   binary as available.
+
+   ```powershell
+   pnpm.cmd export:web
+   pnpm.cmd exec eas deploy --prod --non-interactive --json
+   pnpm.cmd exec eas build --profile preview --platform android --non-interactive --json
+   ```
+
+Rollback is intentionally asymmetric:
+
+- If a preflight, migration, function, or push smoke test fails, keep dispatch
+  quiesced and the previous client deployed while fixing forward. Do not drop
+  the new tables or reset fence after either feature has been used.
+- After `202609080003`, do not roll `send-push` back to a revision that cannot
+  interpret the new group event types. Repair/deploy a compatible worker while
+  dispatch remains off.
+- After an account reset, its private-data deletion is not undoable from the
+  app, and the monotonic reset marker must not be removed or moved backward.
+  Never automatically restore user-cleared data from a backup; any exceptional
+  recovery requires an explicit, legally reviewed operator procedure that
+  respects the user's deletion intent.
+- A web/native rollback must remain compatible with the reset marker. In
+  particular, do not send a user who has reset data back to a client revision
+  that can upload a pre-reset snapshot. Native binaries cannot be recalled
+  instantly, which is why the additive backend and matching functions deploy
+  before the new clients.
+
 Health sync, barcode scanning, and push notifications are configured in `app.json`. They require a new native EAS build. Remote push is not available in Expo Go on Android; test it in the preview/release APK. Test Apple Health on a physical iPhone. On Android, test Health Connect on Android 8+; Android 14 includes it in the system, while older supported versions may require the Health Connect app.
 
 Before distributing the Android production build, complete Google Play's Health Connect declaration for every requested read category. Confirm Samsung Health, MyFitnessPal, or Google Fit is allowed to write into Health Connect if you want its data to appear. On iOS, allow compatible apps to write into Apple Health and grant MetricRally read access when prompted.
@@ -382,6 +480,17 @@ Before public release:
 - Configure database backups and a staging Supabase project.
 - Review consent, data retention, deletion, incident response, and processor agreements for health-related data.
 - Test deep links, OAuth, email confirmation, offline conflicts, large text, photos, RLS boundaries, and deletion on physical iOS and Android devices.
+
+Marketing export validation is a media-structure gate, not signed-device or
+store acceptance. The current plan produces 10 Apple screenshots, 8 Google
+screenshots, a Google feature graphic, 4 social highlights, a 29.9-second Apple
+preview, a 44.9-second Google cut, and a 99-second long-form feature tour. All
+three MP4 masters are captions-first and intentionally contain a silent AAC
+track; they do not include licensed music or voiceover. Follow
+`store/capture-plan.json` and `store/README.md`: background health/Samsung
+source behavior, notification delivery, Android widgets, Android native
+progress-video export, and iOS Apple Health claims remain blocked from
+promotion until captured and verified on the corresponding signed binaries.
 
 ## Troubleshooting
 

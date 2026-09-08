@@ -65,6 +65,7 @@ const targetFiles = {
   "today-reorder": ["app/(tabs)/index.tsx"],
   "today-edit-menu": ["app/(tabs)/index.tsx"],
   "today-filter": ["app/(tabs)/index.tsx"],
+  "today-filter-manage": ["app/(tabs)/index.tsx"],
   "today-view-filter-list": ["app/view-filters.tsx"],
   "today-all-complete": ["app/(tabs)/index.tsx"],
   "status-avatar": ["app/(tabs)/status.tsx"],
@@ -171,6 +172,14 @@ const actionWiring = {
   "tutorial.today.reorder": {
     file: "app/(tabs)/index.tsx",
     prerequisite: "reorderMetric(item.id",
+  },
+  "tutorial.today.open-filter-sheet": {
+    file: "app/(tabs)/index.tsx",
+    prerequisite: "setShowViewFilters(true)",
+  },
+  "tutorial.today.open-filter-manager": {
+    file: "app/(tabs)/index.tsx",
+    prerequisite: "router.navigate({",
   },
   "tutorial.status.open-simulator": {
     file: "app/(tabs)/status.tsx",

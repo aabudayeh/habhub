@@ -93,6 +93,21 @@ assert.match(
   /function markSavedAndLeave[\s\S]{0,220}initialDraftSignature\.current = draftSignature[\s\S]{0,120}dirtyRef\.current = false/,
   "A successful tracker save must mark the current draft clean before leaving",
 );
+assert.match(
+  metricEditor,
+  /const \[healthType, setHealthType\][\s\S]{0,180}isDuplicate \? "" : tracker\?\.healthMapping/,
+  "duplicating a tracker style must detach its device-health mapping",
+);
+assert.match(
+  metricEditor,
+  /label="Duplicate tracker style"[\s\S]{0,500}duplicate: "1"/,
+  "every existing tracker editor must expose the style-duplicate action",
+);
+assert.match(
+  metricEditor,
+  /tracker && !isDuplicate[\s\S]{0,120}updateMetric\(tracker\.id, definition\)[\s\S]{0,700}else addMetric\(common\)/,
+  "a duplicate must create a new tracker instead of overwriting its source",
+);
 
 assert.match(
   groupSettings,

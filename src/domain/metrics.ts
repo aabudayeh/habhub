@@ -265,9 +265,13 @@ export function metricValue(
     return photosForDay(state.photos, userId, localDate).length;
   }
   if (metric.dataType !== "calculated") {
-    const sameDay = entriesForDay(state.entries, metric.id, userId, localDate)
+    const rawSameDay = entriesForDay(state.entries, metric.id, userId, localDate)
       .slice()
       .sort((a, b) => a.recordedAt.localeCompare(b.recordedAt));
+    const sameDay =
+      metric.stepFallback && state.settings.estimateUnrecordedSteps !== true
+        ? rawSameDay.filter((entry) => !isCalculatedStepFallback(entry))
+        : rawSameDay;
     if (metric.stepFallback) {
       // Recalculate the uncovered-step component from the current day instead
       // of depending on a previously materialized `step-fallback` row. This
@@ -288,6 +292,18 @@ export function metricValue(
           ? reconciledActiveEnergyValue(measuredEntries)
           : aggregate(measuredEntries, metric.aggregation)
         : 0;
+      if (state.settings.estimateUnrecordedSteps !== true) {
+        // Distance and duration are measured values and must retain their
+        // fractional precision when the optional step estimate is disabled.
+        // Active energy keeps its established whole-kcal presentation.
+        if (
+          metric.healthMapping?.dataType === "workouts" &&
+          (metric.healthMapping.field === "distance_km" ||
+            metric.healthMapping.field === "duration_minutes")
+        )
+          return measuredValue;
+        return Math.round(measuredValue);
+      }
       const steps = state.metrics.find(
         (candidate) =>
           candidate.healthMapping?.dataType === "steps" &&
@@ -342,7 +358,9 @@ export function metricValue(
       );
     if (metric.aggregation !== "latest") return 0;
     const carried = latestEntryOnOrBefore(
-      state.entries,
+      metric.stepFallback && state.settings.estimateUnrecordedSteps !== true
+        ? state.entries.filter((entry) => !isCalculatedStepFallback(entry))
+        : state.entries,
       metric.id,
       userId,
       localDate,

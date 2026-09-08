@@ -4,7 +4,7 @@ import { router } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import { Platform, Pressable, StyleSheet, View } from 'react-native';
 
-import { EnergyProfileEditor, MetricGoalsEditor, StreakSettingsEditor } from '@/src/components/ProfileEditors';
+import { EnergyProfileEditor, MetricGoalsEditor, ProfileBehaviorEditor, StreakSettingsEditor } from '@/src/components/ProfileEditors';
 import { AppText as Text, AppTextInput as TextInput } from "@/src/components/AppText";
 import { Avatar, Card, IconButton, PageHeader, Screen } from '@/src/components/ui';
 import { memberRoleLabel } from '@/src/domain/members';
@@ -64,6 +64,7 @@ export default function ProfileScreen(){
       </View>:null}
     </Card>
     <EnergyProfileEditor/>
+    <ProfileBehaviorEditor/>
     <MetricGoalsEditor/>
     <StreakSettingsEditor/>
     <Pressable onPress={()=>router.push(`/member-profile/${me.id}` as never)} style={[styles.linkCard,{backgroundColor:colors.card,borderColor:colors.border}]}><View style={[styles.linkIcon,{backgroundColor:colors.primarySoft}]}><Ionicons name="trophy-outline" size={21} color={accent}/></View><View style={styles.copy}><Text style={[styles.linkTitle,{color:colors.ink}]}>Public profile & badge showcase</Text><Text style={[styles.meta,{color:colors.muted}]}>Preview how you appear to friends and choose up to five featured badges.</Text></View><Ionicons name="chevron-forward" size={19} color={colors.faint}/></Pressable>

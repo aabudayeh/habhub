@@ -762,7 +762,13 @@ assert.doesNotMatch(
 assert.match(detail, /foodMacroBarGoalTick/);
 assert.match(detail, /foodMacroGoalTick,[\s\S]{0,120}backgroundColor: palette\.amber/);
 assert.match(detail, /borderTopColor: palette\.amber/);
-assert.match(detail, /Goal bars show percent of goal; no-goal bars show percent of range maximum/);
+assert.match(
+  detail,
+  /Bars compare with your goal first, then the daily reference; otherwise the visible range/,
+);
+assert.match(detail, /label="About daily nutrition references"/);
+assert.match(detail, /Your goal[\s\S]{0,250}Daily ref/);
+assert.match(detail, /dailyNutrientReference\([\s\S]{0,200}state\.settings\.energyProfile/);
 assert.doesNotMatch(detail, /styles\.foodMacroGoalLine/);
 assert.match(
   logScreen,

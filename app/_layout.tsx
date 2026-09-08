@@ -611,6 +611,13 @@ function RootNavigator() {
         enabled: state.settings.notifications.pushEnabled,
         language: state.settings.language,
         todoReminders: state.settings.notifications.todoReminders,
+        groupTodoReminderPreferences: Object.entries(
+          state.settings.notifications.groupPreferencesByGroup ?? {},
+        ).map(([groupId, preference]) => [
+          groupId,
+          preference.enabled,
+          preference.todoReminders,
+        ]),
         quiet: [
           state.settings.notifications.quietHoursEnabled,
           state.settings.notifications.quietHoursStart,
@@ -1291,6 +1298,10 @@ function RootNavigator() {
               <Stack.Screen name="terms" options={{ animation: "fade" }} />
               <Stack.Screen name="support" options={{ animation: "fade" }} />
               <Stack.Screen
+                name="legal-support"
+                options={{ presentation: "modal" }}
+              />
+              <Stack.Screen
                 name="delete-account"
                 options={{ animation: "fade" }}
               />
@@ -1370,6 +1381,14 @@ function RootNavigator() {
               />
               <Stack.Screen
                 name="group-settings"
+                options={{ presentation: "modal" }}
+              />
+              <Stack.Screen
+                name="group-schedule"
+                options={{ presentation: "modal" }}
+              />
+              <Stack.Screen
+                name="group-notes"
                 options={{ presentation: "modal" }}
               />
               <Stack.Screen name="badges" options={{ presentation: "modal" }} />

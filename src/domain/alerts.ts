@@ -18,7 +18,9 @@ export type AlertCategory =
   | "lead"
   | "message"
   | "achievement"
-  | "challenge";
+  | "challenge"
+  | "todo"
+  | "workspace";
 export type PaceAlert = {
   id: string;
   category: AlertCategory;
@@ -315,13 +317,37 @@ export function buildAlerts(
   const challengeEvents = groupNotificationEvents
     .filter((event) => {
       if (!groupEventsEnabled) return false;
+      const userAuthoredUpdate =
+        event.kind === "social_reaction" ||
+        event.kind === "social_comment" ||
+        event.kind === "group_todo_completed" ||
+        event.kind === "group_todo_all_completed" ||
+        event.kind === "group_note_created" ||
+        event.kind === "group_note_updated" ||
+        event.kind === "group_schedule_created" ||
+        event.kind === "group_schedule_updated";
+      if (userAuthoredUpdate && event.actorId && blockedUserIds.has(event.actorId))
+        return false;
       if (
         event.kind === "social_reaction" ||
         event.kind === "social_comment"
       ) {
-        if (event.actorId && blockedUserIds.has(event.actorId)) return false;
         return socialReactionsEnabled;
       }
+      if (
+        (event.kind === "group_todo_completed" ||
+          event.kind === "group_todo_all_completed") &&
+        groupPreferences?.todoUpdates === false
+      )
+        return false;
+      if (
+        (event.kind === "group_note_created" ||
+          event.kind === "group_note_updated" ||
+          event.kind === "group_schedule_created" ||
+          event.kind === "group_schedule_updated") &&
+        groupPreferences?.workspaceUpdates === false
+      )
+        return false;
       if (
         (event.kind === "challenge_invitation" ||
           event.kind === "challenge_accepted" ||
@@ -358,6 +384,16 @@ export function buildAlerts(
     const socialReaction = event.kind === "social_reaction";
     const socialComment = event.kind === "social_comment";
     const socialInteraction = socialReaction || socialComment;
+    const todoUpdate =
+      event.kind === "group_todo_completed" ||
+      event.kind === "group_todo_all_completed";
+    const noteUpdate =
+      event.kind === "group_note_created" ||
+      event.kind === "group_note_updated";
+    const scheduleUpdate =
+      event.kind === "group_schedule_created" ||
+      event.kind === "group_schedule_updated";
+    const workspaceUpdate = noteUpdate || scheduleUpdate;
     const socialEntry =
       event.targetType === "metric_entry" && event.targetId
         ? state.entries.find(
@@ -367,8 +403,22 @@ export function buildAlerts(
         : undefined;
     return {
       id: `group-notification-${event.id}`,
-      category: socialInteraction ? "lead" : "challenge",
-      icon: socialInteraction
+      category: socialInteraction
+        ? "lead"
+        : todoUpdate
+          ? "todo"
+          : workspaceUpdate
+            ? "workspace"
+            : "challenge",
+      icon: workspaceUpdate
+        ? noteUpdate
+          ? "document-text-outline"
+          : "calendar-outline"
+        : todoUpdate
+        ? event.kind === "group_todo_all_completed"
+          ? "checkmark-done-circle-outline"
+          : "checkbox-outline"
+        : socialInteraction
         ? socialComment
           ? "chatbubble-ellipses-outline"
           : event.reaction === "cheer"
@@ -391,7 +441,11 @@ export function buildAlerts(
         socialReaction && event.reaction === "cheer"
           ? "party-popper"
           : "ionicons",
-      color: socialInteraction
+      color: workspaceUpdate
+        ? palette.primary
+        : todoUpdate
+        ? palette.lime
+        : socialInteraction
         ? socialComment
           ? palette.primary
           : event.reaction === "cheer"
@@ -404,7 +458,19 @@ export function buildAlerts(
           : palette.lime,
       title:
         event.title ??
-        (invitation
+        (workspaceUpdate
+          ? noteUpdate
+            ? event.kind === "group_note_created"
+              ? "New group note"
+              : "Group note updated"
+            : event.kind === "group_schedule_created"
+              ? "New group event"
+              : "Group event updated"
+          : todoUpdate
+          ? event.kind === "group_todo_all_completed"
+            ? "Everyone completed a group to-do"
+            : "Group to-do completed"
+          : invitation
           ? "Challenge started"
           : allAccepted
             ? "Everyone is in"
@@ -417,7 +483,11 @@ export function buildAlerts(
                   : "Challenge standings changed"),
       detail:
         event.detail ??
-        (invitation
+        (workspaceUpdate
+          ? `${actor ? memberDisplayName(state, actor) : "A friend"} updated the shared group workspace.`
+          : todoUpdate
+          ? `${actor ? memberDisplayName(state, actor) : "A friend"} updated a shared task.`
+          : invitation
           ? "Open HabHub to accept or decline."
           : allAccepted
             ? "Everyone accepted the challenge."
@@ -434,6 +504,7 @@ export function buildAlerts(
       groupId: event.groupId,
       metricId: socialEntry?.metricId,
       entryId: event.targetId,
+      todoId: todoUpdate ? event.targetId : undefined,
       localDate: event.occurrenceDate,
       targetType: event.targetType,
       interactionSurface: event.interactionSurface,

@@ -17,6 +17,7 @@ import {
 } from "@/src/components/useWebBeforeUnload";
 import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import { TodoSubtaskEditorSection } from "@/src/components/TodoSubtaskEditorSection";
+import { TodoBatchImportSection } from "@/src/components/TodoBatchImportSection";
 import { useTodoLabelDoubleTap } from "@/src/components/useTodoDoubleTap";
 import {
   Card,
@@ -543,6 +544,56 @@ export default function TodoEditor() {
     });
     return todo;
   };
+  const stageBatchOutline = (
+    items: Parameters<React.ComponentProps<typeof TodoBatchImportSection>["onImport"]>[0],
+  ) => {
+    if (!items.length) return;
+    const consumeFirstRoot = !existing && !title.trim();
+    const anchor = consumeFirstRoot ? undefined : stageCurrentTodo();
+    if (!consumeFirstRoot && !anchor) return;
+    const draftIdByKey = new Map<string, string>();
+    const now = new Date().toISOString();
+    const nextOrder =
+      Math.max(
+        -1,
+        ...(state.todos ?? []).map((todo) => todo.order ?? -1),
+        ...stagedNodes.map((node) => node.value.order ?? -1),
+      ) + 1;
+    items.forEach((item, index) => {
+      const importedId =
+        consumeFirstRoot && index === 0
+          ? draftTodoId
+          : newTodoEditorDraftId("todo-batch");
+      draftIdByKey.set(item.key, importedId);
+      const importedParentId = item.parentKey
+        ? draftIdByKey.get(item.parentKey)
+        : consumeFirstRoot
+          ? resolvedParentId
+          : anchor?.id;
+      const imported: TodoItem = {
+        id: importedId,
+        title: item.title,
+        createdAt: now,
+        priority: "normal",
+        reminders: [],
+        completedDates: [],
+        skippedDates: [],
+        order: nextOrder + index,
+        parentId: importedParentId,
+        labels: item.labels,
+      };
+      upsertTodoEditorDraft(editorTreeId, {
+        id: imported.id,
+        parentId: imported.parentId,
+        title: imported.title,
+        value: imported,
+      });
+    });
+    if (consumeFirstRoot) {
+      setTitle(items[0].title);
+      setDescription("");
+    }
+  };
   const persist = () => {
     const todo = stageCurrentTodo();
     if (!todo) return undefined;
@@ -654,22 +705,17 @@ export default function TodoEditor() {
           ]}
         />
         {parsedLabels.length ? (
-          <>
-            <View style={styles.wrap}>
-              {parsedLabels.map((label) => (
-                <Chip
-                  key={label}
-                  label={`#${label}`}
-                  selected
-                  onPress={() => onLabelTap(label)}
-                />
-              ))}
-            </View>
-            <Text style={[styles.help, { color: colors.muted }]}>Double-tap a label to remove it, or delete its #label text.</Text>
-          </>
-        ) : (
-          <Text style={[styles.help, { color: colors.muted }]}>Add #labels in the title or note to group and filter tasks quickly.</Text>
-        )}
+          <View style={styles.wrap}>
+            {parsedLabels.map((label) => (
+              <Chip
+                key={label}
+                label={`#${label}`}
+                selected
+                onPress={() => onLabelTap(label)}
+              />
+            ))}
+          </View>
+        ) : null}
         <TextInput
           value={description}
           onChangeText={setDescription}
@@ -700,6 +746,7 @@ export default function TodoEditor() {
           ))}
         </View>
       </Card>
+      <TodoBatchImportSection onImport={stageBatchOutline} />
       <TutorialTarget id="todo-timing">
       <Card style={styles.form}>
         <Pressable
@@ -1271,9 +1318,9 @@ export default function TodoEditor() {
       </TutorialTarget>
       <TodoSubtaskEditorSection
         items={
-          existing
+          existing || title.trim()
             ? editorTodos.filter((todo) =>
-                descendantTodoIds(editorTodos, existing.id).has(todo.id),
+                descendantTodoIds(editorTodos, existing?.id ?? draftTodoId).has(todo.id),
               )
             : []
         }

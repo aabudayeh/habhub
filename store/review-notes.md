@@ -1,7 +1,33 @@
-# Store review notes — completion template
+# Store review notes — incomplete pre-submission template
 
 Do not upload this file unchanged. Replace each bracketed item with verified
 release-candidate information.
+
+## Blocking pre-submission checklist
+
+Every box below must be completed with evidence from the exact signed binaries
+submitted for review. An unchecked box or bracketed value means the release is
+not ready to submit; none of these entries is a claim of completion.
+
+- [ ] **Review test account:** `[STORE_REVIEW_ACCOUNT]` and
+  `[SECURELY PROVIDED IN CONSOLE]` are configured, login is verified, and no
+  personal/production-user data is present.
+- [ ] **Group review path:** `[INVITE OR PRESEEDED REVIEW GROUP STEPS]` works
+  from a clean install for the review account.
+- [ ] **Signed artifacts:** `[IOS ARCHIVE BUILD ID / DATE]` and
+  `[ANDROID AAB BUILD ID / DATE]` match the store uploads; signing,
+  entitlements, permissions, deep links, account reset/deletion, notifications,
+  reminders, and background health evidence is attached to the release record.
+- [ ] **Human moderation operation:** moderation owner/SLA remains
+  `[IMPLEMENT AND VERIFY]` until a named, monitored owner has exercised the
+  service-only queue and documented escalation/response coverage.
+- [ ] **Support and deletion operations:**
+  `[FINALIZE BEFORE SUBMISSION]` is replaced with the monitored mailbox owner,
+  manual deletion-request procedure, and response target.
+- [ ] **Marketing truth review:** every promoted native-only claim has the
+  signed-device evidence required by `capture-plan.json`; the 99-second feature
+  tour and the two shorter masters are acknowledged as captions-first videos
+  with an intentionally silent AAC track and no implied music/voiceover license.
 
 ## Review access
 
@@ -60,6 +86,18 @@ release-candidate information.
   deletion instead of leaving anonymous authored rows.
 - Manual request handling owner and response target: `[FINALIZE BEFORE SUBMISSION]`
 
+## Account-data reset (different from deletion)
+
+- In app: **Menu → Cloud account & health sync → Data controls → Clear account
+  data**.
+- This permanently clears private account data, imported health data,
+  reminders/preferences, and registered device/push state while retaining the
+  sign-in, group memberships, and manually created content already shared with
+  groups. It does not replace **Delete cloud account and data**.
+- Review proof: `[DISPOSABLE TEST ACCOUNT, SECOND-DEVICE CHECK, DATE, RESULT]`.
+  Export the test account first; never exercise this irreversible reset on a
+  production user's account.
+
 ## Content safety
 
 - Reporting path: in Chat, open a member message's safety control; in Feed,
@@ -71,7 +109,7 @@ release-candidate information.
 - Block-user path: open the member profile from Leaderboard/Chat and choose
   **Block**. Their cached and future chat/feed content is hidden immediately;
   direct messages and user-authored pushes are suppressed in both directions.
-- Moderation owner/SLA: `[IMPLEMENT AND VERIFY]`
+- Moderation owner/SLA: `[IMPLEMENT AND VERIFY — BLOCKING BEFORE SUBMISSION]`
 - Published community standards: `https://habhub.expo.app/community-guidelines`
 
 The reporting/blocking implementation and service-only operator queue are

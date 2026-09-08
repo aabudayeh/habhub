@@ -1005,6 +1005,7 @@ function metricFromRow(row: Record<string, any>): MetricDefinition {
         : configuration.manualEntry ?? preset?.manualEntry ?? row.slug !== "steps",
     timerEnabled:
       configuration.timerEnabled ?? preset?.timerEnabled,
+    quickEntry: configuration.quickEntry ?? preset?.quickEntry,
     submetrics: configuration.submetrics ?? preset?.submetrics,
     submetricDisplay:
       configuration.submetricDisplay ?? preset?.submetricDisplay,
@@ -1056,6 +1057,7 @@ function metricRow(groupId: string, metric: MetricDefinition) {
       stepFallback: metric.stepFallback,
       manualEntry: metric.manualEntry,
       timerEnabled: metric.timerEnabled,
+      quickEntry: metric.quickEntry,
       submetrics: metric.submetrics,
       submetricDisplay: metric.submetricDisplay,
       visualization: metric.visualization,
@@ -2003,6 +2005,7 @@ export async function loadCloudWorkspace(
               personal.gymMuscleGroups ?? shared.gymMuscleGroups,
             stepFallback: personal.stepFallback ?? shared.stepFallback,
             manualEntry: personal.manualEntry ?? shared.manualEntry,
+            quickEntry: personal.quickEntry ?? shared.quickEntry,
             sections: {
               ...shared.sections,
               today: personal.sections.today,

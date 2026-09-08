@@ -159,24 +159,43 @@ for (const source of [read("app/terms.tsx"), read("app/support.tsx")]) {
     "Terms and support must link to the public Community Guidelines.",
   );
 }
-const settings = read("app/settings.tsx");
+const menu = read("app/menu.tsx");
+assert(
+  menu.includes('path: "/legal-support"'),
+  "Settings menu must link to the standalone Legal & support page.",
+);
+const legalSupport = read("app/legal-support.tsx");
 for (const route of ["privacy", "terms", "support", "delete-account", "community-guidelines"]) {
-  assert(settings.includes(`router.push("/${route}"`), `Settings must link to /${route}.`);
+  assert(
+    legalSupport.includes(`path: "/${route}"`),
+    `Legal & support must link to /${route}.`,
+  );
 }
 
 assertLegalUrls(parseEnv(read(".env.example")), ".env.example");
 if (exists(".env")) assertLegalUrls(parseEnv(read(".env")), ".env");
 
 const capturePlan = JSON.parse(read("store/capture-plan.json"));
-assert(capturePlan.screenshots?.length >= 8, "Capture plan needs at least eight feature scenes.");
-const androidWidgetScene = capturePlan.screenshots.find((scene) => scene.id === "android-widgets");
+assert(
+  capturePlan.storeScreenshots?.length >= 8,
+  "Capture plan needs at least eight store screenshot scenes.",
+);
+assert(
+  capturePlan.featureTourScenes?.length >= 8,
+  "Capture plan needs at least eight feature-tour scenes.",
+);
+const marketingScenes = [
+  ...capturePlan.storeScreenshots,
+  ...capturePlan.featureTourScenes,
+];
+const androidWidgetScene = marketingScenes.find((scene) => scene.id === "android-widgets");
 assert(
   !androidWidgetScene ||
     (androidWidgetScene.platforms?.length === 1 && androidWidgetScene.platforms[0] === "google"),
   "If Android widgets are marketed, they must remain a Google-only scene.",
 );
 assert(
-  !capturePlan.screenshots.some((scene) =>
+  !marketingScenes.some((scene) =>
     ["background-sync", "notification-tap", "native-video-export"].includes(scene.id),
   ),
   "Unverified native-only behavior must not appear in the store capture plan.",

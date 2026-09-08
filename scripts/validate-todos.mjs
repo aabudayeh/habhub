@@ -21,6 +21,10 @@ import {
   resolveTodoEditorDraftParentId,
   upsertTodoEditorDraft,
 } from "../src/state/todoEditorDrafts.ts";
+import {
+  parseTodoBatch,
+  TODO_BATCH_MAX_ITEMS,
+} from "../src/domain/todoBatch.ts";
 
 const root = resolve(import.meta.dirname, "..");
 const read = (path) => readFileSync(resolve(root, path), "utf8");
@@ -55,6 +59,54 @@ assert.equal(
   removeTodoLabelFromText("Task #work", "work"),
   "Task",
   "removing a trailing label must not leave trailing whitespace",
+);
+
+const batch = parseTodoBatch(
+  "- Plan launch #Work\n  - QA Android #release\n    1. Verify reminders\n\n* Prepare screenshots #store\n\t- Review captions #work",
+);
+assert.deepEqual(batch.errors, [], "a valid mixed-bullet outline should parse cleanly");
+assert.equal(batch.ignoredBlankLines, 1);
+assert.deepEqual(
+  batch.items.map(({ title, depth, parentKey, labels }) => ({
+    title,
+    depth,
+    parentKey,
+    labels,
+  })),
+  [
+    { title: "Plan launch #Work", depth: 0, parentKey: undefined, labels: ["work"] },
+    { title: "QA Android #release", depth: 1, parentKey: "line-1", labels: ["release"] },
+    { title: "Verify reminders", depth: 2, parentKey: "line-2", labels: [] },
+    { title: "Prepare screenshots #store", depth: 0, parentKey: undefined, labels: ["store"] },
+    { title: "Review captions #work", depth: 1, parentKey: "line-5", labels: ["work"] },
+  ],
+  "batch import must preserve parentage, source order, and normalized labels",
+);
+assert.deepEqual(
+  parseTodoBatch("- [ ] Parent\n  - [x] Finished child").items.map((item) => item.title),
+  ["Parent", "Finished child"],
+  "task-list checkbox markers are syntax rather than title text",
+);
+assert.ok(
+  parseTodoBatch("  - Orphan").errors.some((issue) => issue.code === "indented_root"),
+  "an indented first bullet must fail instead of creating an invisible orphan",
+);
+assert.ok(
+  parseTodoBatch("- Root\n    - Child\n  - Half dedent").errors.some(
+    (issue) => issue.code === "inconsistent_indent",
+  ),
+  "a dedent must return to a previously established hierarchy level",
+);
+assert.ok(
+  parseTodoBatch("No bullet").errors.some((issue) => issue.code === "missing_bullet"),
+  "plain prose must not be silently imported as a task",
+);
+assert.equal(
+  parseTodoBatch(
+    Array.from({ length: TODO_BATCH_MAX_ITEMS + 1 }, (_, index) => `- Item ${index}`).join("\n"),
+  ).items.length,
+  TODO_BATCH_MAX_ITEMS,
+  "the parser must cap the number of staged records",
 );
 
 const labeledTodo = {
@@ -207,6 +259,7 @@ const reminderFeatureState = {
     { id: "active", groupTodosEnabled: true },
     { id: "disabled", groupTodosEnabled: false },
   ],
+  settings: { notifications: { groupPreferencesByGroup: {} } },
 };
 assert.equal(
   groupTodoReminderFeatureEnabled(reminderFeatureState, {
@@ -450,6 +503,7 @@ assert.match(chat, /attachableGroupTodos/);
 assert.match(chat, /groupTodoItemVisibility\.isVisible/);
 
 const groupEditor = read("app/group-todo-editor.tsx");
+assert.match(groupEditor, /<TodoBatchImportSection/);
 assert.match(groupEditor, /repeatMode/);
 assert.match(groupEditor, /groupTodoId: savedId/);
 assert.match(groupEditor, /Private to you and synced only with your account/);
@@ -466,6 +520,7 @@ assert.match(groupEditor, /canManageItem=/);
 assert.match(groupEditor, /<Ionicons name="trash-outline"[\s\S]{0,120}Delete for group/);
 assert.match(groupEditor, /useWebBackNavigationGuard/);
 const personalEditor = read("app/todo-editor.tsx");
+assert.match(personalEditor, /<TodoBatchImportSection/);
 assert.match(personalEditor, /<TodoSubtaskEditorSection/);
 assert.match(personalEditor, /router\.push/);
 assert.match(personalEditor, /draftTreeId: editorTreeId/);
@@ -484,6 +539,10 @@ assert.doesNotMatch(
   /const labels = todoLabels\(\{[\s\S]{0,120}existing\?\.labels/,
   "group labels must also disappear when their inline #label text is removed",
 );
+const batchImporter = read("src/components/TodoBatchImportSection.tsx");
+assert.match(batchImporter, /InfoPopover/);
+assert.match(batchImporter, /Nothing is saved until you use Save/);
+assert.match(batchImporter, />Preview</);
 const todoDoubleTap = read("src/components/useTodoDoubleTap.ts");
 assert.match(todoDoubleTap, /previous\?\.id === item\.id/);
 assert.match(todoDoubleTap, /if \(!alreadyComplete\) callbacks\.current\.onComplete\(item\)/);

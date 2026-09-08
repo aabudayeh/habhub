@@ -462,6 +462,7 @@ export default function SettingsScreen() {
     | "history"
     | "history-window"
     | "signout"
+    | "reset"
     | "delete"
     | null
   >(null);
@@ -517,6 +518,68 @@ export default function SettingsScreen() {
     } finally {
       setBusy(null);
     }
+  }
+
+  async function clearAccountData() {
+    setBusy("reset");
+    try {
+      await cloud.resetAccountData();
+      Alert.alert(
+        "Account data cleared",
+        "Your private account data, health imports, reminders, and device settings were cleared. Your sign-in, group memberships, and manually created content already shared with groups remain.",
+      );
+    } catch (error) {
+      let refreshed = false;
+      if (auth.status === "signedIn") {
+        try {
+          await cloud.pullLatest();
+          refreshed = true;
+        } catch {
+          // A server reset can commit before a storage-cleanup response fails.
+          // The next successful pull retains the monotonic reset fence.
+        }
+      }
+      Alert.alert(
+        "Reset needs attention",
+        `${
+          refreshed
+            ? "HabHub refreshed the protected cloud copy. Check your data before retrying the reset."
+            : "HabHub could not confirm that every reset step finished. Keep the app closed to health and reminders, reconnect if needed, and try again."
+        }\n\n${
+          error instanceof Error ? error.message : "Please try again."
+        }`,
+      );
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function requestAccountDataReset() {
+    Alert.alert(
+      auth.status === "signedIn"
+        ? "Clear account data?"
+        : "Clear local app data?",
+      "This resets your private HabHub data and personal setup. Your sign-in, group memberships, and manually created contributions already shared with groups are kept. Imported health entries are removed everywhere they appear.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Review reset",
+          onPress: () =>
+            Alert.alert(
+              "This cannot be undone",
+              "HabHub will permanently remove private tracker history and photos, goals, personal to-dos and subtasks, journal and schedule items, workouts and timers, body profile, health connections and imports, reminders, device registrations, and personal settings. Imported health entries are removed even if they appeared in a group. It will not delete your sign-in, group memberships, or manually created content already shared with groups.",
+              [
+                { text: "Keep my data", style: "cancel" },
+                {
+                  text: "Clear my data",
+                  style: "destructive",
+                  onPress: () => void clearAccountData(),
+                },
+              ],
+            ),
+        },
+      ],
+    );
   }
 
   function requestLiveStepConfiguration(
@@ -1563,108 +1626,90 @@ export default function SettingsScreen() {
           }
         />
         <View style={styles.localDivider} />
-        <Text style={[styles.title, { color: colors.ink }]}>
-          Local demo data
-        </Text>
+        <Text style={[styles.title, { color: colors.ink }]}>Clear account data</Text>
         <Text style={[styles.text, { color: colors.muted }]}>
-          Restore the built-in group, metrics, history, scoring, and chat on
-          this device.
+          Start fresh without deleting your sign-in, memberships, or manually
+          created content you already shared with a group. Private data,
+          health imports, and personal settings are permanently removed from
+          every signed-in device.
         </Text>
         <Button
-          label="Reset local demo"
-          variant="danger"
-          icon="refresh-outline"
-          onPress={() =>
-            Alert.alert(
-              "Reset the demo?",
-              "This clears local edits. If signed in, the reset will also become your next cloud version.",
-              [
-                { text: "Cancel", style: "cancel" },
-                { text: "Reset", style: "destructive", onPress: resetDemo },
-              ],
-            )
+          label={
+            busy === "reset"
+              ? "Clearing…"
+              : auth.status === "signedIn"
+                ? "Clear account data"
+                : "Clear local app data"
           }
+          variant="danger"
+          icon="trash-bin-outline"
+          loading={busy === "reset"}
+          onPress={requestAccountDataReset}
         />
-        {auth.status === "signedIn" ? (
-          <Pressable
-            onPress={() =>
-              Alert.alert(
-                "Permanently delete account?",
-                "This removes your account, cloud data, uploads, sent messages, and content you created for groups. This cannot be undone.",
-                [
-                  { text: "Cancel", style: "cancel" },
-                  {
-                    text: "Delete account",
-                    style: "destructive",
-                    onPress: () =>
-                      run(
-                        "delete",
-                        cloud.deleteAccount,
-                        "Account deletion failed",
-                      ),
-                  },
-                ],
-              )
-            }
-            style={styles.deleteAccount}
-          >
-            <Ionicons name="trash-outline" size={17} color={palette.red} />
-            <Text style={styles.deleteText}>
-              {busy === "delete"
-                ? "Deleting…"
-                : "Delete cloud account and data"}
+        {auth.status !== "signedIn" ? (
+          <>
+            <View style={styles.localDivider} />
+            <Text style={[styles.title, { color: colors.ink }]}>Demo showcase</Text>
+            <Text style={[styles.text, { color: colors.muted }]}>
+              Restore HabHub&apos;s built-in sample group, trackers, history,
+              scoring, photos, and chat on this device.
             </Text>
-          </Pressable>
+            <Button
+              label="Restore sample demo"
+              variant="ghost"
+              icon="refresh-outline"
+              onPress={() =>
+                Alert.alert(
+                  "Restore the sample demo?",
+                  "This replaces local demo edits with the built-in sample data.",
+                  [
+                    { text: "Cancel", style: "cancel" },
+                    {
+                      text: "Restore demo",
+                      style: "destructive",
+                      onPress: resetDemo,
+                    },
+                  ],
+                )
+              }
+            />
+          </>
+        ) : null}
+        {auth.status === "signedIn" ? (
+          <>
+            <Pressable
+              onPress={() =>
+                Alert.alert(
+                  "Permanently delete account?",
+                  "Unlike Clear account data, this removes your sign-in, cloud data, uploads, sent messages, memberships, and content you created for groups. This cannot be undone.",
+                  [
+                    { text: "Cancel", style: "cancel" },
+                    {
+                      text: "Delete account",
+                      style: "destructive",
+                      onPress: () =>
+                        run(
+                          "delete",
+                          cloud.deleteAccount,
+                          "Account deletion failed",
+                        ),
+                    },
+                  ],
+                )
+              }
+              style={styles.deleteAccount}
+            >
+              <Ionicons name="trash-outline" size={17} color={palette.red} />
+              <Text style={styles.deleteText}>
+                {busy === "delete"
+                  ? "Deleting…"
+                  : "Delete cloud account and data"}
+              </Text>
+            </Pressable>
+          </>
         ) : null}
       </Card>
 
-      <SectionHeader title="Legal & support" />
-      <Card>
-        <Text style={[styles.title, { color: colors.ink }]}>
-          Policies and help
-        </Text>
-        <Text style={[styles.text, { color: colors.muted }]}>
-          Review how HabHub handles data, read the current terms and community
-          rules, contact support, or use the public account-deletion path.
-        </Text>
-        <View style={styles.legalActions}>
-          <Button
-            label="Privacy & Health Data Policy"
-            translate={false}
-            icon="shield-checkmark-outline"
-            variant="ghost"
-            onPress={() => router.push("/privacy" as never)}
-          />
-          <Button
-            label="Terms of Use"
-            translate={false}
-            icon="reader-outline"
-            variant="ghost"
-            onPress={() => router.push("/terms" as never)}
-          />
-          <Button
-            label="Community Guidelines"
-            translate={false}
-            icon="people-circle-outline"
-            variant="ghost"
-            onPress={() => router.push("/community-guidelines" as never)}
-          />
-          <Button
-            label="HabHub Support"
-            translate={false}
-            icon="help-buoy-outline"
-            variant="ghost"
-            onPress={() => router.push("/support" as never)}
-          />
-          <Button
-            label="Account deletion help"
-            translate={false}
-            icon="trash-outline"
-            variant="ghost"
-            onPress={() => router.push("/delete-account" as never)}
-          />
-        </View>
-      </Card>
     </Screen>
   );
 }
@@ -1810,7 +1855,6 @@ const styles = StyleSheet.create({
     backgroundColor: palette.border,
     marginVertical: 15,
   },
-  legalActions: { gap: 8 },
   collapseRow: {
     height: 42,
     flexDirection: "row",

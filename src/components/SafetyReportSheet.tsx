@@ -165,18 +165,22 @@ export function SafetyReportSheet({
               </Text>
             )}
             <View style={styles.actions}>
-              <Button
-                label="Cancel"
-                variant="ghost"
-                disabled={busy}
-                onPress={onClose}
-              />
-              <Button
-                label={demoMode ? "Save demo report" : "Submit report"}
-                icon="flag-outline"
-                loading={busy}
-                onPress={() => onSubmit(reason, details)}
-              />
+              <View style={styles.action}>
+                <Button
+                  label="Cancel"
+                  variant="ghost"
+                  disabled={busy}
+                  onPress={onClose}
+                />
+              </View>
+              <View style={styles.action}>
+                <Button
+                  label={demoMode ? "Save demo report" : "Submit report"}
+                  icon="flag-outline"
+                  loading={busy}
+                  onPress={() => onSubmit(reason, details)}
+                />
+              </View>
             </View>
           </ScrollView>
         </SafeAreaView>
@@ -257,5 +261,6 @@ const styles = StyleSheet.create({
   },
   demoText: { flex: 1, fontSize: 9, lineHeight: 14 },
   explainer: { fontSize: 9, lineHeight: 14, marginTop: 12 },
-  actions: { flexDirection: "row", justifyContent: "flex-end", gap: 8, marginTop: 16 },
+  actions: { flexDirection: "row", alignItems: "stretch", gap: 8, marginTop: 16 },
+  action: { flex: 1, minWidth: 0 },
 });

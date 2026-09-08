@@ -2003,7 +2003,13 @@ async function filterBlockedChatRecipients(
   const userAuthoredInteraction =
     event.category === "chat" ||
     event.eventType === "social_reaction" ||
-    event.eventType === "social_comment";
+    event.eventType === "social_comment" ||
+    event.eventType === "group_todo_completed" ||
+    event.eventType === "group_todo_all_completed" ||
+    event.eventType === "group_note_created" ||
+    event.eventType === "group_note_updated" ||
+    event.eventType === "group_schedule_created" ||
+    event.eventType === "group_schedule_updated";
   if (!userAuthoredInteraction || !unique.length) return unique;
   const { data, error } = await admin
     .from("user_blocks")
@@ -2087,6 +2093,17 @@ function preferenceAllowed(
   settings: Record<string, unknown>,
   event: CanonicalEvent,
 ) {
+  const socialEvent =
+    event.eventType === "social_reaction" ||
+    event.eventType === "social_comment";
+  const groupTodoEvent =
+    event.eventType === "group_todo_completed" ||
+    event.eventType === "group_todo_all_completed";
+  const workspaceEvent =
+    event.eventType === "group_note_created" ||
+    event.eventType === "group_note_updated" ||
+    event.eventType === "group_schedule_created" ||
+    event.eventType === "group_schedule_updated";
   if (settings.pushEnabled === false) return false;
   const mutedGroups = Array.isArray(settings.mutedGroupIds)
     ? settings.mutedGroupIds
@@ -2122,6 +2139,13 @@ function preferenceAllowed(
       false
   )
     return false;
+  if (
+    groupTodoEvent &&
+    groupPreference.todoUpdates === false
+  )
+    return false;
+  if (workspaceEvent && groupPreference.workspaceUpdates === false)
+    return false;
   if (event.category === "challenge") {
     // Legacy token rows used the badges/winners switch for challenges. Once a
     // new client writes the dedicated field it becomes fully independent.
@@ -2156,8 +2180,9 @@ function preferenceAllowed(
   }
   if (
     event.category === "metric" &&
-    event.eventType !== "social_reaction" &&
-    event.eventType !== "social_comment" &&
+    !socialEvent &&
+    !groupTodoEvent &&
+    !workspaceEvent &&
     (groupPreference.trackerUpdates ??
       groupPreference.progressUpdates ??
       settings.groupMetricActivity ??
@@ -2166,6 +2191,9 @@ function preferenceAllowed(
     return false;
   if (
     (event.category === "metric" || event.category === "lead") &&
+    !socialEvent &&
+    !groupTodoEvent &&
+    !workspaceEvent &&
     Array.isArray(groupPreference.memberIds) &&
     (!event.dispatcherId || !groupPreference.memberIds.includes(event.dispatcherId))
   )

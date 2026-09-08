@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import React from "react";
-import { Pressable, StyleSheet, View } from "react-native";
+import { Pressable, StyleSheet, Switch, View } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
 import { useLocale, useLocalization } from "@/src/i18n";
 import { localizeMetricName } from "@/src/i18n/domain";
@@ -28,6 +28,7 @@ import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { ActivityLevel, BiologicalSex, WeightDirection } from "@/src/types";
 import { Card, Chip } from "./ui";
 import { DraftNumberInput } from "./DraftNumberInput";
+import { InfoPopover } from "./InfoPopover";
 
 const PLANNED_WEIGHT_RATE_PRESETS = [0.25, 0.5, 0.75, 1] as const;
 
@@ -408,30 +409,75 @@ export function EnergyProfileEditor() {
             <Text style={[styles.recommendationLabel, { color: colors.muted }]}>base food goal</Text>
           </View>
         </View>
-        <Text style={[styles.label, { color: colors.ink }]}>Food-goal behavior</Text>
-        <View style={styles.chips}>
-          <Chip
-            label="Adjust with activity"
-            selected={state.settings.foodGoalMode === "activity_adjusted"}
-            onPress={() =>
-              updateSettings({ foodGoalMode: "activity_adjusted" })
-            }
-          />
-          <Chip
-            label="Keep fixed"
-            selected={state.settings.foodGoalMode === "fixed"}
-            onPress={() => updateSettings({ foodGoalMode: "fixed" })}
-          />
-        </View>
-        <Text style={[styles.help, { color: colors.muted }]}>
-          {state.settings.foodGoalMode === "activity_adjusted"
-            ? "Default: active calories logged today are added to your food allowance while preserving the deficit target."
-            : "Your food target stays fixed even when active energy changes."}
-        </Text>
         <Text style={[styles.disclaimer, { color: colors.muted }]}>
           These planning estimates are not medical advice.
         </Text>
       </Card> : null}
+    </>
+  );
+}
+
+export function ProfileBehaviorEditor() {
+  const { state, updateSettings } = useApp();
+  const colors = useAppColors();
+  const accent = useGroupAccent();
+  const [collapsed, setCollapsed] = React.useState(true);
+  const estimatesSteps = state.settings.estimateUnrecordedSteps === true;
+  return (
+    <>
+      <CollapsibleSectionHeader
+        title="Food & step calculations"
+        collapsed={collapsed}
+        onToggle={() => setCollapsed((value) => !value)}
+      />
+      {!collapsed ? (
+        <Card style={styles.behaviorCard}>
+          <View style={styles.behaviorHeading}>
+            <Text style={[styles.label, { color: colors.ink }]}>Food-goal behavior</Text>
+            <InfoPopover
+              label="About food-goal behavior"
+              message="Adjust with activity adds the active calories logged for that day to your food allowance while preserving the planned deficit or surplus. Keep fixed leaves the food goal unchanged regardless of exercise. This affects goal math only; it never changes food or workout records."
+            />
+          </View>
+          <View style={styles.chips}>
+            <Chip
+              label="Adjust with activity"
+              selected={state.settings.foodGoalMode === "activity_adjusted"}
+              onPress={() => updateSettings({ foodGoalMode: "activity_adjusted" })}
+            />
+            <Chip
+              label="Keep fixed"
+              selected={state.settings.foodGoalMode === "fixed"}
+              onPress={() => updateSettings({ foodGoalMode: "fixed" })}
+            />
+          </View>
+          <View style={[styles.behaviorDivider, { borderColor: colors.border }]} />
+          <View style={styles.behaviorRow}>
+            <View style={styles.behaviorCopy}>
+              <View style={styles.behaviorHeading}>
+                <Text style={[styles.label, { color: colors.ink }]}>Estimate unrecorded steps</Text>
+                <InfoPopover
+                  label="About unrecorded-step calculations"
+                  message="When enabled, HabHub estimates only the walking distance, duration and active calories from steps not already explained by recorded walking, running or workout sessions. Provider totals remain authoritative and overlapping activity is excluded. The estimate is approximate and is disabled by default. Turning it off removes calculated step estimates from totals and views without deleting measured health data."
+                />
+              </View>
+              <Text style={[styles.help, { color: colors.muted }]}>
+                {estimatesSteps
+                  ? "On · unexplained steps may add calculated activity."
+                  : "Off · only measured or explicitly logged activity is used."}
+              </Text>
+            </View>
+            <Switch
+              accessibilityLabel="Estimate unrecorded steps"
+              value={estimatesSteps}
+              onValueChange={(estimateUnrecordedSteps) =>
+                updateSettings({ estimateUnrecordedSteps })
+              }
+              trackColor={{ false: colors.border, true: accent }}
+            />
+          </View>
+        </Card>
+      ) : null}
     </>
   );
 }
@@ -720,6 +766,11 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
   energyCard: { gap: 0 },
+  behaviorCard: { gap: 6 },
+  behaviorHeading: { flexDirection: "row", alignItems: "center", gap: 5 },
+  behaviorDivider: { borderTopWidth: StyleSheet.hairlineWidth, marginVertical: 5 },
+  behaviorRow: { flexDirection: "row", alignItems: "center", gap: 12 },
+  behaviorCopy: { flex: 1, minWidth: 0 },
   planPanel: {
     borderWidth: 1,
     borderRadius: 15,

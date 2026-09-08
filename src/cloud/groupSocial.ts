@@ -21,7 +21,11 @@ export type GroupSocialReactionKind =
 
 /** Screen where an interaction was made. The server stores this only to route
  * the recipient back to the same representation; it never affects access. */
-export type GroupSocialInteractionSurface = "feed" | "leaderboard_log";
+export type GroupSocialInteractionSurface =
+  | "feed"
+  | "leaderboard_log"
+  | "group_notes"
+  | "chat";
 
 export type GroupSocialReaction = {
   groupId: string;
@@ -139,14 +143,19 @@ function commentFromRow(row: CommentRow): GroupSocialComment {
 }
 
 function targetsByType(targets: readonly GroupSocialTarget[]) {
-  const result = new Map<GroupSocialTargetType, string[]>();
+  const idsByType = new Map<GroupSocialTargetType, Set<string>>();
   for (const target of targets) {
     if (!target.id) continue;
-    result.set(target.type, [
-      ...new Set([...(result.get(target.type) ?? []), target.id]),
-    ]);
+    let ids = idsByType.get(target.type);
+    if (!ids) {
+      ids = new Set<string>();
+      idsByType.set(target.type, ids);
+    }
+    ids.add(target.id);
   }
-  return result;
+  return new Map(
+    [...idsByType].map(([targetType, ids]) => [targetType, [...ids]]),
+  );
 }
 
 function metricTargetOwnerClientKey(ownerUserId: string, clientGeneratedId: string) {
@@ -261,6 +270,7 @@ async function loadRowsForTargets<Row>(
 export async function loadGroupSocialEngagement(
   groupId: string,
   targets: readonly GroupSocialTarget[],
+  options: { includeComments?: boolean } = {},
 ) {
   const resolvedTargets = await resolveGroupSocialTargets(groupId, targets);
   const [reactionRows, commentRows] = await Promise.all([
@@ -270,12 +280,14 @@ export async function loadGroupSocialEngagement(
       groupId,
       resolvedTargets,
     ),
-    loadRowsForTargets<CommentRow>(
-      "group_social_comments",
-      "id, group_id, target_type, target_id, user_id, content, created_at, updated_at",
-      groupId,
-      resolvedTargets,
-    ),
+    options.includeComments === false
+      ? Promise.resolve([] as CommentRow[])
+      : loadRowsForTargets<CommentRow>(
+          "group_social_comments",
+          "id, group_id, target_type, target_id, user_id, content, created_at, updated_at",
+          groupId,
+          resolvedTargets,
+        ),
   ]);
   return {
     resolvedTargets,

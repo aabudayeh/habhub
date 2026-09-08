@@ -43,6 +43,7 @@ import {
 import { GroupChallengeEditor } from "@/src/components/GroupChallengeEditor";
 import { ChallengeVisual } from "@/src/components/ChallengeVisual";
 import { GroupTodoLeaderboardSection } from "@/src/components/GroupTodoLeaderboardSection";
+import { GroupHubToolbar } from "@/src/components/GroupHubToolbar";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import {
   adjacentPeriod,
@@ -70,6 +71,7 @@ import {
   validGroupInviteCode,
 } from "@/src/domain/invites";
 import { isPersonalSetupGroup } from "@/src/domain/groupSetup";
+import { visibleGroupHubActions } from "@/src/domain/groupHub";
 import {
   LeaderboardPeriod,
   allTimePeriodDates,
@@ -375,6 +377,10 @@ function LeaderboardScreen() {
     useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const rankingStateRef = useRef(state);
   rankingStateRef.current = state;
+  const closeChallengeEditor = useCallback(() => {
+    setChallengeEditorOpen(false);
+    setEditingChallenge(undefined);
+  }, []);
   useFocusEffect(
     useCallback(() => {
       setScreenFocused(true);
@@ -393,12 +399,28 @@ function LeaderboardScreen() {
     }, []),
   );
   useEffect(() => {
+    if (screenIsFocused) return;
+    // Tab routes remain mounted. Never let a transient Group surface become a
+    // global overlay after navigation, including Watch-mode route changes.
+    setCalendarOpen(false);
+    setShowPicker(false);
+    setShowHistoryOptions(false);
+    closeChallengeEditor();
+    setChallengeCelebration(undefined);
+  }, [closeChallengeEditor, screenIsFocused]);
+  useEffect(() => {
     if (!editing) {
       setDraggingCardId(null);
     }
   }, [editing]);
   useEffect(() => {
-    if (!requestedGroupTodoId || state.group.groupTodosEnabled !== true) return;
+    if (
+      !requestedGroupTodoId ||
+      (requestedChallengeGroupId &&
+        requestedChallengeGroupId !== state.group.id) ||
+      state.group.groupTodosEnabled !== true
+    )
+      return;
     const focusKey = `${state.group.id}:${requestedGroupTodoId}:${requestedGroupTodoAt ?? ""}`;
     // Reveal a hidden Group To-Do once for this navigation request. Keeping
     // the route params around must not fight the user's next eye-button tap.
@@ -422,6 +444,7 @@ function LeaderboardScreen() {
   }, [
     requestedGroupTodoAt,
     requestedGroupTodoId,
+    requestedChallengeGroupId,
     state.group.groupTodosEnabled,
     state.group.id,
     state.settings.showGroupTodosByGroup,
@@ -438,7 +461,7 @@ function LeaderboardScreen() {
     currentMember?.role === "owner" || currentMember?.role === "admin";
   const personalSetup = isPersonalSetupGroup(state.group);
   const challengesEnabled =
-    tutorialSandbox || (!personalSetup && isCloudGroupId(state.group.id));
+    tutorialSandbox || !personalSetup;
   const challengeCloud = useGroupChallenges(state.group.id);
   const challengePreferences = useChallengePreferences();
   const effectiveGroupNotificationPreferences = useMemo(() => {
@@ -467,6 +490,25 @@ function LeaderboardScreen() {
   );
   const notificationBadgeCount =
     groupFeedUnreadCount + (state.group.pendingMembers?.length ?? 0);
+  const groupHubActions = useMemo(
+    () =>
+      visibleGroupHubActions(
+        state.settings.groupHubActionOrderByGroup?.[state.group.id],
+        {
+          challenges: challengesEnabled,
+          schedule:
+            state.settings.showGroupScheduleByGroup?.[state.group.id] !== false,
+          notes: state.settings.showGroupNotesByGroup?.[state.group.id] !== false,
+        },
+      ),
+    [
+      challengesEnabled,
+      state.group.id,
+      state.settings.groupHubActionOrderByGroup,
+      state.settings.showGroupNotesByGroup,
+      state.settings.showGroupScheduleByGroup,
+    ],
+  );
   const inviteReady = validGroupInviteCode(state.group.inviteCode);
   const tracked = useMemo(
     () =>
@@ -883,8 +925,8 @@ function LeaderboardScreen() {
   );
   useEffect(() => {
     if (
-      !requestedChallengeId ||
       !requestedChallengeGroupId ||
+      (!requestedChallengeId && !requestedGroupTodoId) ||
       requestedChallengeGroupId === state.group.id ||
       !state.groups.some((group) => group.id === requestedChallengeGroupId)
     )
@@ -894,12 +936,14 @@ function LeaderboardScreen() {
       requestedChallengeId,
       requestedChallengeEvent,
       requestedChallengeFocusAt,
+      requestedGroupTodoId,
+      requestedGroupTodoAt,
     ].join("|");
     if (attemptedChallengeGroupSwitch.current === attemptKey) return;
     attemptedChallengeGroupSwitch.current = attemptKey;
     // Pushes can arrive for any locally authorized group. Activate its cached
     // shell first; CloudSyncProvider hydrates that group in the background,
-    // after which the challenge/date/card focus effect below can resolve it.
+    // after which the linked to-do or challenge focus effect can resolve it.
     void cloud.switchGroup(requestedChallengeGroupId).catch(() => undefined);
   }, [
     cloud,
@@ -907,6 +951,8 @@ function LeaderboardScreen() {
     requestedChallengeFocusAt,
     requestedChallengeGroupId,
     requestedChallengeId,
+    requestedGroupTodoAt,
+    requestedGroupTodoId,
     state.group.id,
     state.groups,
   ]);
@@ -1478,45 +1524,19 @@ function LeaderboardScreen() {
                 </Pressable>
               </View>
             ) : (
-              <View style={styles.headerActions}>
-                <IconButton
-                  icon="settings-outline"
-                  label={canManageGroup ? "Group settings" : "Tracker sharing"}
-                  onPress={() => router.navigate("/group-settings" as never)}
-                />
-                {challengesEnabled ? (
-                  <TutorialTarget id="leaderboard-create-challenge">
-                    <IconButton
-                      icon="trophy-outline"
-                      label="Challenges"
-                      onPress={() => router.navigate("/challenges" as never)}
-                    />
-                  </TutorialTarget>
-                ) : null}
-                <IconButton
-                  icon="sparkles-outline"
-                  label="Group recap"
-                  onPress={() =>
-                    router.navigate("/recap?scope=group" as never)
+              <TutorialTarget
+                id="leaderboard-create-challenge"
+                onTutorialActivate={() => openChallengeEditor()}
+                onTutorialDeactivate={closeChallengeEditor}
+              >
+                <GroupHubToolbar
+                  actions={groupHubActions}
+                  notificationBadgeCount={notificationBadgeCount}
+                  onOpenNotifications={() =>
+                    router.navigate("/alerts?scope=group" as never)
                   }
                 />
-                <View>
-                  <IconButton
-                    icon="notifications-outline"
-                    label="Group notifications"
-                    onPress={() =>
-                      router.navigate("/alerts?scope=group" as never)
-                    }
-                  />
-                  {notificationBadgeCount > 0 ? (
-                    <View style={styles.pendingDot}>
-                      <Text style={styles.pendingDotText}>
-                        {Math.min(9, notificationBadgeCount)}
-                      </Text>
-                    </View>
-                  ) : null}
-                </View>
-              </View>
+              </TutorialTarget>
             )
           }
         />
@@ -2202,10 +2222,7 @@ function LeaderboardScreen() {
         currentUserId={state.currentUserId}
         initialDate={anchor}
         challenge={editingChallenge}
-        onClose={() => {
-          setChallengeEditorOpen(false);
-          setEditingChallenge(undefined);
-        }}
+        onClose={closeChallengeEditor}
         onSave={async (input) => {
           const creating = !input.id;
           const savedChallenge = await challengeCloud.save(input);

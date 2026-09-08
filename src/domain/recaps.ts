@@ -25,7 +25,11 @@ import {
   challengeSettlementKey,
   type ResolvedChallengePlacement,
 } from "./groupChallenges";
-import type { GroupSocialTargetType } from "./groupSocialTarget";
+import {
+  groupRecapSocialTarget,
+  type GroupSocialTarget,
+  type GroupSocialTargetType,
+} from "./groupSocialTarget";
 
 export type RecapScope = "personal" | "group";
 
@@ -38,6 +42,10 @@ export type RecapStory = {
   body: string;
   icon: string;
   color: string;
+  /** Present when this story is another view of a canonical group feed item. */
+  socialTarget?: GroupSocialTarget;
+  feedItemId?: string;
+  localDate?: string;
 };
 
 export type RecapFeedKind =
@@ -571,7 +579,18 @@ export function buildRecapStories(
       0,
       Math.max(0, 8 - moments.length),
     ),
-  ];
+  ].map((story) =>
+    story.socialTarget
+      ? story
+      : {
+          ...story,
+          // Aggregate cards have no owner or feed row. Their versioned,
+          // period-bound identity lets all active group clients share one
+          // durable reaction/comment thread without inventing ownership.
+          socialTarget: groupRecapSocialTarget(anchor, story.id),
+          localDate: anchor,
+        },
+  );
 }
 
 function groupChallengeStories(
@@ -657,6 +676,12 @@ function groupChallengeStories(
             : "The final standings are ready to revisit together.",
           icon: "trophy-outline",
           color: metric.color,
+          socialTarget: {
+            type: "group_challenge",
+            id: `${sourceId}:${challenge.localDate}:result`,
+          },
+          feedItemId: `challenge:${sourceId}:${challenge.localDate}:result`,
+          localDate: endDate,
         };
       const accepted = acceptedChallengeParticipantIds(challenge).length;
       return {
@@ -674,6 +699,12 @@ function groupChallengeStories(
             : `The group is competing through ${friendlyDate(endDate)}.`,
         icon: "flag-outline",
         color: metric.color,
+        socialTarget: {
+          type: "group_challenge",
+          id: `${sourceId}:${challenge.localDate}:started`,
+        },
+        feedItemId: `challenge:${sourceId}:${challenge.localDate}:started`,
+        localDate: challenge.localDate,
       };
     })
     .filter((story): story is RecapStory => Boolean(story));

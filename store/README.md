@@ -45,7 +45,8 @@ Recommended first capture configuration:
 - status bar: sanitized carrier/time/battery, with no personal notifications
 
 The scene definitions live in `capture-plan.json`; the exact generated sequence
-lives in `video/storyboard.md`. The small source captures in
+lives in `video/storyboard.md`, and `video/capture-runbook.md` separates
+repeatable web capture from signed-device evidence. The small source captures in
 `source-captures/iphone-420x911/` are JPEGs captured from the real running web
 app with the synthetic Ahmad demo profile. They are tracked so the store
 compositions can be reproduced and audited without inventing feature UI.
@@ -55,8 +56,12 @@ compositions can be reproduced and audited without inventing feature UI.
 From the repository root on Windows:
 
 ```powershell
+pnpm.cmd capture:marketing:web
+# Inspect store/exports/capture-candidates/web-420x911, then:
+pnpm.cmd capture:marketing:web -- --promote
 & .\scripts\build-store-marketing-assets.ps1
-node .\scripts\validate-marketing-assets.mjs
+pnpm.cmd capture:interactive-guide:web
+pnpm.cmd validate:marketing
 ```
 
 Set `HABHUB_FFMPEG` to an FFmpeg 6+ executable if `ffmpeg` is not on `PATH`.
@@ -70,8 +75,44 @@ The current export set contains:
 - 10 Apple 1260 × 2736 portrait PNG screenshots.
 - 8 Google Play 1080 × 1920 portrait PNG screenshots.
 - 1 Google Play 1024 × 500 PNG feature graphic.
-- 1 Apple 1080 × 1920 H.264/AAC master at 29.9 seconds.
+- 4 social/app-listing 1080 × 1350 PNG highlights.
+- 1 Apple 886 × 1920 H.264/AAC master at 29.9 seconds and 30 fps.
 - 1 Google 1080 × 1920 H.264/AAC master at 44.9 seconds.
+- 1 still-screen long-form 1080 × 1920 H.264/AAC feature-tour montage
+  at 99 seconds.
+- 1 continuous 1080 × 1920 H.264/AAC interactive guide recorded from the
+  real full-app Watch tutorial.
+
+The three still-based masters are captions-first; the separate interactive
+guide preserves actual app timing, animated tutorial-pointer movement,
+automatic page transitions, and isolated tutorial actions. All four carry an
+intentionally silent AAC track. No music or voiceover license is implied. If
+approved licensed audio is added later, rebuild and revalidate the exact
+submission files and update their manifest hashes.
+
+For this release-candidate set, `pnpm.cmd validate:marketing` must report 28 JPEG
+source captures, 55 PNG deliverables, and 4 H.264/AAC MP4 masters, then write
+`store/exports/manifest.json`. That pass verifies source presence, dimensions,
+flattened PNG output, codecs, frame rate, duration, hashes, and full video
+decode. It does not prove App Store Connect/Play Console acceptance, signed
+native behavior, notification delivery, background execution, or claim
+substantiation. Re-run it after any capture, caption, audio, timing, or release
+commit changes.
+
+The remaining native media truth gates are deliberately blocking:
+
+- `[SIGNED ANDROID EVIDENCE REQUIRED]` for background Health Connect behavior
+  and Samsung Health-source preference with the app process absent.
+- `[SIGNED IOS AND ANDROID EVIDENCE REQUIRED]` for local/push notification
+  delivery, taps, reminders, and quiet hours.
+- `[SIGNED ANDROID EVIDENCE REQUIRED]` before adding home-screen widgets or
+  native progress-photo video export to a promotional video.
+- `[SIGNED IOS EVIDENCE REQUIRED]` before adding connected Apple Health import
+  to a promotional video.
+
+Keep those features out of the current store video masters until the evidence
+is recorded against the exact signed submission binaries. Web captures and a
+successful media validator are not substitutes for those tests.
 
 ## Export matrix
 
@@ -84,6 +125,9 @@ store/exports/google/phone/en-US/
 store/exports/google/feature-graphic/en-US/
 store/exports/video/apple/en-US/
 store/exports/video/google/en-US/
+store/exports/video/feature-tour/en-US/
+store/exports/video/interactive-guide/en-US/
+store/exports/social/en-US/
 ```
 
 Apple currently accepts 1–10 screenshots per device class. Use a supported
@@ -97,7 +141,9 @@ video through a public or unlisted YouTube URL with ads disabled.
 
 Apple app previews are optional and limited to 30 seconds. Export a
 device-compatible H.264 MP4 and validate it in App Store Connect. Google may use
-the longer 45–60 second cut described in the storyboard.
+the longer 45-second cut described in the storyboard. The 99-second feature
+tour and continuous interactive Watch guide are for a product page, support
+page or organic campaign; neither is an Apple preview asset.
 
 Official references:
 

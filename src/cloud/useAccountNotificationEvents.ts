@@ -12,51 +12,112 @@ import type { GroupNotificationEvent } from "@/src/types";
 /** Bounded recipient feed across groups plus explicitly joined public events. */
 export function useAccountNotificationEvents() {
   const auth = useAuth();
-  const [events, setEvents] = useState<GroupNotificationEvent[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [loaded, setLoaded] = useState(false);
-  const [error, setError] = useState<string>();
-  const requestRef = useRef<Promise<void> | null>(null);
+  const accountId =
+    auth.status === "signedIn" && auth.user ? auth.user.id : undefined;
+  const scopeKey = accountId ?? "signed-out";
+  const [snapshot, setSnapshot] = useState<{
+    scopeKey: string;
+    events: GroupNotificationEvent[];
+    loading: boolean;
+    loaded: boolean;
+    error?: string;
+  }>(() => ({
+    scopeKey,
+    events: [],
+    loading: false,
+    loaded: false,
+  }));
+  const currentSnapshot =
+    snapshot.scopeKey === scopeKey
+      ? snapshot
+      : {
+          scopeKey,
+          events: [] as GroupNotificationEvent[],
+          loading: Boolean(accountId),
+          loaded: false,
+          error: undefined,
+        };
+  const requestRef = useRef<{
+    scopeKey: string;
+    promise: Promise<void>;
+  } | null>(null);
+  const scopeRef = useRef(scopeKey);
+  scopeRef.current = scopeKey;
 
   const refresh = useCallback(() => {
-    if (!supabase || auth.status !== "signedIn") {
-      setEvents([]);
-      setLoaded(true);
-      setError(undefined);
+    if (!supabase || !accountId) {
+      setSnapshot({
+        scopeKey,
+        events: [],
+        loading: false,
+        loaded: true,
+        error: undefined,
+      });
       return Promise.resolve();
     }
-    if (requestRef.current) return requestRef.current;
+    if (requestRef.current?.scopeKey === scopeKey)
+      return requestRef.current.promise;
     let request: Promise<void>;
-    setLoading(true);
+    setSnapshot((current) => ({
+      scopeKey,
+      events: current.scopeKey === scopeKey ? current.events : [],
+      loading: true,
+      loaded: current.scopeKey === scopeKey && current.loaded,
+      error: current.scopeKey === scopeKey ? current.error : undefined,
+    }));
     request = loadAccountNotificationEvents()
       .then((rows) => {
-        setEvents(rows);
-        setError(undefined);
+        if (scopeRef.current !== scopeKey) return;
+        setSnapshot({
+          scopeKey,
+          events: rows,
+          loading: true,
+          loaded: false,
+          error: undefined,
+        });
       })
       .catch((reason) => {
-        setError(reason instanceof Error ? reason.message : String(reason));
+        if (scopeRef.current !== scopeKey) return;
+        setSnapshot((current) => ({
+          scopeKey,
+          events: current.scopeKey === scopeKey ? current.events : [],
+          loading: true,
+          loaded: false,
+          error: reason instanceof Error ? reason.message : String(reason),
+        }));
       })
       .finally(() => {
-        if (requestRef.current === request) requestRef.current = null;
-        setLoading(false);
-        setLoaded(true);
+        if (requestRef.current?.promise === request) requestRef.current = null;
+        if (scopeRef.current !== scopeKey) return;
+        setSnapshot((current) => ({
+          scopeKey,
+          events: current.scopeKey === scopeKey ? current.events : [],
+          loading: false,
+          loaded: true,
+          error: current.scopeKey === scopeKey ? current.error : undefined,
+        }));
       });
-    requestRef.current = request;
+    requestRef.current = { scopeKey, promise: request };
     return request;
-  }, [auth.status]);
+  }, [accountId, scopeKey]);
 
   useEffect(() => {
-    requestRef.current = null;
-    setEvents([]);
-    setLoaded(false);
+    if (requestRef.current?.scopeKey !== scopeKey) requestRef.current = null;
+    setSnapshot({
+      scopeKey,
+      events: [],
+      loading: Boolean(accountId),
+      loaded: false,
+      error: undefined,
+    });
     void refresh();
-  }, [auth.user?.id, refresh]);
+  }, [accountId, refresh, scopeKey]);
 
   useEffect(() => {
-    if (!supabase || auth.status !== "signedIn" || !auth.user) return;
+    if (!supabase || !accountId) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const unsubscribe = subscribePrivateBroadcast(
-      `account:${auth.user.id}:group-notifications`,
+      `account:${accountId}:group-notifications`,
       "notifications_updated",
       () => {
         if (timer) clearTimeout(timer);
@@ -67,24 +128,31 @@ export function useAccountNotificationEvents() {
       if (timer) clearTimeout(timer);
       unsubscribe();
     };
-  }, [auth.status, auth.user, refresh]);
+  }, [accountId, refresh]);
 
   const markRead = useCallback(async (eventIds: string[]) => {
     const idSet = new Set(eventIds);
-    if (!idSet.size) return;
+    if (!accountId || !idSet.size || scopeRef.current !== scopeKey) return;
+    const operationScope = scopeKey;
+    const operationEvents = currentSnapshot.events;
     const readAt = new Date().toISOString();
     // The category dot should clear as soon as the user leaves the tab they
     // actually viewed. Keep the network write durable, but do not make the UI
     // wait on a round trip before acknowledging that deliberate boundary.
-    setEvents((current) =>
-      current.map((event) =>
-        idSet.has(event.id) && !event.readAt
-          ? { ...event, readAt }
-          : event,
-      ),
+    setSnapshot((current) =>
+      current.scopeKey !== operationScope
+        ? current
+        : {
+            ...current,
+            events: current.events.map((event) =>
+              idSet.has(event.id) && !event.readAt
+                ? { ...event, readAt }
+                : event,
+            ),
+          },
     );
     const byGroup = new Map<string, string[]>();
-    for (const event of events) {
+    for (const event of operationEvents) {
       if (!idSet.has(event.id)) continue;
       const ids = byGroup.get(event.groupId) ?? [];
       ids.push(event.id);
@@ -97,30 +165,36 @@ export function useAccountNotificationEvents() {
         ),
       );
     } catch (reason) {
+      if (scopeRef.current !== operationScope) throw reason;
       // Restore only this optimistic acknowledgement. A concurrent realtime
       // refresh that supplied a different server read timestamp remains read.
-      setEvents((current) =>
-        current.map((event) =>
-          idSet.has(event.id) && event.readAt === readAt
-            ? { ...event, readAt: undefined }
-            : event,
-        ),
+      setSnapshot((current) =>
+        current.scopeKey !== operationScope
+          ? current
+          : {
+              ...current,
+              events: current.events.map((event) =>
+                idSet.has(event.id) && event.readAt === readAt
+                  ? { ...event, readAt: undefined }
+                  : event,
+              ),
+            },
       );
       throw reason;
     }
-  }, [events]);
+  }, [accountId, currentSnapshot.events, scopeKey]);
 
   const unreadCount = useMemo(
-    () => events.filter((event) => !event.readAt).length,
-    [events],
+    () => currentSnapshot.events.filter((event) => !event.readAt).length,
+    [currentSnapshot.events],
   );
 
   return {
-    events,
+    events: currentSnapshot.events,
     unreadCount,
-    loading,
-    loaded,
-    error,
+    loading: currentSnapshot.loading,
+    loaded: currentSnapshot.loaded,
+    error: currentSnapshot.error,
     refresh,
     markRead,
   };

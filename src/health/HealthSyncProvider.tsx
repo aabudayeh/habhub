@@ -61,6 +61,11 @@ const PHYSICAL_ACTIVITY_MIGRATION_DELAY_MS = 4_000;
 
 type ActiveHealthOperation = 'full' | 'steps-refresh' | 'steps-repair';
 
+type HealthOperationFence = {
+  accountId: string;
+  generation: number;
+};
+
 type HealthSyncContextValue = {
   status: HealthSyncStatus;
   availability: HealthAdapterAvailability | null;
@@ -177,6 +182,12 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
   const persistedRef = useRef(persisted);
   const syncingRef = useRef<Promise<void> | null>(null);
   const activeHealthOperationRef = useRef<ActiveHealthOperation | null>(null);
+  /**
+   * Every foreground native read belongs to one connection generation. A
+   * disconnect increments this synchronously, before any native/storage await,
+   * so an older read can finish but can no longer mutate app state or status.
+   */
+  const healthOperationGenerationRef = useRef(0);
   const backfillTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const todayStepsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const todayStepsIntervalRef = useRef<ReturnType<typeof setInterval> | null>(
@@ -204,6 +215,34 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
   stateRef.current = state;
   updateSettingsRef.current = updateSettings;
   persistedRef.current = persisted;
+
+  const captureHealthOperation = useCallback(
+    (): HealthOperationFence => ({
+      accountId: stateRef.current.currentUserId,
+      generation: healthOperationGenerationRef.current,
+    }),
+    [],
+  );
+
+  const healthOperationIsCurrent = useCallback(
+    (operation: HealthOperationFence, requireEnabled = true) =>
+      operation.generation === healthOperationGenerationRef.current &&
+      operation.accountId === stateRef.current.currentUserId &&
+      (!requireEnabled || stateRef.current.settings.healthSync.enabled),
+    [],
+  );
+
+  const runCurrentHealthImport = useCallback(
+    async (operation: HealthOperationFence, task: () => Promise<void>) => {
+      // The reducer mutates synchronously when task() is invoked, so keep this
+      // final check adjacent to the call. Disconnect cannot interleave between
+      // the check and that synchronous reducer commit.
+      if (!healthOperationIsCurrent(operation)) return false;
+      await task();
+      return healthOperationIsCurrent(operation);
+    },
+    [healthOperationIsCurrent],
+  );
 
   const refreshTodayStepsAfterInteractions = useCallback((force = false) => {
     todayStepsInteractionRef.current?.cancel();
@@ -254,19 +293,31 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     ],
   );
 
-  const saveStatus = useCallback(async (next: PersistedHealthStatus) => {
-    const accountId = stateRef.current.currentUserId;
+  const saveStatus = useCallback(async (
+    next: PersistedHealthStatus,
+    operation = captureHealthOperation(),
+    requireEnabled = false,
+  ) => {
+    if (!healthOperationIsCurrent(operation, requireEnabled)) return false;
+    const accountId = operation.accountId;
     const key = `${HEALTH_STATUS_STORAGE_KEY}:${accountId}`;
     const rebased = await runAppStateStorageMutation(async () => {
+      // A queued status write may acquire the storage gate after Reset has
+      // already invalidated its generation. In that case it must not recreate
+      // the deleted status key (especially connectionEnabled: true).
+      if (!healthOperationIsCurrent(operation, requireEnabled)) return null;
       const stored = parsePersistedHealthStatus(await AsyncStorage.getItem(key));
+      if (!healthOperationIsCurrent(operation, requireEnabled)) return null;
       const durable = rebaseForegroundHealthStatus(stored, next);
       await AsyncStorage.setItem(key, JSON.stringify(durable));
       return durable;
     });
-    if (stateRef.current.currentUserId !== accountId) return;
+    if (!rebased || !healthOperationIsCurrent(operation, requireEnabled))
+      return false;
     persistedRef.current = rebased;
     setPersisted(rebased);
-  }, []);
+    return true;
+  }, [captureHealthOperation, healthOperationIsCurrent]);
 
   useEffect(() => {
     if (status === 'checking') return;
@@ -298,6 +349,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
 
   useEffect(() => {
     let cancelled = false;
+    const operation = captureHealthOperation();
     const empty: PersistedHealthStatus = { lastSyncedAt:null,importedCount:0,error:null,backfill:null,stepsRepair:null };
     setLiveStepDiagnostics(null);
     persistedRef.current = empty;
@@ -305,7 +357,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     const statusKey = `${HEALTH_STATUS_STORAGE_KEY}:${state.currentUserId}`;
     Promise.all([nativeHealthAdapter.availability(), AsyncStorage.getItem(statusKey)])
       .then(async ([nextAvailability, saved]) => {
-        if (cancelled) return;
+        if (cancelled || !healthOperationIsCurrent(operation, false)) return;
         setAvailability(nextAvailability);
         let restored = empty;
         if (saved) {
@@ -376,10 +428,12 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
             )
             .catch(() => null)
           : null;
-        if (cancelled) return;
+        if (cancelled || !healthOperationIsCurrent(operation, false)) return;
         let disconnectRevokedGrant = false;
-        restored = await runAppStateStorageMutation(async () => {
+        const reconciledStatus = await runAppStateStorageMutation(async () => {
+          if (!healthOperationIsCurrent(operation, false)) return null;
           const latestRaw = await AsyncStorage.getItem(statusKey);
+          if (!healthOperationIsCurrent(operation, false)) return null;
           let latest = parsePersistedHealthStatus(latestRaw);
           if (!latest) {
             if (latestRaw) await AsyncStorage.removeItem(statusKey);
@@ -395,9 +449,11 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
             await AsyncStorage.setItem(statusKey, JSON.stringify(reconciled));
           return reconciled;
         });
+        if (!reconciledStatus) return;
+        restored = reconciledStatus;
         if (disconnectRevokedGrant)
           await nativeHealthAdapter.disconnect?.().catch(() => undefined);
-        if (cancelled) return;
+        if (cancelled || !healthOperationIsCurrent(operation, false)) return;
         persistedRef.current = restored;
         setPersisted(restored);
         if (restored.connectionEnabled !== undefined) {
@@ -425,10 +481,10 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
         setStatus(nextAvailability.available ? (stateRef.current.settings.healthSync.enabled ? 'ready' : 'idle') : 'unavailable');
       })
       .catch((error) => {
-        if (!cancelled) { setStatus('error'); setPersisted((current) => ({ ...current, error: error instanceof Error ? error.message : 'Could not check health availability.' })); }
+        if (!cancelled && healthOperationIsCurrent(operation, false)) { setStatus('error'); setPersisted((current) => ({ ...current, error: error instanceof Error ? error.message : 'Could not check health availability.' })); }
       });
     return () => { cancelled = true; };
-  }, [state.currentUserId]);
+  }, [captureHealthOperation, healthOperationIsCurrent, state.currentUserId]);
 
   useEffect(() => {
     const accountId = signedInNativeAccountId;
@@ -642,6 +698,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
       Date.now() - last < HEALTH_TODAY_STEPS_MIN_INTERVAL_MS
     )
       return;
+    const operationFence = captureHealthOperation();
     activeHealthOperationRef.current = 'steps-refresh';
     const operation = (async () => {
       const from = new Date();
@@ -665,6 +722,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
         liveStepSources: current.settings.healthSync.liveStepSources,
         liveStepCombination: current.settings.healthSync.liveStepCombination,
       });
+      if (!healthOperationIsCurrent(operationFence)) return;
       rememberLiveStepDiagnostics(records);
       const sourcePreferences = rememberHealthSources(records);
       const entries = mapHealthRecordsToEntries(
@@ -676,36 +734,41 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
         sourcePreferences,
         healthFallbackContextForRead(currentDayEntries, current.metrics, ['steps']),
         current.settings.stepCoveragePreferences,
+        current.settings.estimateUnrecordedSteps === true,
       );
-      await importHealthEntries(
-        entries,
-        nativeHealthAdapter.provider!,
-        stepMetricIds,
-        currentLocalDate,
-        false,
-        true,
-        {
-          metricIds: stepMetricIds,
-          throughDate: dateKey(to),
-          removeStepFallbacks: true,
-          acceptCurrentDayZero,
-        },
-        true,
+      const imported = await runCurrentHealthImport(
+        operationFence,
+        () => importHealthEntries(
+          entries,
+          nativeHealthAdapter.provider!,
+          stepMetricIds,
+          currentLocalDate,
+          false,
+          true,
+          {
+            metricIds: stepMetricIds,
+            throughDate: dateKey(to),
+            removeStepFallbacks: true,
+            acceptCurrentDayZero,
+          },
+          true,
+        ),
       );
+      if (!imported) return;
       const completedAt = new Date().toISOString();
       await saveStatus({
         ...persistedRef.current,
         connectionEnabled: true,
         lastStepSyncedAt: completedAt,
         stepsRepairError: null,
-      });
+      }, operationFence, true);
     })().finally(() => {
       syncingRef.current = null;
       activeHealthOperationRef.current = null;
     });
     syncingRef.current = operation;
     return operation;
-  }, [importHealthEntries, rememberHealthSources, rememberLiveStepDiagnostics, saveStatus]);
+  }, [captureHealthOperation, healthOperationIsCurrent, importHealthEntries, rememberHealthSources, rememberLiveStepDiagnostics, runCurrentHealthImport, saveStatus]);
   refreshTodayStepsRef.current = refreshTodaySteps;
 
   const runStepsRepair = useCallback(async () => {
@@ -727,6 +790,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
         HEALTH_STEPS_IMPORT_VERSION
     )
       return;
+    const operationFence = captureHealthOperation();
     activeHealthOperationRef.current = 'steps-repair';
     const operation = (async () => {
       try {
@@ -755,12 +819,13 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
             from: repairFrom.toISOString(),
             cursorEnd: now.toISOString(),
           };
-          await saveStatus({
+          const cursorSaved = await saveStatus({
             ...persistedRef.current,
             stepsRepair: cursor,
             stepsRepairError: null,
             stepsRepairNextRetryAt: null,
-          });
+          }, operationFence, true);
+          if (!cursorSaved) return;
         }
         const stepMetricIds = metricIdsForHealthDataTypes(
           ['steps'],
@@ -791,6 +856,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
             liveStepCombination:
               current.settings.healthSync.liveStepCombination,
           });
+          if (!healthOperationIsCurrent(operationFence)) return;
           rememberLiveStepDiagnostics(records);
           batchRecords.push(...records);
           batchFrom = chunkStart;
@@ -813,6 +879,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
           sourcePreferences,
           healthFallbackContextForRead(current.entries, current.metrics, ['steps']),
           current.settings.stepCoveragePreferences,
+          current.settings.estimateUnrecordedSteps === true,
         );
         // Four native slices become one reducer update, one React render, and
         // one deferred/coalesced snapshot write. Keep the cloud gate open while
@@ -820,24 +887,28 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
         // only around the single local historical merge.
         setCloudSyncPaused('health-steps-repair', true);
         try {
-          await importHealthEntries(
-            entries,
-            nativeHealthAdapter.provider!,
-            stepMetricIds,
-            dateKey(batchFrom),
-            false,
-            true,
-            {
-              metricIds: stepMetricIds,
-              throughDate: batchThrough,
-              removeStepFallbacks: true,
-            },
-            true,
+          const imported = await runCurrentHealthImport(
+            operationFence,
+            () => importHealthEntries(
+              entries,
+              nativeHealthAdapter.provider!,
+              stepMetricIds,
+              dateKey(batchFrom),
+              false,
+              true,
+              {
+                metricIds: stepMetricIds,
+                throughDate: batchThrough,
+                removeStepFallbacks: true,
+              },
+              true,
+            ),
           );
+          if (!imported) return;
         } finally {
           setCloudSyncPaused('health-steps-repair', false);
         }
-        await saveStatus({
+        const statusSaved = await saveStatus({
           ...persistedRef.current,
           stepsImportVersion: nextRepair
             ? persistedRef.current.stepsImportVersion
@@ -845,10 +916,12 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
           stepsRepair: nextRepair,
           stepsRepairError: null,
           stepsRepairNextRetryAt: null,
-        });
-        if (nextRepair)
+        }, operationFence, true);
+        if (!statusSaved) return;
+        if (nextRepair && healthOperationIsCurrent(operationFence))
           scheduleStepsRepair(STEPS_REPAIR_NEXT_CHUNK_DELAY_MS);
       } catch (error) {
+        if (!healthOperationIsCurrent(operationFence)) return;
         await saveStatus({
           ...persistedRef.current,
           stepsRepairError:
@@ -856,8 +929,9 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
           stepsRepairNextRetryAt: new Date(
             Date.now() + STEPS_REPAIR_RETRY_MS,
           ).toISOString(),
-        });
-        scheduleStepsRepair(STEPS_REPAIR_RETRY_MS);
+        }, operationFence, true);
+        if (healthOperationIsCurrent(operationFence))
+          scheduleStepsRepair(STEPS_REPAIR_RETRY_MS);
         throw error;
       } finally {
         // Also releases a gate if a reducer/storage exception interrupted the
@@ -870,7 +944,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     });
     syncingRef.current = operation;
     return operation;
-  }, [importHealthEntries, rememberHealthSources, rememberLiveStepDiagnostics, saveStatus, scheduleStepsRepair]);
+  }, [captureHealthOperation, healthOperationIsCurrent, importHealthEntries, rememberHealthSources, rememberLiveStepDiagnostics, runCurrentHealthImport, saveStatus, scheduleStepsRepair]);
   runStepsRepairRef.current = runStepsRepair;
 
   const runSync = useCallback(async (reason: 'connect' | 'open' | 'pull' | 'manual' | 'history' | 'backfill', forceEnabled = false) => {
@@ -883,9 +957,13 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
       return runSyncRef.current?.(reason, forceEnabled);
     }
     const current = stateRef.current;
-    if ((!current.settings.healthSync.enabled && !forceEnabled) || !nativeHealthAdapter.provider) return;
+    // `forceEnabled` preserves queued-request intent, but it must never bypass
+    // the live connection boundary after Disconnect/Reset.
+    if (!current.settings.healthSync.enabled || !nativeHealthAdapter.provider)
+      return;
     const dataTypes = enabledHealthDataTypes(current.settings.healthSync.dataTypes);
     if (!dataTypes.length) throw new Error('Choose at least one health data category.');
+    const operationFence = captureHealthOperation();
     activeHealthOperationRef.current = 'full';
     const operation = (async () => {
       // Automatic foreground and historical work must never turn onboarding
@@ -911,6 +989,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
             dataTypes,
             current.settings.healthSync.backgroundAccess,
           );
+          if (!healthOperationIsCurrent(operationFence)) return;
         }
         const historyDays = normalizeHealthHistoryDays(
           current.settings.healthHistoryDays,
@@ -921,6 +1000,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
         const historySelectionIsCurrent = () => {
           const latest = stateRef.current.settings;
           return (
+            healthOperationIsCurrent(operationFence) &&
             healthHistorySelectionKey(
               normalizeHealthHistoryDays(latest.healthHistoryDays),
             ) === requestedHistorySelection
@@ -988,7 +1068,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
             retryAttempt: 0,
             nextRetryAt: null,
           };
-          await saveStatus(previous);
+          if (!(await saveStatus(previous, operationFence, true))) return;
           const records = await nativeHealthAdapter.read({
             from: recentFrom,
             to: now,
@@ -999,7 +1079,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
               current.settings.healthSync.liveStepCombination,
           });
           if (!historySelectionIsCurrent()) {
-            setStatus('ready');
+            if (healthOperationIsCurrent(operationFence)) setStatus('ready');
             return;
           }
           rememberLiveStepDiagnostics(records);
@@ -1013,18 +1093,23 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
             sourcePreferences,
             healthFallbackContextForRead(current.entries, current.metrics, dataTypes),
             current.settings.stepCoveragePreferences,
+            current.settings.estimateUnrecordedSteps === true,
           );
           importedCount = entries.length;
           cumulativeImportedCount = importedCount;
-          await importHealthEntries(
-            entries,
-            nativeHealthAdapter.provider!,
-            metricIds,
-            dateKey(recentFrom),
-            initialHistoryImport && finalChunk,
-            fullRefresh,
-            stepAggregateReplacement(now),
+          const recentImported = await runCurrentHealthImport(
+            operationFence,
+            () => importHealthEntries(
+              entries,
+              nativeHealthAdapter.provider!,
+              metricIds,
+              dateKey(recentFrom),
+              initialHistoryImport && finalChunk,
+              fullRefresh,
+              stepAggregateReplacement(now),
+            ),
           );
+          if (!recentImported) return;
           backfill = backfill
             ? { ...backfill, importedCount }
             : null;
@@ -1046,7 +1131,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
               current.settings.healthSync.liveStepCombination,
           });
           if (!historySelectionIsCurrent()) {
-            setStatus('ready');
+            if (healthOperationIsCurrent(operationFence)) setStatus('ready');
             return;
           }
           rememberLiveStepDiagnostics(records);
@@ -1060,19 +1145,28 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
             sourcePreferences,
             healthFallbackContextForRead(current.entries, current.metrics, dataTypes),
             current.settings.stepCoveragePreferences,
+            current.settings.estimateUnrecordedSteps === true,
           );
           importedCount = entries.length;
           cumulativeImportedCount =
             backfill.importedCount + importedCount;
-          await importHealthEntries(
-            entries,
-            nativeHealthAdapter.provider!,
-            metricIds,
-            dateKey(chunkStart),
-            backfill.finalizeTrackedGoalHistory && finalChunk,
-            backfill.preserveTrackedGoalHistory === true,
-            stepAggregateReplacement(chunkEnd),
+          const finalizeTrackedGoalHistory =
+            backfill.finalizeTrackedGoalHistory === true;
+          const preserveTrackedGoalHistory =
+            backfill.preserveTrackedGoalHistory === true;
+          const backfillImported = await runCurrentHealthImport(
+            operationFence,
+            () => importHealthEntries(
+              entries,
+              nativeHealthAdapter.provider!,
+              metricIds,
+              dateKey(chunkStart),
+              finalizeTrackedGoalHistory && finalChunk,
+              preserveTrackedGoalHistory,
+              stepAggregateReplacement(chunkEnd),
+            ),
           );
+          if (!backfillImported) return;
           if (finalChunk && backfill.through)
             completedStepHistoryRange = {
               from: backfill.from,
@@ -1103,7 +1197,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
               current.settings.healthSync.liveStepCombination,
           });
           if (!historySelectionIsCurrent()) {
-            setStatus('ready');
+            if (healthOperationIsCurrent(operationFence)) setStatus('ready');
             return;
           }
           rememberLiveStepDiagnostics(records);
@@ -1117,18 +1211,23 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
             sourcePreferences,
             healthFallbackContextForRead(current.entries, current.metrics, dataTypes),
             current.settings.stepCoveragePreferences,
+            current.settings.estimateUnrecordedSteps === true,
           );
           importedCount = entries.length;
           cumulativeImportedCount = importedCount;
-          await importHealthEntries(
-            entries,
-            nativeHealthAdapter.provider!,
-            metricIds,
-            dateKey(from),
-            false,
-            false,
-            stepAggregateReplacement(to),
+          const routineImported = await runCurrentHealthImport(
+            operationFence,
+            () => importHealthEntries(
+              entries,
+              nativeHealthAdapter.provider!,
+              metricIds,
+              dateKey(from),
+              false,
+              false,
+              stepAggregateReplacement(to),
+            ),
           );
+          if (!routineImported) return;
           if (backfill) scheduleBackfill(FIRST_BACKFILL_DELAY_MS);
         }
         const cumulativeCount = backfill
@@ -1160,10 +1259,10 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
             ? HEALTH_STEPS_IMPORT_VERSION
             : persistedRef.current.stepsImportVersion;
         if (!historySelectionIsCurrent()) {
-          setStatus('ready');
+          if (healthOperationIsCurrent(operationFence)) setStatus('ready');
           return;
         }
-        await saveStatus({
+        const statusSaved = await saveStatus({
           ...persistedRef.current,
           // Any successful native read proves that this device remains
           // connected. Backfill this marker for users upgrading from builds
@@ -1185,9 +1284,11 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
             completedStepsImportVersion === HEALTH_STEPS_IMPORT_VERSION
               ? null
               : persistedRef.current.stepsRepair,
-        });
+        }, operationFence, true);
+        if (!statusSaved) return;
         setStatus('ready');
       } catch (error) {
+        if (!healthOperationIsCurrent(operationFence)) return;
         const message = error instanceof Error ? error.message : 'Health sync failed.';
         const retryAttempt = Math.min(8, (persistedRef.current.retryAttempt ?? 0) + 1);
         const retryDelay = Math.min(
@@ -1200,9 +1301,11 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
           error: message,
           retryAttempt,
           nextRetryAt: new Date(Date.now() + retryDelay).toISOString(),
-        });
-        if (persistedRef.current.backfill) scheduleBackfill(retryDelay);
-        setStatus(reason === 'backfill' || reason === 'open' ? 'ready' : 'error');
+        }, operationFence, true);
+        if (healthOperationIsCurrent(operationFence)) {
+          if (persistedRef.current.backfill) scheduleBackfill(retryDelay);
+          setStatus(reason === 'backfill' || reason === 'open' ? 'ready' : 'error');
+        }
         throw error;
       } finally {
         if (pausesCloud) setCloudSyncPaused('health-backfill', false);
@@ -1212,16 +1315,22 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     })();
     syncingRef.current = operation;
     return operation;
-  }, [importHealthEntries, markPhysicalActivityMigrationAttempt, rememberHealthSources, rememberLiveStepDiagnostics, saveStatus, scheduleBackfill, signedInNativeAccountId]);
+  }, [captureHealthOperation, healthOperationIsCurrent, importHealthEntries, markPhysicalActivityMigrationAttempt, rememberHealthSources, rememberLiveStepDiagnostics, runCurrentHealthImport, saveStatus, scheduleBackfill, signedInNativeAccountId]);
   runSyncRef.current = runSync;
 
-  const resetPersistedHistoryWork = useCallback(async () => {
-    const accountId = stateRef.current.currentUserId;
+  const resetPersistedHistoryWork = useCallback(async (
+    operation = captureHealthOperation(),
+    requireEnabled = false,
+  ) => {
+    if (!healthOperationIsCurrent(operation, requireEnabled)) return false;
+    const accountId = operation.accountId;
     const key = `${HEALTH_STATUS_STORAGE_KEY}:${accountId}`;
     const reset = await runAppStateStorageMutation(async () => {
+      if (!healthOperationIsCurrent(operation, requireEnabled)) return null;
       const stored =
         parsePersistedHealthStatus(await AsyncStorage.getItem(key)) ??
         persistedRef.current;
+      if (!healthOperationIsCurrent(operation, requireEnabled)) return null;
       const next: PersistedHealthStatus = {
         ...stored,
         backfill: null,
@@ -1235,12 +1344,15 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
       await AsyncStorage.setItem(key, JSON.stringify(next));
       return next;
     });
-    if (stateRef.current.currentUserId !== accountId) return;
+    if (!reset || !healthOperationIsCurrent(operation, requireEnabled))
+      return false;
     persistedRef.current = reset;
     setPersisted(reset);
-  }, []);
+    return true;
+  }, [captureHealthOperation, healthOperationIsCurrent]);
 
   const setHealthHistoryDays = useCallback(async (days: HealthHistoryDays) => {
+    const operationFence = captureHealthOperation();
     const nextDays = normalizeHealthHistoryDays(days);
     const currentState = stateRef.current;
     const previousDays = normalizeHealthHistoryDays(
@@ -1277,14 +1389,14 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     // in flight fails its pre-commit selection check.
     stateRef.current = { ...currentState, settings };
     updateSettingsRef.current({ healthHistoryDays: nextDays, healthSync });
-    await resetPersistedHistoryWork();
+    await resetPersistedHistoryWork(operationFence, false);
     if (pending) {
       await pending.catch(() => undefined);
       // A foreground save that was already queued can land after the first
       // reset. Clear its obsolete cursor once more after it fully exits.
-      await resetPersistedHistoryWork();
+      await resetPersistedHistoryWork(operationFence, false);
     }
-  }, [resetPersistedHistoryWork]);
+  }, [captureHealthOperation, resetPersistedHistoryWork]);
 
   const connect = useCallback(async (options?: {
     historyDays?: HealthHistoryDays;
@@ -1292,6 +1404,10 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     startTrackedGoalsAtFirstData?: boolean;
   }) => {
     if (!availability?.available) throw new Error(availability?.detail ?? 'Health data is not available on this device.');
+    // A fresh consent flow starts a new connection generation and supersedes
+    // any stale read left behind by a prior connection attempt.
+    healthOperationGenerationRef.current += 1;
+    const operationFence = captureHealthOperation();
     const current = stateRef.current.settings;
     const dataTypes = options?.dataTypes
       ? [...new Set(options.dataTypes)]
@@ -1316,11 +1432,13 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
         dataTypes,
         requestedBackgroundAccess,
       );
+      if (!healthOperationIsCurrent(operationFence, false)) return;
       const granted = nativeHealthAdapter.grantedConnectionState
         ? await nativeHealthAdapter
             .grantedConnectionState(dataTypes)
             .catch(() => null)
         : null;
+      if (!healthOperationIsCurrent(operationFence, false)) return;
       if (granted && !granted.connected)
         throw new Error('Health data read permission was not granted.');
       const backgroundAccess =
@@ -1370,11 +1488,13 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
         healthSync,
         healthHistoryDays: requestedHistoryDays,
       };
-      await saveStatus({
+      const statusSaved = await saveStatus({
         ...persistedRef.current,
         connectionEnabled: true,
         backgroundAccess,
-      });
+      }, operationFence, false);
+      if (!statusSaved || !healthOperationIsCurrent(operationFence, false))
+        return;
       updateSettings({
         healthSync,
         healthHistoryDays: nextSettings.healthHistoryDays,
@@ -1391,25 +1511,29 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
           previousHistoryDays,
         )
       )
-        await resetPersistedHistoryWork();
+        await resetPersistedHistoryWork(operationFence, true);
+      if (!healthOperationIsCurrent(operationFence)) return;
       // Permission approval should return control to onboarding immediately.
       // The first lightweight import runs after navigation instead of making
       // the setup button wait while Health Connect reads and maps its records.
       setStatus('ready');
       if (stateRef.current.settings.onboardingComplete)
         setTimeout(() => {
-          runSync('connect', true).catch(() => undefined);
+          if (healthOperationIsCurrent(operationFence))
+            runSync('connect', true).catch(() => undefined);
         }, 350);
     } catch (error) {
+      if (!healthOperationIsCurrent(operationFence, false)) return;
       setStatus('error');
       throw error;
     }
-  }, [availability, markPhysicalActivityMigrationAttempt, resetPersistedHistoryWork, runSync, saveStatus, signedInNativeAccountId, updateSettings]);
+  }, [availability, captureHealthOperation, healthOperationIsCurrent, markPhysicalActivityMigrationAttempt, resetPersistedHistoryWork, runSync, saveStatus, signedInNativeAccountId, updateSettings]);
 
   const setSyncMode = useCallback(async (
     mode: SyncMode,
     requestedIntervalHours?: number,
   ) => {
+    const operationFence = captureHealthOperation();
     const currentState = stateRef.current;
     const current = currentState.settings;
     const backgroundIntervalHours = normalizeBackgroundSyncIntervalHours(
@@ -1436,14 +1560,17 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
           ).catch(() => undefined);
         await nativeHealthAdapter.requestPermissions(dataTypes, true);
       } catch (error) {
+        if (!healthOperationIsCurrent(operationFence, false)) return;
         setStatus('ready');
         throw error;
       }
+      if (!healthOperationIsCurrent(operationFence, false)) return;
       const granted = nativeHealthAdapter.grantedConnectionState
         ? await nativeHealthAdapter
             .grantedConnectionState(dataTypes)
             .catch(() => null)
         : null;
+      if (!healthOperationIsCurrent(operationFence, false)) return;
       if (granted && !granted.connected)
         throw new Error('Health data read permission was not granted.');
       healthSync = {
@@ -1457,14 +1584,16 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
 
     const nextSettings = { ...current, syncMode: mode, healthSync };
     stateRef.current = { ...currentState, settings: nextSettings };
-    await saveStatus({
+    const statusSaved = await saveStatus({
       ...persistedRef.current,
       connectionEnabled: healthSync.enabled,
       backgroundAccess: healthSync.backgroundAccess,
-    });
+    }, operationFence, false);
+    if (!statusSaved || !healthOperationIsCurrent(operationFence, false))
+      return;
     updateSettings({ syncMode: mode, healthSync });
     setStatus(healthSync.enabled ? 'ready' : 'idle');
-  }, [markPhysicalActivityMigrationAttempt, saveStatus, signedInNativeAccountId, updateSettings]);
+  }, [captureHealthOperation, healthOperationIsCurrent, markPhysicalActivityMigrationAttempt, saveStatus, signedInNativeAccountId, updateSettings]);
 
   const setBackgroundSyncIntervalHours = useCallback(
     async (hours: number) => {
@@ -1477,22 +1606,71 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
   );
 
   const disconnect = useCallback(async () => {
+    const pending = syncingRef.current;
+    // This is the privacy boundary. Invalidate first, without yielding, so a
+    // delayed native read cannot pass its pre-import or pre-status guard while
+    // native revocation and storage cleanup are still running.
+    healthOperationGenerationRef.current += 1;
+    const operationFence = captureHealthOperation();
     setCloudSyncPaused('health-backfill', false);
     setCloudSyncPaused('health-steps-repair', false);
     if (backfillTimerRef.current) {
       clearTimeout(backfillTimerRef.current);
       backfillTimerRef.current = null;
     }
-    await nativeHealthAdapter.disconnect?.().catch(() => undefined);
-    const current = stateRef.current.settings.healthSync;
+    if (todayStepsTimerRef.current) {
+      clearTimeout(todayStepsTimerRef.current);
+      todayStepsTimerRef.current = null;
+    }
+    if (todayStepsIntervalRef.current) {
+      clearInterval(todayStepsIntervalRef.current);
+      todayStepsIntervalRef.current = null;
+    }
+    todayStepsInteractionRef.current?.cancel();
+    todayStepsInteractionRef.current = null;
+    if (todayStepsInteractionFallbackRef.current) {
+      clearTimeout(todayStepsInteractionFallbackRef.current);
+      todayStepsInteractionFallbackRef.current = null;
+    }
+    if (stepsRepairTimerRef.current) {
+      clearTimeout(stepsRepairTimerRef.current);
+      stepsRepairTimerRef.current = null;
+    }
+    const currentState = stateRef.current;
+    const healthSync = {
+      ...currentState.settings.healthSync,
+      enabled: false,
+      backgroundAccess: false,
+      initialHistoryImportPending: false,
+      backfillTrackedGoalsOnFirstImport: false,
+      backfillTrackedGoalsEmptyReadCount: undefined,
+    };
+    stateRef.current = {
+      ...currentState,
+      settings: { ...currentState.settings, healthSync },
+    };
+    updateSettingsRef.current({ healthSync });
+    setLiveStepDiagnostics(null);
+    setStatus(availability?.available ? 'idle' : 'unavailable');
+
+    await Promise.allSettled([
+      nativeHealthAdapter.disconnect?.() ?? Promise.resolve(),
+      ...(pending ? [pending] : []),
+    ]);
+    if (!healthOperationIsCurrent(operationFence, false)) return;
     await saveStatus({
       ...persistedRef.current,
       connectionEnabled: false,
       backgroundAccess: false,
-    });
-    updateSettings({ healthSync: { ...current, enabled: false, backgroundAccess: false } });
-    setStatus(availability?.available ? 'idle' : 'unavailable');
-  }, [availability, saveStatus, updateSettings]);
+      backfill: null,
+      stepsRepair: null,
+      stepsRepairError: null,
+      stepsRepairNextRetryAt: null,
+      backgroundReconciliation: null,
+      retryAttempt: 0,
+      nextRetryAt: null,
+    }, operationFence, false);
+  }, [availability, captureHealthOperation, healthOperationIsCurrent, saveStatus]);
 
   const setSourceEnabled = useCallback(async (sourceId: string, enabled: boolean) => {
     const currentState = stateRef.current;

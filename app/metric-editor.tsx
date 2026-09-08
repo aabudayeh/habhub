@@ -42,6 +42,7 @@ import { dateKey } from "@/src/domain/date";
 import { MUSCLE_LABELS } from "@/src/domain/exerciseCatalog";
 import { evaluateFormula, formulaIdentifiers } from "@/src/domain/formula";
 import { canBeTrackedGoal } from "@/src/domain/metrics";
+import { isQuickEntryAligned } from "@/src/domain/quickEntry";
 import {
   defaultProgressReminderPercentages,
   defaultReminderTimes,
@@ -344,10 +345,11 @@ const AVAILABLE_SOURCES = SOURCES.filter(
 );
 
 export default function TrackerEditor() {
-  const { id, scope, focus } = useLocalSearchParams<{
+  const { id, scope, focus, duplicate } = useLocalSearchParams<{
     id?: string;
     scope?: string;
     focus?: string;
+    duplicate?: string;
   }>();
   const groupScope = scope === "group";
   const navigation = useNavigation();
@@ -375,6 +377,7 @@ export default function TrackerEditor() {
     id && id !== "new"
       ? sourceMetrics.find((item) => item.id === id)
       : undefined;
+  const isDuplicate = duplicate === "1" && Boolean(tracker);
   const trackerVisualDefaults = tracker
     ? metricVisualization(tracker)
     : {
@@ -406,7 +409,9 @@ export default function TrackerEditor() {
   const [presetId, setPresetId] = useState("");
   const [selectedPresetIds, setSelectedPresetIds] = useState<string[]>([]);
   const bulkPresetMode = !tracker && selectedPresetIds.length > 1;
-  const [name, setName] = useState(tracker?.name ?? "");
+  const [name, setName] = useState(
+    tracker ? (isDuplicate ? `${tracker.name} copy` : tracker.name) : "",
+  );
   const [color, setColor] = useState(() => {
     if (tracker?.color && isAllowedTrackerColor(tracker.color))
       return tracker.color;
@@ -529,9 +534,11 @@ export default function TrackerEditor() {
       trackerVisualDefaults.progressGrid,
   );
   const [healthType, setHealthType] = useState<HealthDataType | "">(
-    tracker?.healthMapping?.dataType ?? "",
+    isDuplicate ? "" : tracker?.healthMapping?.dataType ?? "",
   );
-  const [gymMapping, setGymMapping] = useState(tracker?.gymMapping);
+  const [gymMapping, setGymMapping] = useState(
+    isDuplicate ? undefined : tracker?.gymMapping,
+  );
   const [gymMuscles, setGymMuscles] = useState<MuscleGroup[]>(
     tracker?.gymMuscleGroups ??
       (tracker?.gymMapping?.kind === "muscle_volume"
@@ -542,16 +549,35 @@ export default function TrackerEditor() {
     tracker?.healthMapping?.field ?? "value",
   );
   const [stepFallback, setStepFallback] = useState(
-    tracker?.stepFallback ?? false,
+    isDuplicate ? false : tracker?.stepFallback ?? false,
   );
   const [manualEntry, setManualEntry] = useState(
-    tracker?.manualEntry !== false,
+    isDuplicate ? true : tracker?.manualEntry !== false,
   );
   const [timerEnabled, setTimerEnabled] = useState(
     tracker?.timerEnabled ??
       (focus === "timer" ||
         /min|hour|hr|sec/i.test(tracker?.unit ?? "") ||
         tracker?.category === "mind"),
+  );
+  const [stepperEnabled, setStepperEnabled] = useState(
+    tracker?.quickEntry?.kind === "stepper",
+  );
+  const [stepperAmount, setStepperAmount] = useState(
+    String(tracker?.quickEntry?.step ?? 1),
+  );
+  const [stepperMinimum, setStepperMinimum] = useState(
+    tracker?.quickEntry?.minimum === undefined
+      ? ""
+      : String(tracker.quickEntry.minimum),
+  );
+  const [stepperMaximum, setStepperMaximum] = useState(
+    tracker?.quickEntry?.maximum === undefined
+      ? ""
+      : String(tracker.quickEntry.maximum),
+  );
+  const [stepperLabel, setStepperLabel] = useState(
+    tracker?.quickEntry?.stepLabel ?? "step",
   );
   const [workoutQualificationMode, setWorkoutQualificationMode] = useState<
     "recommended" | "any" | "custom"
@@ -570,7 +596,8 @@ export default function TrackerEditor() {
         : tracker?.workoutQualification,
     ),
   );
-  const isWorkoutTracker = (presetId || tracker?.id) === "workout";
+  const isWorkoutTracker =
+    !isDuplicate && (presetId || tracker?.id) === "workout";
   const workoutQualification =
     workoutQualificationMode === "recommended"
       ? DEFAULT_WORKOUT_QUALIFICATION
@@ -820,6 +847,11 @@ export default function TrackerEditor() {
     stepFallback,
     manualEntry,
     timerEnabled,
+    stepperEnabled,
+    stepperAmount,
+    stepperMinimum,
+    stepperMaximum,
+    stepperLabel,
     workoutQualificationMode,
     workoutRules,
     fastingStartTime,
@@ -912,6 +944,11 @@ export default function TrackerEditor() {
     setStepFallback(false);
     setManualEntry(true);
     setTimerEnabled(false);
+    setStepperEnabled(false);
+    setStepperAmount("1");
+    setStepperMinimum("");
+    setStepperMaximum("");
+    setStepperLabel("step");
     setWorkoutQualificationMode("recommended");
     setWorkoutRules(workoutRuleDrafts());
     setFastingStartTime("20:00");
@@ -980,6 +1017,19 @@ export default function TrackerEditor() {
         (/min|hour|hr|sec/i.test(preset.unit) ||
           preset.category === "mind"),
     );
+    setStepperEnabled(preset.quickEntry?.kind === "stepper");
+    setStepperAmount(String(preset.quickEntry?.step ?? 1));
+    setStepperMinimum(
+      preset.quickEntry?.minimum === undefined
+        ? ""
+        : String(preset.quickEntry.minimum),
+    );
+    setStepperMaximum(
+      preset.quickEntry?.maximum === undefined
+        ? ""
+        : String(preset.quickEntry.maximum),
+    );
+    setStepperLabel(preset.quickEntry?.stepLabel ?? "step");
     setWorkoutQualificationMode(
       isAnyRecordedWorkoutQualification(preset.workoutQualification)
         ? "any"
@@ -1145,7 +1195,14 @@ export default function TrackerEditor() {
     else addMetrics(metrics);
     markSavedAndLeave(onSaved);
   }
-  async function save(onSaved: () => void = () => router.back()) {
+  async function save(
+    onSaved: () => void = () =>
+      isDuplicate
+        ? router.replace(
+            (groupScope ? "/group-settings" : "/customize") as never,
+          )
+        : router.back(),
+  ) {
     if (saving) return;
     if (bulkPresetMode) {
       savePresetSelection(onSaved);
@@ -1157,6 +1214,13 @@ export default function TrackerEditor() {
     const diastolicTarget = Number(diastolicGoal.replace(",", "."));
     const systolicMinimum = Number(rangeMin.replace(",", "."));
     const diastolicMinimum = Number(diastolicMin.replace(",", "."));
+    const quickStep = Number(stepperAmount.replace(",", "."));
+    const quickMinimum = stepperMinimum.trim()
+      ? Number(stepperMinimum.replace(",", "."))
+      : quickStep;
+    const quickMaximum = stepperMaximum.trim()
+      ? Number(stepperMaximum.replace(",", "."))
+      : undefined;
     if (!name.trim())
       return Alert.alert("Add a name", "Use a short, clear name.");
     if (!isAllowedTrackerColor(color))
@@ -1180,6 +1244,32 @@ export default function TrackerEditor() {
       );
     if (!/^\d{4}-\d{2}-\d{2}$/.test(activeFrom))
       return Alert.alert("Check the start date", "Use YYYY-MM-DD.");
+    if (
+      dataType === "number" &&
+      stepperEnabled &&
+      (!Number.isFinite(quickStep) ||
+        quickStep <= 0 ||
+        !Number.isFinite(quickMinimum) ||
+        quickMinimum < 0 ||
+        !isQuickEntryAligned(quickMinimum, {
+          kind: "stepper",
+          step: quickStep,
+          minimum: 0,
+        }) ||
+        (quickMaximum !== undefined &&
+          (!Number.isFinite(quickMaximum) ||
+            quickMaximum < quickMinimum ||
+            !isQuickEntryAligned(quickMaximum, {
+              kind: "stepper",
+              step: quickStep,
+              minimum: quickMinimum,
+            })))
+      )
+    )
+      return Alert.alert(
+        "Check quick-entry steps",
+        "Use a positive step, with the minimum and optional maximum aligned to that step.",
+      );
     if (submetrics.filter((item) => item.showProgressBar).length > 4)
       return Alert.alert(
         "Too many progress bars",
@@ -1293,12 +1383,22 @@ export default function TrackerEditor() {
       stepFallback,
       manualEntry:
         healthType === "steps" ||
-        tracker?.id === "steps" ||
+        (!isDuplicate && tracker?.id === "steps") ||
         isFastingTracker
           ? false
           : manualEntry,
       timerEnabled:
         dataType === "number" && !isFastingTracker ? timerEnabled : false,
+      quickEntry:
+        dataType === "number" && stepperEnabled
+          ? {
+              kind: "stepper",
+              step: quickStep,
+              minimum: quickMinimum,
+              maximum: quickMaximum,
+              stepLabel: stepperLabel.trim() || "step",
+            }
+          : undefined,
       fastingSettings:
         isFastingTracker
           ? {
@@ -1320,6 +1420,10 @@ export default function TrackerEditor() {
             ...item,
             name: item.name.trim(),
             unit: item.unit.trim(),
+            // A duplicate owns its values. Retaining these links would make
+            // the copy silently write into the source tracker's companions.
+            healthMapping: isDuplicate ? undefined : item.healthMapping,
+            linkedMetricId: isDuplicate ? undefined : item.linkedMetricId,
           }))
         : undefined,
       submetricDisplay: submetrics.length
@@ -1404,6 +1508,7 @@ export default function TrackerEditor() {
     const googleVisibilityChange =
       !groupScope &&
       tracker &&
+      !isDuplicate &&
       tracker.defaultVisibility !== visibility &&
       state.entries.some(
         (entry) =>
@@ -1448,9 +1553,10 @@ export default function TrackerEditor() {
         progressRemindersEnabled: undefined,
         progressReminderPercentages: undefined,
       };
-      if (tracker) updateGroupMetric(tracker.id, sharedDefinition);
+      if (tracker && !isDuplicate)
+        updateGroupMetric(tracker.id, sharedDefinition);
       else addGroupMetric(sharedDefinition);
-    } else if (tracker) {
+    } else if (tracker && !isDuplicate) {
       updateMetric(tracker.id, definition);
       if (shouldTrack || initiallyTracked) {
         setTrackedGoal(
@@ -1467,7 +1573,7 @@ export default function TrackerEditor() {
         "today",
       );
     } else addMetric(common);
-    if ((presetId || tracker?.id) === "blood_pressure_systolic") {
+    if (!isDuplicate && (presetId || tracker?.id) === "blood_pressure_systolic") {
       const presetsById = new Map(
         trackerPresets(state, true).map((preset) => [preset.templateId, preset]),
       );
@@ -1733,7 +1839,9 @@ export default function TrackerEditor() {
   }
   let deferredSubmetrics: React.ReactNode = null;
   const saveActionLabel = tracker
-    ? "Save"
+    ? isDuplicate
+      ? "Create tracker copy"
+      : "Save"
     : bulkPresetMode
       ? groupScope
         ? "Add selected to group"
@@ -1741,7 +1849,11 @@ export default function TrackerEditor() {
       : groupScope
         ? "Add to group"
         : "Add tracker";
-  const headerSaveActionLabel = tracker ? "Save" : "Add";
+  const headerSaveActionLabel = tracker
+    ? isDuplicate
+      ? "Create copy"
+      : "Save"
+    : "Add";
   return (
     <Screen
       scrollRef={scrollRef}
@@ -1763,19 +1875,39 @@ export default function TrackerEditor() {
         translateEyebrow={!groupScope}
         title={
           tracker
-            ? `Edit ${tracker.name}`
+            ? isDuplicate
+              ? `Duplicate ${tracker.name}`
+              : `Edit ${tracker.name}`
             : groupScope
               ? "Add group tracker"
               : "Add something to track"
         }
         subtitle={
-          groupScope
+          isDuplicate
+            ? "Copy the interaction style, then rename and tune it. Device-health and linked-tracker connections are intentionally detached."
+            : groupScope
             ? "Admins define this once; it becomes available to every group member."
             : "Keep it simple. Technical controls stay under Advanced."
         }
         showMenu={false}
         action={
           <View style={styles.headerActions}>
+            {tracker && !isDuplicate ? (
+              <IconButton
+                icon="copy-outline"
+                label="Duplicate tracker style"
+                onPress={() =>
+                  router.push({
+                    pathname: "/metric-editor",
+                    params: {
+                      id: tracker.id,
+                      scope: groupScope ? "group" : undefined,
+                      duplicate: "1",
+                    },
+                  } as never)
+                }
+              />
+            ) : null}
             <Button
               label={headerSaveActionLabel}
               icon="checkmark"
@@ -2569,17 +2701,69 @@ export default function TrackerEditor() {
             </>
           ) : null}
           {dataType === "number" && !isFastingTracker ? (
-            <View style={[styles.switchRow, { borderColor: colors.border }]}>
-              <View style={styles.grow}>
-                <Text style={[styles.rowTitle, { color: colors.ink }]}>
-                  Timed activity
-                </Text>
-                <Text style={[styles.help, { color: colors.muted }]}>
-                  Use this tracker with the stopwatch or countdown.
-                </Text>
+            <>
+              <View style={[styles.switchRow, { borderColor: colors.border }]}>
+                <View style={styles.grow}>
+                  <Text style={[styles.rowTitle, { color: colors.ink }]}>
+                    Timed activity
+                  </Text>
+                  <Text style={[styles.help, { color: colors.muted }]}>
+                    Use this tracker with the stopwatch or countdown.
+                  </Text>
+                </View>
+                <Switch value={timerEnabled} onValueChange={setTimerEnabled} />
               </View>
-              <Switch value={timerEnabled} onValueChange={setTimerEnabled} />
-            </View>
+              <View style={[styles.switchRow, { borderColor: colors.border }]}>
+                <View style={styles.grow}>
+                  <Text style={[styles.rowTitle, { color: colors.ink }]}>
+                    Plus/minus quick entry
+                  </Text>
+                  <Text style={[styles.help, { color: colors.muted }]}>
+                    Log repeatable amounts with compact – and + buttons. This interaction is kept when you duplicate the tracker.
+                  </Text>
+                </View>
+                <Switch
+                  value={stepperEnabled}
+                  onValueChange={setStepperEnabled}
+                />
+              </View>
+              {stepperEnabled ? (
+                <View style={styles.advancedSection}>
+                  <View style={styles.inlineFields}>
+                    <Field
+                      label={`Amount per tap${unit.trim() ? ` (${unit.trim()})` : ""}`}
+                      value={stepperAmount}
+                      set={setStepperAmount}
+                      colors={colors}
+                      info="Each plus or minus press changes the value by this amount. For 15 minutes stored as hours, use 0.25."
+                    />
+                    <Field
+                      label="Step name"
+                      value={stepperLabel}
+                      set={setStepperLabel}
+                      colors={colors}
+                      keyboard={false}
+                      info="A short singular label such as cup, set, page, or focus block."
+                    />
+                  </View>
+                  <View style={styles.inlineFields}>
+                    <Field
+                      label="Minimum"
+                      value={stepperMinimum}
+                      set={setStepperMinimum}
+                      colors={colors}
+                      info="Leave blank to start at one step. Use 0 if an empty value should be allowed."
+                    />
+                    <Field
+                      label="Maximum (optional)"
+                      value={stepperMaximum}
+                      set={setStepperMaximum}
+                      colors={colors}
+                    />
+                  </View>
+                </View>
+              ) : null}
+            </>
           ) : null}
             <ChoicePicker
               label={groupScope ? "Default visibility" : "Visibility"}
@@ -4027,7 +4211,7 @@ export default function TrackerEditor() {
         </>
       )}
       <View style={styles.actions}>
-        {tracker ? (
+        {tracker && !isDuplicate ? (
           <View style={styles.delete}>
             <Button label="Delete" variant="danger" onPress={remove} />
           </View>

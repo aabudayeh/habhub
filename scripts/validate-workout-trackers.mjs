@@ -32,6 +32,7 @@ import {
 } from "../src/domain/backgroundWorkoutFinish.ts";
 import { migrateRetiredWorkoutCaloriesEntries } from "../src/domain/workoutCaloriesMigration.ts";
 import { reconcileLinkedGymWorkoutMedia } from "../src/domain/workoutMedia.ts";
+import { inferSessionActivityFromName } from "../src/domain/exerciseCatalog.ts";
 import {
   ANY_RECORDED_WORKOUT_QUALIFICATION,
   DEFAULT_WORKOUT_QUALIFICATION,
@@ -55,6 +56,21 @@ const walkingExercise = {
     },
   ],
 };
+assert.equal(
+  inferSessionActivityFromName("Morning run")?.key,
+  "running",
+  "a descriptive custom timer label must select the matching session MET",
+);
+assert.equal(
+  inferSessionActivityFromName("Saturday track running")?.key,
+  "track_running",
+  "the longest whole-word activity match must win",
+);
+assert.equal(
+  inferSessionActivityFromName("Project focus block"),
+  undefined,
+  "an unrelated custom label must retain the explicitly selected fallback",
+);
 assert.deepEqual(
   gymExerciseTrackingFields(walkingExercise),
   ["duration", "distance"],
@@ -1245,6 +1261,7 @@ const manualWorkout = fs.readFileSync(
   "utf8",
 );
 const gymScreen = fs.readFileSync("app/(tabs)/gym.tsx", "utf8");
+const activityTimer = fs.readFileSync("app/timer.tsx", "utf8");
 const workoutTimerPresence = fs.readFileSync(
   "src/storage/workoutTimerPresence.ts",
   "utf8",
@@ -1347,6 +1364,11 @@ assert.match(
   gymScreen,
   /completedExerciseWeightAverages\([\s\S]{0,160}state\.currentUserId/,
   "Workout exercise headers must show an all-time completed-set average instead of one previous maximum",
+);
+assert.match(
+  fs.readFileSync("app/gym-exercise.tsx", "utf8"),
+  /\.flatMap\(\(session\) =>[\s\S]{0,80}expandedGymExercises\(session\.exercises\)[\s\S]{0,120}exerciseIdentity\(exercise\) === key/,
+  "a superset partner's progress page must show the same expanded observations in its Entries list",
 );
 assert.match(
   gymScreen,
@@ -1855,5 +1877,50 @@ assert.match(
   /allowProgression && actionToken && maxActions > 0/,
   "The notification API must preserve guided progression by default while allowing the whole timer to suppress Next",
 );
+assert.match(
+  activityTimer,
+  /metricId === "workout_duration"[\s\S]{0,1200}Also save to Workout/,
+  "Workout duration timers must offer canonical Workout logging",
+);
+assert.match(
+  activityTimer,
+  /const saveTimedWorkout[\s\S]{0,3200}estimateGymActiveCalories[\s\S]{0,1600}saveGymSession\(session\)/,
+  "timed workouts must estimate missing calories from the selected activity MET and save one GymSession",
+);
+assert.match(
+  activityTimer,
+  /inferSessionActivityFromName\(workoutName\)[\s\S]{0,180}catalogExercise\(target\.workout\.activityKey\)/,
+  "a recognizable custom workout label must override a stale dropdown MET while unknown labels retain the selected activity",
+);
+assert.match(
+  activityTimer,
+  /id: `activity-timer-workout-\$\{target\.id\}`/,
+  "a timed workout retry must reconcile the same canonical GymSession instead of duplicating it",
+);
+assert.match(
+  activityTimer,
+  /target\.workout && target\.metricId === "workout_duration"[\s\S]{0,80}return/,
+  "a timed GymSession must not duplicate its canonical Workout duration row",
+);
+assert.match(
+  activityTimer,
+  /finishingTimerIds\.current\.has\(target\.id\)[\s\S]{0,120}finishingTimerIds\.current\.add\(target\.id\)[\s\S]*finally \{[\s\S]{0,100}finishingTimerIds\.current\.delete\(target\.id\)/,
+  "timer completion must be single-flight while native notification cleanup is pending",
+);
+assert.match(
+  activityTimer,
+  /if \(target\.autoLog\) \{[\s\S]{0,420}saveTimedWorkout\(target, seconds\)[\s\S]{0,240}setActivityTimer\(undefined, target\.id\)/,
+  "auto-log must persist the canonical timed workout before deleting its recoverable timer",
+);
+assert.match(
+  activityTimer,
+  /localDate: plannedDate[\s\S]*target\.localDate \?\? dateKey\(new Date\(target\.startedAt\)\)/,
+  "timers must retain the chosen calendar date across pause, resume, and midnight",
+);
+for (const label of ["Distance · km", "Active calories", "Keep paused", "Save workout"])
+  assert.ok(
+    activityTimer.includes(label),
+    `the workout finish review must expose ${label}`,
+  );
 
 console.log("Canonical workout tracker merge, compatibility aliases, and onboarding recommendations validated.");

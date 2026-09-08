@@ -12,6 +12,7 @@ import {
   AccessibilityInfo,
   Animated,
   BackHandler,
+  Easing,
   findNodeHandle,
   InteractionManager,
   LayoutChangeEvent,
@@ -28,12 +29,14 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppText as Text } from "@/src/components/AppText";
 import { useLocalization } from "@/src/i18n";
 import { localizedTutorialGuide } from "@/src/i18n/tutorial";
+import { useApp } from "@/src/state/AppProvider";
 import {
   calloutLayout,
   relativeTargetRect,
   spotlightRect,
 } from "@/src/tutorial/geometry";
 import { BASIC_TUTORIAL_GUIDE } from "@/src/tutorial/basicGuide";
+import { tutorialPromptForPath } from "@/src/tutorial/firstVisit";
 import {
   TutorialIsolatedPreviewBoundary,
   TutorialProvider,
@@ -45,7 +48,12 @@ import {
   routeForStep,
   routeMatchesStep,
   safeTutorialRoute,
+  tutorialRoutePath,
 } from "@/src/tutorial/session";
+import {
+  markTutorialPagePrompted,
+  readPromptedTutorialPages,
+} from "@/src/tutorial/storage";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 
 export {
@@ -135,11 +143,18 @@ export function TutorialTarget({
   style,
   reveal,
   onTutorialActivate,
+  onTutorialDeactivate,
 }: PropsWithChildren<{
   id: string;
   style?: StyleProp<ViewStyle>;
   reveal?: () => void;
   onTutorialActivate?: () => void;
+  /**
+   * Clears transient UI opened by Watch mode (for example, a modal or sheet).
+   * This runs only after this target's tutorial activator actually ran and the
+   * owning step, route, or guide is leaving.
+   */
+  onTutorialDeactivate?: () => void;
 }>) {
   const tutorial = useOptionalTutorial();
   const scrollContext = React.useContext(TutorialScrollContext);
@@ -147,6 +162,9 @@ export function TutorialTarget({
   const lastWindowY = useRef(0);
   const autoRevealDoneRef = useRef(false);
   const autoRevealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tutorialActivatedRef = useRef(false);
+  const onTutorialActivateRef = useRef(onTutorialActivate);
+  const onTutorialDeactivateRef = useRef(onTutorialDeactivate);
   const instanceId = useRef(++targetInstanceSequence).current;
   const { height: windowHeight } = useWindowDimensions();
   const activeTargetId =
@@ -154,11 +172,21 @@ export function TutorialTarget({
   const enabled = activeTargetId === id;
   const enabledRef = useRef(enabled);
   enabledRef.current = enabled;
+  onTutorialActivateRef.current = onTutorialActivate;
+  onTutorialDeactivateRef.current = onTutorialDeactivate;
   const registerTarget = tutorial?.registerTarget;
   const unregisterTarget = tutorial?.unregisterTarget;
   const setTargetMeasurer = tutorial?.setTargetMeasurer;
   const setTargetRevealer = tutorial?.setTargetRevealer;
   const setTargetActivator = tutorial?.setTargetActivator;
+  const activateForTutorial = useCallback(() => {
+    tutorialActivatedRef.current = true;
+    onTutorialActivateRef.current?.();
+  }, []);
+  const hasTutorialActivator = Boolean(onTutorialActivate);
+  const activeStepIdentity = enabled
+    ? `${tutorial?.activeSession?.runId ?? ""}:${tutorial?.activeStep?.id ?? ""}:${id}`
+    : undefined;
   const measureNow = useCallback(() => {
     if (!enabledRef.current) return;
     ref.current?.measureInWindow((x, y, width, height) => {
@@ -190,7 +218,11 @@ export function TutorialTarget({
     autoRevealDoneRef.current = false;
     setTargetMeasurer?.(id, instanceId, measure);
     scrollContext?.setActiveTargetMeasurer(instanceId, measureNow);
-    setTargetActivator?.(id, instanceId, onTutorialActivate);
+    setTargetActivator?.(
+      id,
+      instanceId,
+      hasTutorialActivator ? activateForTutorial : undefined,
+    );
     const revealTarget =
       reveal ??
       (scrollContext
@@ -213,11 +245,12 @@ export function TutorialTarget({
     };
   }, [
     enabled,
+    activateForTutorial,
+    hasTutorialActivator,
     id,
     instanceId,
     measure,
     measureNow,
-    onTutorialActivate,
     reveal,
     scrollContext,
     setTargetMeasurer,
@@ -225,6 +258,15 @@ export function TutorialTarget({
     setTargetRevealer,
     unregisterTarget,
   ]);
+
+  useEffect(() => {
+    if (!activeStepIdentity) return;
+    return () => {
+      if (!tutorialActivatedRef.current) return;
+      tutorialActivatedRef.current = false;
+      onTutorialDeactivateRef.current?.();
+    };
+  }, [activeStepIdentity]);
 
   return (
     <View
@@ -253,7 +295,150 @@ function isBlockedRoute(pathname: string) {
 export function TutorialSpotlight() {
   const tutorial = useOptionalTutorial();
   if (!tutorial) return null;
-  return <TutorialSpotlightContent />;
+  return <TutorialSpotlightSurface />;
+}
+
+function TutorialSpotlightSurface() {
+  const { activeSession, transitionPhase } = useTutorial();
+  if (activeSession || transitionPhase !== "idle")
+    return <TutorialSpotlightContent />;
+  return <TutorialFirstVisitPrompt />;
+}
+
+function TutorialFirstVisitPrompt() {
+  const { state } = useApp();
+  const { guides, hydrated, startGuide } = useTutorial();
+  const pathname = usePathname();
+  const colors = useAppColors();
+  const accent = useGroupAccent();
+  const { language, t } = useLocalization();
+  const [promptedPageId, setPromptedPageId] = useState<string>();
+  const page = tutorialPromptForPath(pathname);
+  const pageId = page?.pageId;
+  const pageGuideId = page?.guideId;
+  const pageStepId = page?.stepId;
+  const pageTitle = page?.title;
+  const accountId = state.currentUserId || "anonymous";
+
+  useEffect(() => {
+    setPromptedPageId(undefined);
+    if (
+      !hydrated ||
+      !state.settings.onboardingComplete ||
+      !state.settings.tutorialComplete ||
+      !pageId ||
+      !pageGuideId
+    )
+      return;
+    let cancelled = false;
+    let revealTimer: ReturnType<typeof setTimeout> | undefined;
+    void readPromptedTutorialPages(accountId).then((pageIds) => {
+      if (cancelled || pageIds.includes(pageId)) return;
+      revealTimer = setTimeout(() => {
+        if (!cancelled) setPromptedPageId(pageId);
+      }, 650);
+    }).catch(() => undefined);
+    return () => {
+      cancelled = true;
+      if (revealTimer) clearTimeout(revealTimer);
+    };
+  }, [
+    accountId,
+    hydrated,
+    pageGuideId,
+    pageId,
+    pageStepId,
+    state.settings.onboardingComplete,
+    state.settings.tutorialComplete,
+  ]);
+
+  if (!pageId || !pageGuideId || promptedPageId !== pageId) return null;
+  const guide = guides.find((item) => item.id === pageGuideId);
+  if (!guide) return null;
+  const localizedGuide = localizedTutorialGuide(guide, language);
+  const promptTitle = pageTitle
+    ? t(pageTitle)
+    : localizedGuide.sections?.[0]?.title ?? localizedGuide.title;
+
+  const rememberPrompt = () => {
+    setPromptedPageId(undefined);
+    void markTutorialPagePrompted(accountId, pageId).catch(() => undefined);
+  };
+  const launch = (mode: "watch" | "practice") => {
+    rememberPrompt();
+    startGuide(guide.id, {
+      resume: false,
+      mode,
+      stepId: pageStepId,
+      returnPath: pathname,
+    });
+  };
+
+  return (
+    <View
+      accessible
+      accessibilityRole="summary"
+      accessibilityLabel={t("First time on {name}?").replace(
+        "{name}",
+        promptTitle,
+      )}
+      style={styles.firstVisitLayer}
+      pointerEvents="box-none"
+    >
+      <View
+        style={[
+          styles.firstVisitCard,
+          { backgroundColor: colors.card, borderColor: accent },
+        ]}
+      >
+        <View style={[styles.firstVisitIcon, { backgroundColor: colors.primarySoft }]}>
+          <Ionicons name="sparkles" size={18} color={accent} />
+        </View>
+        <View style={styles.firstVisitCopy}>
+          <Text style={[styles.firstVisitTitle, { color: colors.ink }]}>
+            {t("First time on {name}?").replace(
+              "{name}",
+              promptTitle,
+            )}
+          </Text>
+          <Text style={[styles.firstVisitDetail, { color: colors.muted }]}>
+            {t("Watch a quick pointer tour, or practice safely with demo data. Your own entries stay untouched.")}
+          </Text>
+          <View style={styles.firstVisitActions}>
+            <Pressable
+              accessibilityRole="button"
+              onPress={rememberPrompt}
+              style={[styles.firstVisitSkip, { borderColor: colors.border }]}
+            >
+              <Text style={[styles.firstVisitSkipText, { color: colors.muted }]}>
+                {t("Skip for now")}
+              </Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => launch("watch")}
+              style={[styles.firstVisitChoice, { borderColor: accent }]}
+            >
+              <Ionicons name="play" size={14} color={accent} />
+              <Text style={[styles.firstVisitChoiceText, { color: accent }]}>
+                {t("Watch")}
+              </Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => launch("practice")}
+              style={[styles.firstVisitChoice, { backgroundColor: accent, borderColor: accent }]}
+            >
+              <Ionicons name="hand-left" size={14} color="#FFFFFF" />
+              <Text preserveColor style={styles.firstVisitPracticeText}>
+                {t("Practice")}
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
+    </View>
+  );
 }
 
 function TutorialSpotlightContent() {
@@ -289,8 +474,10 @@ function TutorialSpotlightContent() {
   const [pageSettled, setPageSettled] = useState(false);
   const [reduceMotion, setReduceMotion] = useState(false);
   const [calloutHeight, setCalloutHeight] = useState(214);
+  const [watchPaused, setWatchPaused] = useState(false);
   const fade = useRef(new Animated.Value(0)).current;
   const curtain = useRef(new Animated.Value(0)).current;
+  const pointerProgress = useRef(new Animated.Value(0)).current;
   const routedParameterizedStep = useRef<string | undefined>(undefined);
   const settledPath = useRef<string | undefined>(undefined);
   const settledStep = useRef<string | undefined>(undefined);
@@ -303,6 +490,8 @@ function TutorialSpotlightContent() {
   const stepIdentity = activeSession
     ? `${activeSession.runId}:${activeSession.stepId}`
     : "inactive";
+  const currentStepIdentity = useRef(stepIdentity);
+  currentStepIdentity.current = stepIdentity;
   const targetId = step?.anchor?.target ?? step?.target;
   const raw = targetId ? targets[targetId] : undefined;
   const relative = raw ? relativeTargetRect(raw, overlayOrigin) : undefined;
@@ -326,9 +515,11 @@ function TutorialSpotlightContent() {
   const anchorActivatable = Boolean(
     targetId && activatableTargets[targetId],
   );
+  const watchMode = activeSession?.experienceMode === "watch";
   const realPracticeAvailable =
     observedPractice && isolatedPreviewActive && Boolean(rect);
-  const canPassThrough = realPracticeAvailable && !anchorActivatable;
+  const canPassThrough =
+    !watchMode && realPracticeAvailable && !anchorActivatable;
   const accessibleRehearsalAvailable = Boolean(
     observedPractice &&
       isolatedPreviewActive &&
@@ -370,6 +561,8 @@ function TutorialSpotlightContent() {
       subscription.remove();
     };
   }, []);
+
+  useEffect(() => setWatchPaused(false), [activeSession?.runId]);
 
   useEffect(() => {
     fade.stopAnimation();
@@ -495,13 +688,28 @@ function TutorialSpotlightContent() {
     let interaction:
       | ReturnType<typeof InteractionManager.runAfterInteractions>
       | undefined;
+    let nativeNavigationWatchdog: ReturnType<typeof setTimeout> | undefined;
+    let navigated = false;
+    const navigateIfCurrent = () => {
+      if (navigated || currentStepIdentity.current !== stepIdentity) return;
+      navigated = true;
+      router.navigate(route as never);
+    };
     const timer = setTimeout(() => {
-      interaction = InteractionManager.runAfterInteractions(() =>
-        router.navigate(route as never),
-      );
+      // React Native Web can keep InteractionManager busy indefinitely while
+      // animated tutorial/Today surfaces are mounted. Route immediately there;
+      // on native retain the modal-safety delay, with a bounded watchdog so an
+      // unrelated long-running interaction can never strand the guide.
+      if (Platform.OS === "web") {
+        navigateIfCurrent();
+        return;
+      }
+      interaction = InteractionManager.runAfterInteractions(navigateIfCurrent);
+      nativeNavigationWatchdog = setTimeout(navigateIfCurrent, 1_400);
     }, 900);
     return () => {
       clearTimeout(timer);
+      if (nativeNavigationWatchdog) clearTimeout(nativeNavigationWatchdog);
       interaction?.cancel();
     };
   }, [active, activeSession, pathname, step, stepIdentity]);
@@ -531,7 +739,7 @@ function TutorialSpotlightContent() {
   const exit = useCallback(() => {
     skipGuide();
     const destination = resolvedTutorialRoute(
-      activeGuide?.path,
+      activeSession?.returnPath ?? activeGuide?.path,
       activeSession?.demoAnchorDate,
     );
     if (destination)
@@ -539,8 +747,139 @@ function TutorialSpotlightContent() {
   }, [
     activeGuide?.path,
     activeSession?.demoAnchorDate,
+    activeSession?.returnPath,
     skipGuide,
     transitionDurationMs,
+  ]);
+
+  const advance = useCallback(() => {
+    if (!activeSession || !activeGuide || !step) return;
+    const isLast = activeSession.stepIndex >= activeGuide.steps.length - 1;
+    if (isLast) {
+      finishGuide();
+      const destination =
+        activeGuide.id === "essential"
+          ? "/quick-guide?completed=essential"
+          : activeSession.returnPath ?? activeGuide.path;
+      const resolved = resolvedTutorialRoute(
+        destination,
+        activeSession.demoAnchorDate,
+      );
+      if (resolved)
+        setTimeout(
+          () => router.navigate(resolved as never),
+          transitionDurationMs,
+        );
+      return;
+    }
+
+    const explicitDestination = resolvedTutorialRoute(
+      step.navigation?.after,
+      activeSession.demoAnchorDate,
+    );
+    nextStep();
+    if (!explicitDestination) return;
+    setTimeout(() => {
+      const returningToTabs = tutorialRoutePath(explicitDestination) === "/";
+      if (returningToTabs && pathname === "/view-filters")
+        router.dismissTo(explicitDestination as never);
+      else router.navigate(explicitDestination as never);
+    }, Math.max(40, transitionDurationMs));
+  }, [
+    activeGuide,
+    activeSession,
+    finishGuide,
+    nextStep,
+    pathname,
+    step,
+    transitionDurationMs,
+  ]);
+
+  useEffect(() => {
+    pointerProgress.stopAnimation();
+    pointerProgress.setValue(0);
+    if (
+      !active ||
+      !watchMode ||
+      watchPaused ||
+      !pageSettled ||
+      waitingForRoute ||
+      waitingForAnchor
+    )
+      return;
+    if (reduceMotion) {
+      pointerProgress.setValue(1);
+      return;
+    }
+    const animation = Animated.sequence([
+      Animated.timing(pointerProgress, {
+        toValue: 0.72,
+        duration: 720,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.timing(pointerProgress, {
+        toValue: 1,
+        duration: 240,
+        easing: Easing.inOut(Easing.quad),
+        useNativeDriver: true,
+      }),
+    ]);
+    animation.start();
+    return () => animation.stop();
+  }, [
+    active,
+    pageSettled,
+    pointerProgress,
+    reduceMotion,
+    stepIdentity,
+    waitingForAnchor,
+    waitingForRoute,
+    watchMode,
+    watchPaused,
+  ]);
+
+  useEffect(() => {
+    if (
+      !active ||
+      !watchMode ||
+      watchPaused ||
+      !pageSettled ||
+      waitingForRoute ||
+      waitingForAnchor
+    )
+      return;
+    const actionId = step?.interaction?.actionId;
+    const actionTimer = actionId
+      ? setTimeout(() => {
+          if (targetId && anchorActivatable)
+            requestTargetActivation(targetId);
+          reportPracticeAction(actionId, "isolated-preview");
+        }, reduceMotion ? 240 : 1_450)
+      : undefined;
+    const advanceTimer = setTimeout(
+      advance,
+      reduceMotion ? 2_000 : actionId ? 3_900 : 4_300,
+    );
+    return () => {
+      if (actionTimer) clearTimeout(actionTimer);
+      clearTimeout(advanceTimer);
+    };
+  }, [
+    active,
+    advance,
+    anchorActivatable,
+    pageSettled,
+    reduceMotion,
+    reportPracticeAction,
+    requestTargetActivation,
+    step?.interaction?.actionId,
+    stepIdentity,
+    targetId,
+    waitingForAnchor,
+    waitingForRoute,
+    watchMode,
+    watchPaused,
   ]);
 
   useEffect(() => {
@@ -587,27 +926,6 @@ function TutorialSpotlightContent() {
   const displayGuide = localizedGuide;
   const displayStep = localizedStep;
 
-  function advance() {
-    const isLast = activeSession!.stepIndex >= activeGuide!.steps.length - 1;
-    if (isLast) {
-      finishGuide();
-      const destination =
-        activeGuide!.id === "essential"
-          ? "/quick-guide?completed=essential"
-          : activeGuide!.path;
-      const resolved = resolvedTutorialRoute(
-        destination,
-        activeSession!.demoAnchorDate,
-      );
-      if (resolved)
-        setTimeout(() => router.navigate(resolved as never), transitionDurationMs);
-      return;
-    }
-    // The next step owns its required route. Route enforcement waits briefly
-    // and navigates only if the successful app action did not already do so.
-    nextStep();
-  }
-
   function back() {
     if (activeSession!.stepIndex <= 0) return;
     previousStep();
@@ -641,12 +959,22 @@ function TutorialSpotlightContent() {
   const sectionTitle = displayGuide.sections?.find(
     (section) => section.id === displayStep.sectionId,
   )?.title;
+  const sectionSteps = activeGuide.steps.filter(
+    (candidate) => candidate.sectionId === step.sectionId,
+  );
+  const sectionStepIndex = Math.max(
+    0,
+    sectionSteps.findIndex((candidate) => candidate.id === step.id),
+  );
+  const sectionCounter = t("Step {current} of {total}")
+    .replace("{current}", String(sectionStepIndex + 1))
+    .replace("{total}", String(sectionSteps.length));
   const missingRequiredAnchor = anchorRequired && !rect && anchorTimedOut;
   const nextDisabled =
     !pageSettled ||
     waitingForRoute ||
     waitingForAnchor ||
-    (realPracticeAvailable && !practiceComplete);
+    (!watchMode && realPracticeAvailable && !practiceComplete);
   const webFocusTrapProps =
     Platform.OS === "web"
       ? {
@@ -746,6 +1074,42 @@ function TutorialSpotlightContent() {
         />
       )}
 
+      {watchMode && rect ? (
+        <Animated.View
+          pointerEvents="none"
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+          style={[
+            styles.watchPointer,
+            {
+              left: rect.x + rect.width / 2 - 20,
+              top: rect.y + rect.height / 2 - 20,
+              backgroundColor: accent,
+              opacity: pointerProgress.interpolate({
+                inputRange: [0, 0.28, 1],
+                outputRange: [0, 1, 1],
+              }),
+              transform: [
+                {
+                  translateY: pointerProgress.interpolate({
+                    inputRange: [0, 0.72, 1],
+                    outputRange: [-34, 0, 2],
+                  }),
+                },
+                {
+                  scale: pointerProgress.interpolate({
+                    inputRange: [0, 0.72, 0.88, 1],
+                    outputRange: [0.8, 1, 0.84, 1],
+                  }),
+                },
+              ],
+            },
+          ]}
+        >
+          <Ionicons name="hand-left" size={21} color="#FFFFFF" />
+        </Animated.View>
+      ) : null}
+
       <View
         testID="tutorial-callout"
         onLayout={(event) => setCalloutHeight(event.nativeEvent.layout.height)}
@@ -794,15 +1158,15 @@ function TutorialSpotlightContent() {
         <View style={styles.calloutTop}>
           <View style={[styles.stepIcon, { backgroundColor: colors.primarySoft }]}>
             <Ionicons
-              name={step.interaction?.mode === "practice" ? "hand-left" : "navigate"}
+              name={watchMode ? "play" : step.interaction?.mode === "practice" ? "hand-left" : "navigate"}
               size={17}
               color={accent}
             />
           </View>
           <View style={styles.counterCopy}>
             <Text style={[styles.counter, { color: colors.muted }]}>
-              {sectionTitle ? `${sectionTitle} / ` : ""}
-              {activeSession.stepIndex + 1}/{activeGuide.steps.length}
+              {sectionTitle ? `${sectionTitle} · ` : ""}
+              {sectionCounter}
             </Text>
             <View style={[styles.progressTrack, { backgroundColor: colors.border }]}>
               <View
@@ -829,6 +1193,31 @@ function TutorialSpotlightContent() {
           {displayStep.title}
         </Text>
         <Text style={[styles.copy, { color: colors.muted }]}>{displayStep.copy}</Text>
+        {watchMode ? (
+          <View style={[styles.watchStatus, { backgroundColor: colors.primarySoft }]}>
+            <View style={styles.watchStatusCopy}>
+              <Ionicons
+                name={watchPaused ? "pause-circle" : "play-circle"}
+                size={16}
+                color={accent}
+              />
+              <Text style={[styles.watchStatusText, { color: colors.ink }]}>
+                {t(watchPaused ? "Watch paused" : "Auto-playing this tour")}
+              </Text>
+            </View>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t(watchPaused ? "Continue watching" : "Pause watch mode")}
+              onPress={() => setWatchPaused((paused) => !paused)}
+              hitSlop={8}
+              style={[styles.watchToggle, { borderColor: accent }]}
+            >
+              <Text style={[styles.watchToggleText, { color: accent }]}>
+                {t(watchPaused ? "Continue" : "Pause")}
+              </Text>
+            </Pressable>
+          </View>
+        ) : null}
         {displayStep.interaction?.instruction ? (
           <View style={[styles.practice, { backgroundColor: colors.primarySoft }]}>
             <Ionicons
@@ -923,6 +1312,66 @@ function TutorialSpotlightContent() {
 }
 
 const styles = StyleSheet.create({
+  firstVisitLayer: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 9998,
+    elevation: 9998,
+    justifyContent: "flex-end",
+    padding: 14,
+  },
+  firstVisitCard: {
+    width: "100%",
+    maxWidth: 520,
+    alignSelf: "center",
+    borderWidth: 1,
+    borderRadius: 20,
+    padding: 13,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 11,
+    shadowColor: "#000000",
+    shadowOpacity: 0.18,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 7 },
+  },
+  firstVisitIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 13,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  firstVisitCopy: { flex: 1, gap: 4 },
+  firstVisitTitle: { fontSize: 14, lineHeight: 19, fontWeight: "900" },
+  firstVisitDetail: { fontSize: 10, lineHeight: 15 },
+  firstVisitActions: {
+    marginTop: 7,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "flex-end",
+    gap: 7,
+  },
+  firstVisitSkip: {
+    minHeight: 36,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  firstVisitSkipText: { fontSize: 9, fontWeight: "800" },
+  firstVisitChoice: {
+    minHeight: 36,
+    paddingHorizontal: 11,
+    borderWidth: 1,
+    borderRadius: 11,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+  },
+  firstVisitChoiceText: { fontSize: 9, fontWeight: "900" },
+  firstVisitPracticeText: { color: "#FFFFFF", fontSize: 9, fontWeight: "900" },
   overlay: {
     ...StyleSheet.absoluteFillObject,
     zIndex: 10000,
@@ -941,6 +1390,22 @@ const styles = StyleSheet.create({
     shadowColor: "#000000",
     shadowOpacity: Platform.OS === "web" ? 0.3 : 0,
     shadowRadius: 10,
+  },
+  watchPointer: {
+    position: "absolute",
+    zIndex: 10001,
+    elevation: 10001,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 3,
+    borderColor: "rgba(255,255,255,0.9)",
+    shadowColor: "#000000",
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
   },
   callout: {
     position: "absolute",
@@ -980,6 +1445,28 @@ const styles = StyleSheet.create({
   skip: { fontSize: 11, fontWeight: "900", paddingVertical: 4 },
   title: { fontSize: 17, fontWeight: "900", marginTop: 12 },
   copy: { fontSize: 12, lineHeight: 18, marginTop: 6 },
+  watchStatus: {
+    marginTop: 10,
+    minHeight: 38,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
+  watchStatusCopy: { flex: 1, flexDirection: "row", alignItems: "center", gap: 7 },
+  watchStatusText: { flex: 1, fontSize: 10, lineHeight: 14, fontWeight: "800" },
+  watchToggle: {
+    minHeight: 28,
+    paddingHorizontal: 9,
+    borderWidth: 1,
+    borderRadius: 9,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  watchToggleText: { fontSize: 9, fontWeight: "900" },
   practice: {
     marginTop: 10,
     borderRadius: 12,

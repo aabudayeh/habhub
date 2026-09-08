@@ -2,11 +2,14 @@ import type { MetricEntry } from "@/src/types";
 
 export type GroupSocialTargetType =
   | "recap_feed"
+  | "group_recap"
   | "metric_entry"
   | "photo_update"
   | "badge"
   | "group_challenge"
-  | "group_todo";
+  | "group_todo"
+  | "group_note"
+  | "chat_message";
 
 export type GroupSocialTarget = {
   type: GroupSocialTargetType;
@@ -23,6 +26,51 @@ export type MetricSocialTargetIdentity = {
   ownerUserId: string;
   clientGeneratedId: string;
 };
+
+const GROUP_RECAP_STORY_ID = /^group-[a-z0-9](?:[a-z0-9_-]{0,79})$/;
+const CALENDAR_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+function isCalendarDate(value: string) {
+  if (!CALENDAR_DATE.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return (
+    parsed.getUTCFullYear() === year &&
+    parsed.getUTCMonth() === month - 1 &&
+    parsed.getUTCDate() === day
+  );
+}
+
+/**
+ * Aggregate recap stories do not have a source row or an owner. Their
+ * canonical identity binds the story renderer version, rolling period,
+ * period anchor, and deterministic story id. The database independently
+ * accepts this exact bounded format only for active members of the group.
+ */
+export function groupRecapSocialTarget(
+  anchor: string,
+  storyId: string,
+): GroupSocialTarget {
+  if (!isCalendarDate(anchor) || !GROUP_RECAP_STORY_ID.test(storyId))
+    throw new Error("Invalid group recap story identity.");
+  return {
+    type: "group_recap",
+    id: `v1:week:${anchor}:${storyId}`,
+  };
+}
+
+export function groupRecapStoryShareHighlight(storyId: string) {
+  if (!GROUP_RECAP_STORY_ID.test(storyId)) return undefined;
+  return `story:${storyId}`;
+}
+
+export function groupRecapStoryIdFromShareHighlight(
+  highlight: string | undefined,
+) {
+  if (!highlight?.startsWith("story:")) return undefined;
+  const storyId = highlight.slice("story:".length);
+  return GROUP_RECAP_STORY_ID.test(storyId) ? storyId : undefined;
+}
 
 /**
  * Keeps the last server-confirmed reaction stable while rapid optimistic taps
@@ -69,6 +117,23 @@ export function groupSocialTargetKey(target: GroupSocialTarget) {
   )
     return `${target.type}\u0000legacy:${target.ownerUserId}\u0000${target.id}`;
   return `${target.type}\u0000${target.id}`;
+}
+
+/**
+ * Chat client ids are unique per sender in the database, not per group. Keep
+ * the owner in the canonical social identity so an id collision can never
+ * attach a reaction to another member's message.
+ */
+export function chatMessageSocialTarget(
+  senderUserId: string,
+  clientGeneratedId: string,
+): GroupSocialTarget {
+  return {
+    type: "chat_message",
+    id: `${senderUserId}:${clientGeneratedId}`,
+    ownerUserId: senderUserId,
+    clientGeneratedId,
+  };
 }
 
 /** Includes every field that can change legacy-to-canonical resolution. */

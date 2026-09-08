@@ -54,6 +54,13 @@ import {
   latestTextValue,
   safeMetricValue,
 } from "@/src/domain/metrics";
+import {
+  adjustQuickEntryValue,
+  isQuickEntryAligned,
+  normalizedQuickEntry,
+  quickEntryLabel,
+  quickEntryStepCount,
+} from "@/src/domain/quickEntry";
 import { listStepCoverageActivities } from "@/src/domain/stepCoveragePreferences";
 import { useApp } from "@/src/state/AppProvider";
 import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
@@ -198,6 +205,13 @@ function LogScreen() {
   const trackerChoices = metrics;
   const [selectedId, setSelectedId] = useState("");
   const selected = metrics.find((metric) => metric.id === selectedId);
+  const quickEntry = useMemo(
+    () => (selected ? normalizedQuickEntry(selected) : undefined),
+    [selected],
+  );
+  const quickEntryInitialValue = quickEntry
+    ? String(quickEntry.minimum ?? quickEntry.step)
+    : undefined;
   const bodyCompositionMetrics = useMemo(() => {
     const savedById = new Map(
       state.metrics
@@ -245,7 +259,7 @@ function LogScreen() {
     !selected?.submetrics?.length ||
     selected.submetricDisplay?.mainValueEnabled !== false;
   const [value, setValue] = useState("");
-  const [waterTouched, setWaterTouched] = useState(false);
+  const [quickEntryTouched, setQuickEntryTouched] = useState(false);
   const [label, setLabel] = useState("");
   const [note, setNote] = useState("");
   const [visibility, setVisibility] = useState<Visibility>(
@@ -463,7 +477,7 @@ function LogScreen() {
     })),
   ];
   const hasDraft = Boolean(
-    (value.trim() && (selected?.id !== "water" || waterTouched)) ||
+    (value.trim() && (!quickEntry || quickEntryTouched)) ||
       label.trim() ||
       note.trim() ||
       entryImage ||
@@ -599,14 +613,14 @@ function LogScreen() {
     setExtraSubmetricsOpen(false);
   }, [selected]);
   useEffect(() => {
-    if (selected?.id !== "water") return;
+    if (!selectedId || quickEntryInitialValue === undefined) return;
     const parameterValue =
-      params.metric === "water" && params.value !== undefined
+      params.metric === selectedId && params.value !== undefined
         ? params.value
         : undefined;
-    setValue(parameterValue || "0.25");
-    setWaterTouched(Boolean(parameterValue));
-  }, [params.metric, params.value, selected?.id]);
+    setValue(parameterValue || quickEntryInitialValue);
+    setQuickEntryTouched(Boolean(parameterValue));
+  }, [params.metric, params.value, quickEntryInitialValue, selectedId]);
   const numericToday = selected
     ? safeMetricValue(state, selected, state.currentUserId, logDate)
     : 0;
@@ -694,8 +708,10 @@ function LogScreen() {
     return Number.isNaN(date.getTime()) ? null : date.toISOString();
   }
   function clearEntry() {
-    setValue(selected?.id === "water" ? "0.25" : "");
-    setWaterTouched(false);
+    setValue(
+      quickEntry ? String(quickEntry.minimum ?? quickEntry.step) : "",
+    );
+    setQuickEntryTouched(false);
     setLabel("");
     setNote("");
     setEntryImage(null);
@@ -726,14 +742,16 @@ function LogScreen() {
     setBpPulse("");
     setSubmetricValues({});
   }
-  const waterLiters =
-    selected?.id === "water" ? Number(value.replace(",", ".")) : Number.NaN;
-  const waterCups = Number.isFinite(waterLiters) ? waterLiters * 4 : 1;
-  function adjustWaterCups(change: -1 | 1) {
-    const current = Number.isFinite(waterCups) ? Math.round(waterCups) : 1;
-    const next = Math.max(1, Math.min(40, current + change));
-    setValue(String(next / 4));
-    setWaterTouched(true);
+  const quickEntryValue = quickEntry
+    ? Number(value.replace(",", "."))
+    : Number.NaN;
+  const quickEntrySteps = quickEntry
+    ? quickEntryStepCount(quickEntryValue, quickEntry.step)
+    : 0;
+  function adjustQuickEntry(change: -1 | 1) {
+    if (!quickEntry) return;
+    setValue(String(adjustQuickEntryValue(quickEntryValue, quickEntry, change)));
+    setQuickEntryTouched(true);
   }
   function toggleBoolean() {
     if (!selected) return;
@@ -1031,12 +1049,12 @@ function LogScreen() {
       return false;
     }
     if (
-      selected.id === "water" &&
-      (number <= 0 || Math.abs(number * 4 - Math.round(number * 4)) > 0.000001)
+      quickEntry &&
+      !isQuickEntryAligned(number, quickEntry)
     ) {
       Alert.alert(
         "Check the value",
-        "Use whole 250 ml cups.",
+        `Use ${quickEntry.step.toLocaleString(locale)} ${selected.unit || "unit"} steps${quickEntry.maximum === undefined ? "" : ` up to ${quickEntry.maximum.toLocaleString(locale)} ${selected.unit}`}.`,
       );
       return false;
     }
@@ -1262,6 +1280,10 @@ function LogScreen() {
           onChange={(ids) => {
             const next = ids[0];
             if (!next) return;
+            // A stepper starts with a visible default that is intentionally
+            // not a draft. Never carry that value into a different tracker.
+            clearEntry();
+            setValue("");
             setSelectedId(next);
           }}
           multiple={false}
@@ -1729,18 +1751,23 @@ function LogScreen() {
             </>
           ) : mainValueEnabled ? (
             <>
-              {selected.id === "water" ? (
+              {quickEntry ? (
                 <>
                   <View style={styles.waterStepper}>
                     <Pressable
                       accessibilityRole="button"
-                      accessibilityLabel="Remove 250 millilitres"
-                      disabled={waterCups <= 1}
-                      onPress={() => adjustWaterCups(-1)}
+                      accessibilityLabel={`Remove one ${quickEntry.stepLabel || "step"}`}
+                      disabled={
+                        quickEntryValue <=
+                        (quickEntry.minimum ?? quickEntry.step)
+                      }
+                      onPress={() => adjustQuickEntry(-1)}
                       style={[
                         styles.waterStepButton,
                         { backgroundColor: colors.primarySoft },
-                        waterCups <= 1 && styles.waterStepDisabled,
+                        quickEntryValue <=
+                          (quickEntry.minimum ?? quickEntry.step) &&
+                          styles.waterStepDisabled,
                       ]}
                     >
                       <Ionicons name="remove" size={20} color={accent} />
@@ -1752,25 +1779,34 @@ function LogScreen() {
                       ]}
                     >
                       <TextInput
-                        accessibilityLabel="Water amount in litres"
+                        accessibilityLabel={`${selected.name} amount in ${selected.unit || "units"}`}
                         keyboardType="decimal-pad"
                         value={value}
                         onChangeText={(next) => {
                           setValue(next);
-                          setWaterTouched(true);
+                          setQuickEntryTouched(true);
                         }}
                         selectTextOnFocus
                         style={[styles.waterInput, { color: colors.ink }]}
                       />
-                      <Text style={[styles.unit, { color: colors.muted }]}>L</Text>
+                      <Text style={[styles.unit, { color: colors.muted }]}>
+                        {selected.unit}
+                      </Text>
                     </View>
                     <Pressable
                       accessibilityRole="button"
-                      accessibilityLabel="Add 250 millilitres"
-                      onPress={() => adjustWaterCups(1)}
+                      accessibilityLabel={`Add one ${quickEntry.stepLabel || "step"}`}
+                      disabled={
+                        quickEntry.maximum !== undefined &&
+                        quickEntryValue >= quickEntry.maximum
+                      }
+                      onPress={() => adjustQuickEntry(1)}
                       style={[
                         styles.waterStepButton,
                         { backgroundColor: colors.primarySoft },
+                        quickEntry.maximum !== undefined &&
+                          quickEntryValue >= quickEntry.maximum &&
+                          styles.waterStepDisabled,
                       ]}
                     >
                       <Ionicons name="add" size={20} color={accent} />
@@ -1780,9 +1816,9 @@ function LogScreen() {
                     translate={false}
                     style={[styles.waterEquivalent, { color: colors.muted }]}
                   >
-                    {Number.isFinite(waterLiters)
-                      ? `${Math.round(waterLiters * 1000).toLocaleString(locale)} ml · ${waterCups.toLocaleString(locale, { maximumFractionDigits: 2 })} ${Math.abs(waterCups - 1) < 0.001 ? "cup" : "cups"}`
-                      : "250 ml · 1 cup"}
+                    {Number.isFinite(quickEntryValue)
+                      ? `${quickEntryValue.toLocaleString(locale, { maximumFractionDigits: 8 })}${selected.unit ? ` ${selected.unit}` : ""} · ${quickEntrySteps.toLocaleString(locale, { maximumFractionDigits: 2 })} ${quickEntryLabel(quickEntrySteps, quickEntry)}`
+                      : `${(quickEntry.minimum ?? quickEntry.step).toLocaleString(locale)}${selected.unit ? ` ${selected.unit}` : ""} · 1 ${quickEntryLabel(1, quickEntry)}`}
                   </Text>
                 </>
               ) : (

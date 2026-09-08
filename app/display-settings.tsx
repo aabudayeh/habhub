@@ -14,6 +14,12 @@ import { Card, Chip, IconButton, PageHeader, Screen } from "@/src/components/ui"
 import { isAllowedThemeColor, normalizeHexColor } from "@/src/domain/colors";
 import { COMPLETION_INDICATOR_OPTIONS } from "@/src/domain/completionIndicators";
 import {
+  moveGroupHubAction,
+  normalizeGroupHubActionOrder,
+  visibleGroupHubActions,
+} from "@/src/domain/groupHub";
+import { isPersonalSetupGroup } from "@/src/domain/groupSetup";
+import {
   isFixedNavigationPage,
   normalizeTabOrder,
 } from "@/src/domain/navigation";
@@ -24,6 +30,7 @@ import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import {
   AppLanguage,
   DashboardLayoutMode,
+  GroupHubAction,
   LandingPage,
   ProgressLayoutAvailability,
   StatusAvatarStyle,
@@ -53,6 +60,17 @@ const languages = supportedLanguages.map(({ id, label, nativeLabel }) => ({
   sublabel: nativeLabel === label ? undefined : label,
   icon: "language-outline" as const,
 }));
+
+const groupHubActionDetails: Record<
+  GroupHubAction,
+  { label: string; icon: keyof typeof Ionicons.glyphMap }
+> = {
+  notifications: { label: "Notifications", icon: "notifications-outline" },
+  recap: { label: "Recap", icon: "sparkles-outline" },
+  challenges: { label: "Challenges", icon: "trophy-outline" },
+  schedule: { label: "Schedule", icon: "calendar-outline" },
+  notes: { label: "Notes", icon: "document-text-outline" },
+};
 
 type ToggleKey =
   | "compactMode"
@@ -123,6 +141,15 @@ export default function DisplaySettings() {
   const movableNavigationOrder = visibleNavigationOrder.filter(
     (id) => !isFixedNavigationPage(id),
   );
+  const groupHubOrder = normalizeGroupHubActionOrder(
+    state.settings.groupHubActionOrderByGroup?.[state.group.id],
+  );
+  const visibleGroupHubOrder = visibleGroupHubActions(groupHubOrder, {
+    challenges: !isPersonalSetupGroup(state.group),
+    schedule:
+      state.settings.showGroupScheduleByGroup?.[state.group.id] !== false,
+    notes: state.settings.showGroupNotesByGroup?.[state.group.id] !== false,
+  });
 
   function moveNavigationItem(id: LandingPage, direction: -1 | 1) {
     if (isFixedNavigationPage(id)) return;
@@ -160,6 +187,15 @@ export default function DisplaySettings() {
     )
       changes.defaultLandingPage = "index";
     updateSettings(changes);
+  }
+
+  function moveGroupAction(action: GroupHubAction, direction: -1 | 1) {
+    updateSettings({
+      groupHubActionOrderByGroup: {
+        ...(state.settings.groupHubActionOrderByGroup ?? {}),
+        [state.group.id]: moveGroupHubAction(groupHubOrder, action, direction),
+      },
+    });
   }
 
   return (
@@ -700,6 +736,61 @@ export default function DisplaySettings() {
               />
             </>
           ) : null}
+          <ToggleRow
+            icon="calendar-outline"
+            title="Show group Schedule"
+            copy="Keep the shared Schedule available from the Leaderboard header"
+            enabled={state.settings.showGroupScheduleByGroup?.[state.group.id] !== false}
+            onChange={(visible) =>
+              updateSettings({
+                showGroupScheduleByGroup: {
+                  ...(state.settings.showGroupScheduleByGroup ?? {}),
+                  [state.group.id]: visible,
+                },
+              })
+            }
+          />
+          <ToggleRow
+            icon="document-text-outline"
+            title="Show group Notes"
+            copy="Keep shared notes and discussions in the group action menu"
+            enabled={state.settings.showGroupNotesByGroup?.[state.group.id] !== false}
+            onChange={(visible) =>
+              updateSettings({
+                showGroupNotesByGroup: {
+                  ...(state.settings.showGroupNotesByGroup ?? {}),
+                  [state.group.id]: visible,
+                },
+              })
+            }
+          />
+          <View style={[styles.optionBlock, { borderTopColor: colors.border }]}>
+            <Text style={[styles.title, { color: colors.ink }]}>Group header actions</Text>
+            <Text style={[styles.meta, { color: colors.muted }]}>The first two enabled pages stay visible. The rest share one compact menu.</Text>
+            {groupHubOrder.map((action, index) => {
+              const detail = groupHubActionDetails[action];
+              const visibleIndex = visibleGroupHubOrder.indexOf(action);
+              return (
+                <View key={action} style={[styles.navigationRow, { borderTopColor: colors.border }]}>
+                  <Ionicons name={detail.icon} size={18} color={accent} />
+                  <View style={styles.copy}>
+                    <Text style={[styles.pageText, { color: colors.ink }]}>{detail.label}</Text>
+                    {visibleIndex >= 0 && visibleIndex < 2 ? (
+                      <Text style={[styles.meta, { color: accent }]}>Pinned in header</Text>
+                    ) : visibleIndex < 0 ? (
+                      <Text style={[styles.meta, { color: colors.faint }]}>Hidden</Text>
+                    ) : null}
+                  </View>
+                  <Pressable accessibilityLabel={`Move ${detail.label} up`} disabled={index === 0} onPress={() => moveGroupAction(action, -1)} style={styles.orderButton}>
+                    <Ionicons name="arrow-up" size={17} color={index === 0 ? colors.faint : colors.ink} />
+                  </Pressable>
+                  <Pressable accessibilityLabel={`Move ${detail.label} down`} disabled={index === groupHubOrder.length - 1} onPress={() => moveGroupAction(action, 1)} style={styles.orderButton}>
+                    <Ionicons name="arrow-down" size={17} color={index === groupHubOrder.length - 1 ? colors.faint : colors.ink} />
+                  </Pressable>
+                </View>
+              );
+            })}
+          </View>
         </Card>
       </CollapsibleSection>
 

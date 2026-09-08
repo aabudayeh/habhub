@@ -86,7 +86,11 @@ export default function Alerts() {
   const allAlerts = useMemo(
     () =>
       buildAlerts(state, groupFeedEvents, safety.blockedUserIds).filter((alert) =>
-        (safety.hydrated || alert.category !== "message") &&
+        (safety.hydrated ||
+          (alert.category !== "message" &&
+            alert.category !== "todo" &&
+            alert.category !== "workspace" &&
+            !(alert.category === "lead" && alert.targetType))) &&
         (alertScope === "group"
           ? alert.scope === "group"
           : alert.scope === "personal" ||
@@ -154,8 +158,27 @@ export default function Alerts() {
         .filter(
           (event) =>
             !event.readAt &&
-            event.kind !== "social_reaction" &&
-            event.kind !== "social_comment",
+            event.kind.startsWith("challenge_"),
+        )
+        .map((event) => event.id);
+    if (targetFilter === "todo")
+      return groupFeedEvents
+        .filter(
+          (event) =>
+            !event.readAt &&
+            (event.kind === "group_todo_completed" ||
+              event.kind === "group_todo_all_completed"),
+        )
+        .map((event) => event.id);
+    if (targetFilter === "workspace")
+      return groupFeedEvents
+        .filter(
+          (event) =>
+            !event.readAt &&
+            (event.kind === "group_note_created" ||
+              event.kind === "group_note_updated" ||
+              event.kind === "group_schedule_created" ||
+              event.kind === "group_schedule_updated"),
         )
         .map((event) => event.id);
     if (targetFilter === "lead")
@@ -400,6 +423,22 @@ export default function Alerts() {
           />
           {unreadCategories.has("lead") ? <View style={styles.filterUnreadDot} /> : null}
         </View> : null}
+        {hasGroup && state.group.groupTodosEnabled === true ? <View style={styles.filterChip}>
+          <Chip
+            label="Group tasks"
+            selected={filter === "todo"}
+            onPress={() => chooseFilter("todo")}
+          />
+          {unreadCategories.has("todo") ? <View style={styles.filterUnreadDot} /> : null}
+        </View> : null}
+        {hasGroup ? <View style={styles.filterChip}>
+          <Chip
+            label="Plans & notes"
+            selected={filter === "workspace"}
+            onPress={() => chooseFilter("workspace")}
+          />
+          {unreadCategories.has("workspace") ? <View style={styles.filterUnreadDot} /> : null}
+        </View> : null}
         {hasGroup ? <View style={styles.filterChip}>
           <Chip
             label="Messages"
@@ -529,6 +568,23 @@ export default function Alerts() {
                       return;
                     }
                     if (alert.todoId) {
+                      if (alert.scope === "group" && alert.groupId) {
+                        updateSettings({
+                          showGroupTodosByGroup: {
+                            ...(state.settings.showGroupTodosByGroup ?? {}),
+                            [alert.groupId]: true,
+                          },
+                        });
+                        router.navigate({
+                          pathname: "/(tabs)/group",
+                          params: {
+                            groupId: alert.groupId,
+                            focusGroupTodo: alert.todoId,
+                            todoFocusAt: String(Date.now()),
+                          },
+                        } as never);
+                        return;
+                      }
                       router.navigate({
                         pathname: "/metric-detail",
                         params: {
@@ -563,6 +619,39 @@ export default function Alerts() {
                           memberId: state.currentUserId,
                           entryId: alert.entryId,
                           logFocusAt: String(Date.now()),
+                        },
+                      } as never);
+                      return;
+                    }
+                    if (alert.targetType === "chat_message") {
+                      router.navigate({
+                        pathname: "/(tabs)/chat",
+                        params: {
+                          ...(alert.groupId ? { groupId: alert.groupId } : {}),
+                          messageId: alert.entryId,
+                          messageFocusAt: String(Date.now()),
+                        },
+                      } as never);
+                      return;
+                    }
+                    if (alert.targetType === "group_note") {
+                      router.navigate({
+                        pathname: "/group-notes",
+                        params: {
+                          ...(alert.groupId ? { groupId: alert.groupId } : {}),
+                          noteId: alert.entryId,
+                          noteFocusAt: String(Date.now()),
+                        },
+                      } as never);
+                      return;
+                    }
+                    if (alert.targetType === "group_schedule") {
+                      router.navigate({
+                        pathname: "/group-schedule",
+                        params: {
+                          ...(alert.groupId ? { groupId: alert.groupId } : {}),
+                          scheduleItemId: alert.entryId,
+                          scheduleFocusAt: String(Date.now()),
                         },
                       } as never);
                       return;

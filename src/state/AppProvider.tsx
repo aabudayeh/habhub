@@ -3456,6 +3456,10 @@ type AppContextValue = {
       source?: "cloud" | "local";
       /** Await the device cache write before publishing a dependent ACK. */
       persistImmediately?: boolean;
+      /** Explicit privacy boundaries may clear this device's health grants. */
+      preserveDeviceHealthSync?: boolean;
+      /** Explicit privacy boundaries may also clear today's device health rows. */
+      preserveDeviceHealthEntries?: boolean;
     },
   ) => Promise<void>;
   resetDemo: () => void;
@@ -3976,23 +3980,41 @@ export function AppProvider({
               const preset = defaults.metrics.find(
                 (candidate) => candidate.id === metric.id,
               );
+              const withCurrentPresetBehavior = preset
+                ? {
+                    ...metric,
+                    quickEntry: metric.quickEntry ?? preset.quickEntry,
+                  }
+                : metric;
               const enriched =
                 restoredVersion < 15 && preset
                   ? {
-                      ...metric,
-                      category: metric.category ?? preset.category,
+                      ...withCurrentPresetBehavior,
+                      category:
+                        withCurrentPresetBehavior.category ?? preset.category,
                       healthMapping:
-                        metric.healthMapping ?? preset.healthMapping,
-                      gymMapping: metric.gymMapping ?? preset.gymMapping,
+                        withCurrentPresetBehavior.healthMapping ??
+                        preset.healthMapping,
+                      gymMapping:
+                        withCurrentPresetBehavior.gymMapping ??
+                        preset.gymMapping,
                       gymMuscleGroups:
-                        metric.gymMuscleGroups ?? preset.gymMuscleGroups,
-                      stepFallback: metric.stepFallback ?? preset.stepFallback,
-                      manualEntry: metric.manualEntry ?? preset.manualEntry,
+                        withCurrentPresetBehavior.gymMuscleGroups ??
+                        preset.gymMuscleGroups,
+                      stepFallback:
+                        withCurrentPresetBehavior.stepFallback ??
+                        preset.stepFallback,
+                      manualEntry:
+                        withCurrentPresetBehavior.manualEntry ??
+                        preset.manualEntry,
                       goalEnabled:
-                        metric.id === "weekly_deficit_balance"
+                        withCurrentPresetBehavior.id ===
+                        "weekly_deficit_balance"
                           ? false
-                          : (metric.goalEnabled ?? preset.goalEnabled),
-                      goalRange: metric.goalRange ?? preset.goalRange,
+                          : (withCurrentPresetBehavior.goalEnabled ??
+                            preset.goalEnabled),
+                      goalRange:
+                        withCurrentPresetBehavior.goalRange ?? preset.goalRange,
                       aggregation: [
                         "body_fat",
                         "lean_body_mass",
@@ -4000,11 +4022,11 @@ export function AppProvider({
                         "blood_pressure_diastolic",
                         "pulse",
                         "blood_glucose",
-                      ].includes(metric.id)
+                      ].includes(withCurrentPresetBehavior.id)
                         ? ("average" as const)
-                        : metric.aggregation,
+                        : withCurrentPresetBehavior.aggregation,
                     }
-                  : metric;
+                  : withCurrentPresetBehavior;
               const normalized =
                 enriched.id === "deficit" &&
                 enriched.formula === "baseline + exercise - food"
@@ -4497,13 +4519,16 @@ export function AppProvider({
       options?: {
         source?: "cloud" | "local";
         persistImmediately?: boolean;
+        preserveDeviceHealthSync?: boolean;
+        preserveDeviceHealthEntries?: boolean;
       },
     ) => {
       const next = reducer(persistenceStateRef.current, {
         type: "hydrate",
         state: nextState,
-        preserveDeviceHealthSync: true,
+        preserveDeviceHealthSync: options?.preserveDeviceHealthSync ?? true,
         preserveDeviceHealthEntries:
+          options?.preserveDeviceHealthEntries ??
           (options?.source ?? "cloud") === "cloud",
       });
       const operation = commitReducedState(

@@ -468,8 +468,9 @@ assert.match(
   /accessibilityLabel=\{t\("Skip \{name\}"\)\.replace\("\{name\}", displayGuide\.title\)\}/,
 );
 
-assert.match(quickGuideSource, /localizedGuides\.map\(\(guide\) =>/);
-assert.match(quickGuideSource, /startGuide\(guide\.id, \{ resume \}\)/);
+assert.match(quickGuideSource, /GUIDE_GROUPS\.map\(\(group\) =>/);
+assert.match(quickGuideSource, /advancedGuides\.map\(\(guide\) => guideCard\(guide\)\)/);
+assert.match(quickGuideSource, /startGuide\(guide\.id, \{ resume, mode \}\)/);
 assert.match(quickGuideSource, /progressByGuide/);
 
 assert.match(providerSource, /onboardingVersion: Math\.max/);

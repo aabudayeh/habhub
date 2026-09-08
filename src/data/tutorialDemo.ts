@@ -72,6 +72,7 @@ function cloneMetric(metric: MetricDefinition, activeFrom: string): MetricDefini
     healthMapping: metric.healthMapping ? { ...metric.healthMapping } : undefined,
     gymMapping: metric.gymMapping ? { ...metric.gymMapping } : undefined,
     gymMuscleGroups: metric.gymMuscleGroups ? [...metric.gymMuscleGroups] : undefined,
+    quickEntry: metric.quickEntry ? { ...metric.quickEntry } : undefined,
     fastingSettings: metric.fastingSettings ? { ...metric.fastingSettings } : undefined,
     submetrics: metric.submetrics?.map((submetric) => ({
       ...submetric,
@@ -1035,9 +1036,11 @@ export function createTutorialDemoState(anchorDate: string): TutorialDemoBundle 
       tutorialComplete: false,
       advancedTutorialComplete: false,
       selectedGoals: trackedIds,
-      showCalendar: true,
-      showJournal: true,
-      showPerformance: true,
+      // Optional pages stay discoverable from the menu and focused guides,
+      // without turning the tutorial tab bar into an eleven-item sitemap.
+      showCalendar: false,
+      showJournal: false,
+      showPerformance: false,
       showStatus: true,
       showGym: true,
       showChat: true,

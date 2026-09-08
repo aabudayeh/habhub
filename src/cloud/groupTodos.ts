@@ -1,4 +1,5 @@
 import { supabase } from "@/src/lib/supabase";
+import { flushPendingGroupPushEvents } from "@/src/cloud/groupCloud";
 import {
   GroupTodoCompletionMode,
   GroupTodoItem,
@@ -133,6 +134,10 @@ export async function setGroupTodoCompletion(
     p_completed: completed,
   });
   if (error) throw cloudError(error);
+  // Completion notifications are committed by the same database transaction.
+  // Promptly drain the actor-owned durable rows; startup/reconnect remains the
+  // retry backstop if the gateway is temporarily unavailable.
+  void flushPendingGroupPushEvents().catch(() => undefined);
   return fromRow(data as GroupTodoRow);
 }
 

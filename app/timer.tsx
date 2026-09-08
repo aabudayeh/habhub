@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 
 import {
@@ -11,6 +11,7 @@ import { LocalizedAlert as Alert, useLocalization } from "@/src/i18n";
 import { localizeMetricName } from "@/src/i18n/domain";
 import { Card, Chip, IconButton, PageHeader, Screen } from "@/src/components/ui";
 import { MetricSelector } from "@/src/components/MetricSelector";
+import { SelectionMenu } from "@/src/components/SelectionMenu";
 import {
   TutorialTarget,
   useTutorial,
@@ -21,6 +22,13 @@ import {
   formatActivityTimer,
 } from "@/src/domain/activityTimer";
 import { dateKey } from "@/src/domain/date";
+import { estimateGymActiveCalories } from "@/src/domain/gym";
+import {
+  EXERCISE_CATEGORY_LABELS,
+  SESSION_ACTIVITY_EXERCISES,
+  catalogExercise,
+  inferSessionActivityFromName,
+} from "@/src/domain/exerciseCatalog";
 import {
   cancelActivityTimerAlerts,
   syncActivityTimerAlerts,
@@ -28,7 +36,14 @@ import {
 import { useApp } from "@/src/state/AppProvider";
 import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 import { useAppColors, useGroupAccent } from "@/src/theme";
-import { ActivityTimer } from "@/src/types";
+import { ActivityTimer, GymIntensity, GymSession } from "@/src/types";
+
+type WorkoutFinishDraft = {
+  timer: ActivityTimer;
+  seconds: number;
+  distance: string;
+  calories: string;
+};
 
 export default function ActivityTimerPage() {
   const tutorialSandbox = useTutorialSandboxActive();
@@ -43,6 +58,7 @@ export default function ActivityTimerPage() {
     state,
     setActivityTimer,
     logMetric,
+    saveGymSession,
     updateSettings,
   } = useApp();
   const colors = useAppColors();
@@ -97,9 +113,32 @@ export default function ActivityTimerPage() {
     Math.max(1, Math.round(Number(params.duration) || 25)),
   );
   const [autoLog, setAutoLog] = useState(timer?.autoLog ?? false);
+  const [saveAsWorkout, setSaveAsWorkout] = useState(
+    timer?.workout !== undefined || metricId === "workout_duration",
+  );
+  const [workoutActivityKey, setWorkoutActivityKey] = useState(
+    timer?.workout?.activityKey ?? "walking",
+  );
+  const initialActivity =
+    catalogExercise(timer?.workout?.activityKey ?? "walking") ??
+    SESSION_ACTIVITY_EXERCISES[0];
+  const [workoutName, setWorkoutName] = useState(
+    timer?.workout?.name ?? initialActivity?.name ?? "Workout",
+  );
+  const [workoutDistance, setWorkoutDistance] = useState(
+    timer?.workout?.distanceKm ? String(timer.workout.distanceKm) : "",
+  );
+  const [workoutCalories, setWorkoutCalories] = useState(
+    timer?.workout?.calories ? String(timer.workout.calories) : "",
+  );
+  const [workoutIntensity, setWorkoutIntensity] = useState<GymIntensity>(
+    timer?.workout?.intensity ?? "moderate",
+  );
+  const [finishDraft, setFinishDraft] = useState<WorkoutFinishDraft>();
   const [alertsOpen, setAlertsOpen] = useState(false);
   const [customAlert, setCustomAlert] = useState("");
   const [now, setNow] = useState(Date.now());
+  const finishingTimerIds = useRef(new Set<string>());
   const alertMinutes = state.settings.activityTimerAlertMinutes ?? [30, 60];
   useEffect(() => {
     const interval = setInterval(() => setNow(Date.now()), 500);
@@ -131,9 +170,12 @@ export default function ActivityTimerPage() {
       return Alert.alert("Choose a timed tracker", "Add one first if needed.");
     const targetSeconds = mode === "countdown" ? targetMinutes * 60 : undefined;
     const id = `timer-${Date.now().toString(36)}`;
+    const distanceKm = Number(workoutDistance.replace(",", "."));
+    const calories = Number(workoutCalories.replace(",", "."));
     const nextTimer: ActivityTimer = {
       id,
       metricId: metric.id,
+      localDate: plannedDate,
       mode,
       targetSeconds,
       autoLog,
@@ -141,6 +183,21 @@ export default function ActivityTimerPage() {
       status: "running",
       accumulatedSeconds: 0,
       laps: [],
+      workout: metric.id === "workout_duration" && saveAsWorkout
+        ? {
+            activityKey: workoutActivityKey || undefined,
+            name: workoutName.trim() || "Workout",
+            distanceKm:
+              Number.isFinite(distanceKm) && distanceKm > 0
+                ? distanceKm
+                : undefined,
+            calories:
+              Number.isFinite(calories) && calories >= 0 && workoutCalories.trim()
+                ? calories
+                : undefined,
+            intensity: workoutIntensity,
+          }
+        : undefined,
     };
     const notifications = tutorialSandbox
       ? { notificationId: undefined, notificationIds: [] }
@@ -231,48 +288,194 @@ export default function ActivityTimerPage() {
       ],
     });
   };
-  const finish = async (target = timer) => {
-    if (!target) return;
-    if (!tutorialSandbox)
-      await cancelActivityTimerAlerts(target, state.currentUserId);
-    const seconds =
-      target.mode === "countdown"
-        ? Math.min(
-            target.targetSeconds ?? 0,
-            activityTimerElapsedSeconds(target),
-          )
-        : activityTimerElapsedSeconds(target);
-    const targetMetric = state.metrics.find(
-      (item) => item.id === target.metricId,
-    );
-    if (!targetMetric) {
-      setActivityTimer(undefined, target.id);
-      return;
-    }
-    const value = /hour|hr/i.test(targetMetric.unit)
-      ? seconds / 3600
-      : /sec/i.test(targetMetric.unit)
-        ? seconds
-        : seconds / 60;
-    setActivityTimer(undefined, target.id);
-    if (target.autoLog) {
-      logMetric(target.metricId, value, targetMetric.defaultVisibility, "add", {
-        localDate: plannedDate,
-        label: "Activity timer",
-        note: `${target.laps.length} lap${target.laps.length === 1 ? "" : "s"}`,
-      });
-      router.back();
-    } else {
-      router.replace({
-        pathname: "/log",
-        params: {
-          metric: target.metricId,
-          date: plannedDate,
-          value: String(Math.round(value * 100) / 100),
-          note: `${target.laps.length} timer lap${target.laps.length === 1 ? "" : "s"}`,
+  const saveTimedWorkout = (
+    target: ActivityTimer,
+    seconds: number,
+    distanceText = "",
+    caloriesText = "",
+  ) => {
+    if (!target.workout) return;
+    const workoutName = target.workout.name.trim();
+    const activity =
+      inferSessionActivityFromName(workoutName) ??
+      catalogExercise(target.workout.activityKey);
+    const activityKey = activity?.key ?? target.workout.activityKey;
+    const distanceInput = Number(distanceText.replace(",", "."));
+    const calorieInput = Number(caloriesText.replace(",", "."));
+    const distanceKm =
+      Number.isFinite(distanceInput) && distanceInput > 0
+        ? distanceInput
+        : Math.max(0, target.workout.distanceKm ?? 0);
+    const hasManualCalories =
+      Boolean(caloriesText.trim()) &&
+      Number.isFinite(calorieInput) &&
+      calorieInput >= 0;
+    const durationMinutes = Math.max(0.1, seconds / 60);
+    const exercise: GymSession["exercises"][number] = {
+      id: `timer-exercise-${target.id}`,
+      exerciseKey: activityKey,
+      name: workoutName || activity?.name || "Workout",
+      muscleGroups: activity?.muscles ?? ["full_body" as const],
+      exerciseCategory: activity?.category ?? "other" as const,
+      customMet: activity?.met,
+      trackingMode: "duration" as const,
+      trackingFields: distanceKm > 0
+        ? ["duration", "distance"]
+        : ["duration"],
+      completed: true,
+      sets: [
+        {
+          id: `timer-set-${target.id}`,
+          reps: 0,
+          weightKg: 0,
+          completed: true,
+          workSeconds: seconds,
+          distanceKm: distanceKm || undefined,
         },
-      } as never);
+      ],
+    };
+    const estimatedCalories = estimateGymActiveCalories(
+      state.settings.energyProfile,
+      durationMinutes,
+      target.workout.intensity ?? "moderate",
+      [exercise],
+      "session_met",
+    );
+    const recordedAt = new Date().toISOString();
+    const timerLocalDate = target.localDate ?? dateKey(new Date(target.startedAt));
+    const session: GymSession = {
+      id: `activity-timer-workout-${target.id}`,
+      userId: state.currentUserId,
+      name: workoutName || activity?.name || "Workout",
+      localDate: timerLocalDate,
+      recordedAt,
+      startedAt: new Date(Date.now() - seconds * 1000).toISOString(),
+      completedAt: recordedAt,
+      pausedSeconds: 0,
+      durationMinutes: Math.round(durationMinutes * 100) / 100,
+      durationManual: false,
+      distanceKm: distanceKm || undefined,
+      calories: hasManualCalories
+        ? calorieInput
+        : target.workout.calories ?? estimatedCalories,
+      calorieCalculationMode: "session_met",
+      caloriesManual:
+        hasManualCalories || target.workout.calories !== undefined,
+      intensity: target.workout.intensity ?? "moderate",
+      notes: `Recorded with Activity timer${target.laps.length ? ` · ${target.laps.length} laps` : ""}.`,
+      exercises: [exercise],
+      visibility:
+        state.metrics.find((item) => item.id === "workout")
+          ?.defaultVisibility ?? "group",
+    };
+    saveGymSession(session);
+  };
+  const logFinishedTimerMetric = (
+    target: ActivityTimer,
+    value: number,
+    targetMetric: NonNullable<typeof metric>,
+  ) => {
+    // A GymSession writes the canonical Workout duration entry itself. Avoid
+    // a second manual row when the timer was launched from that tracker.
+    if (target.workout && target.metricId === "workout_duration") return;
+    logMetric(target.metricId, value, targetMetric.defaultVisibility, "add", {
+      localDate: target.localDate ?? dateKey(new Date(target.startedAt)),
+      label: target.workout?.name ?? "Activity timer",
+      note: `${target.laps.length} lap${target.laps.length === 1 ? "" : "s"}`,
+    });
+  };
+  const finish = async (target = timer) => {
+    if (!target || finishingTimerIds.current.has(target.id)) return;
+    finishingTimerIds.current.add(target.id);
+    try {
+      if (!tutorialSandbox)
+        await cancelActivityTimerAlerts(target, state.currentUserId);
+      const seconds =
+        target.mode === "countdown"
+          ? Math.min(
+              target.targetSeconds ?? 0,
+              activityTimerElapsedSeconds(target),
+            )
+          : activityTimerElapsedSeconds(target);
+      const targetMetric = state.metrics.find(
+        (item) => item.id === target.metricId,
+      );
+      if (!targetMetric) {
+        setActivityTimer(undefined, target.id);
+        return;
+      }
+      const value = /hour|hr/i.test(targetMetric.unit)
+        ? seconds / 3600
+        : /sec/i.test(targetMetric.unit)
+          ? seconds
+          : seconds / 60;
+      if (target.workout && !target.autoLog) {
+        const pausedTarget: ActivityTimer = {
+          ...target,
+          status: "paused",
+          accumulatedSeconds: seconds,
+          pausedAt: new Date().toISOString(),
+          notificationId: undefined,
+          notificationIds: [],
+        };
+        setActivityTimer(pausedTarget);
+        setFinishDraft({
+          timer: pausedTarget,
+          seconds,
+          distance: target.workout.distanceKm
+            ? String(target.workout.distanceKm)
+            : "",
+          calories:
+            target.workout.calories !== undefined
+              ? String(target.workout.calories)
+              : "",
+        });
+        return;
+      }
+      if (target.autoLog) {
+        // Persist the canonical workout/metric rows before removing the timer,
+        // so a failed save cannot discard the only recoverable timer record.
+        if (target.workout) saveTimedWorkout(target, seconds);
+        logFinishedTimerMetric(target, value, targetMetric);
+        setActivityTimer(undefined, target.id);
+        router.back();
+      } else {
+        setActivityTimer(undefined, target.id);
+        router.replace({
+          pathname: "/log",
+          params: {
+            metric: target.metricId,
+            date: target.localDate ?? dateKey(new Date(target.startedAt)),
+            value: String(Math.round(value * 100) / 100),
+            note: `${target.laps.length} timer lap${target.laps.length === 1 ? "" : "s"}`,
+          },
+        } as never);
+      }
+    } finally {
+      finishingTimerIds.current.delete(target.id);
     }
+  };
+  const confirmWorkoutFinish = () => {
+    if (!finishDraft) return;
+    const targetMetric = state.metrics.find(
+      (item) => item.id === finishDraft.timer.metricId,
+    );
+    if (!targetMetric) return;
+    const value = /hour|hr/i.test(targetMetric.unit)
+      ? finishDraft.seconds / 3600
+      : /sec/i.test(targetMetric.unit)
+        ? finishDraft.seconds
+        : finishDraft.seconds / 60;
+    saveTimedWorkout(
+      finishDraft.timer,
+      finishDraft.seconds,
+      finishDraft.distance,
+      finishDraft.calories,
+    );
+    logFinishedTimerMetric(finishDraft.timer, value, targetMetric);
+    setActivityTimer(undefined, finishDraft.timer.id);
+    setFinishDraft(undefined);
+    router.back();
   };
   return (
     <Screen refreshEnabled={false}>
@@ -364,12 +567,80 @@ export default function ActivityTimerPage() {
         </Card>
       ) : null}
       {timer && metric ? (
+        finishDraft ? (
+          <Card style={styles.finishCard}>
+            <View style={[styles.finishIcon, { backgroundColor: colors.primarySoft }]}>
+              <Ionicons name="checkmark" size={22} color={accent} />
+            </View>
+            <Text style={[styles.finishTitle, { color: colors.ink }]}>Finish workout</Text>
+            <Text style={[styles.helper, { color: colors.muted }]}>
+              {formatActivityTimer(finishDraft.seconds)} recorded. Add optional
+              distance or calories, or leave calories blank for a MET estimate
+              based on {finishDraft.timer.workout?.name ?? "this activity"}.
+            </Text>
+            <View style={styles.finishFields}>
+              <View style={styles.finishField}>
+                <Text style={[styles.label, { color: colors.ink }]}>Distance · km</Text>
+                <TextInput
+                  accessibilityLabel="Workout distance in kilometres"
+                  value={finishDraft.distance}
+                  onChangeText={(distance) =>
+                    setFinishDraft((current) =>
+                      current ? { ...current, distance } : current,
+                    )
+                  }
+                  keyboardType="decimal-pad"
+                  placeholder="Optional"
+                  placeholderTextColor={colors.faint}
+                  style={[styles.finishInput, { color: colors.ink, borderColor: colors.border }]}
+                />
+              </View>
+              <View style={styles.finishField}>
+                <Text style={[styles.label, { color: colors.ink }]}>Active calories</Text>
+                <TextInput
+                  accessibilityLabel="Workout active calories"
+                  value={finishDraft.calories}
+                  onChangeText={(calories) =>
+                    setFinishDraft((current) =>
+                      current ? { ...current, calories } : current,
+                    )
+                  }
+                  keyboardType="decimal-pad"
+                  placeholder="Estimate"
+                  placeholderTextColor={colors.faint}
+                  style={[styles.finishInput, { color: colors.ink, borderColor: colors.border }]}
+                />
+              </View>
+            </View>
+            <View style={styles.finishActions}>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setFinishDraft(undefined)}
+                style={[styles.finishButton, { borderColor: colors.border }]}
+              >
+                <Text style={[styles.finishButtonText, { color: colors.muted }]}>Keep paused</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                onPress={confirmWorkoutFinish}
+                style={[styles.finishButton, { backgroundColor: accent, borderColor: accent }]}
+              >
+                <Text style={[styles.finishButtonText, { color: "#FFFFFF" }]}>Save workout</Text>
+              </Pressable>
+            </View>
+          </Card>
+        ) : (
         <>
           <TutorialTarget id="timer-active">
           <Card style={styles.live}>
             <Text translate={false} style={[styles.metric, { color: accent }]}>
               {localizeMetricName(language, metric)}
             </Text>
+            {timer.workout ? (
+              <Text translate={false} style={[styles.workoutLiveName, { color: colors.muted }]}>
+                Workout · {timer.workout.name}
+              </Text>
+            ) : null}
             <Text style={[styles.clock, { color: colors.ink }]}>
               {formatActivityTimer(
                 activityTimerDisplaySeconds(timer, now),
@@ -417,6 +688,7 @@ export default function ActivityTimerPage() {
             </Card>
           ) : null}
         </>
+        )
       ) : (
         <>
           <TutorialTarget id="timer-setup">
@@ -438,7 +710,11 @@ export default function ActivityTimerPage() {
                     : "Other timed trackers"),
               }))}
               selectedIds={metricId ? [metricId] : []}
-              onChange={(ids) => setMetricId(ids[0] ?? "")}
+              onChange={(ids) => {
+                const nextMetricId = ids[0] ?? "";
+                setMetricId(nextMetricId);
+                if (nextMetricId === "workout_duration") setSaveAsWorkout(true);
+              }}
               multiple={false}
               collapsibleGroups={["Mind & focus", "Other timed trackers"]}
             />
@@ -460,6 +736,91 @@ export default function ActivityTimerPage() {
               <Text style={[styles.helper, { color: colors.muted }]}>
                 Create a number tracker and turn on “Timed activity”.
               </Text>
+            ) : null}
+            {metricId === "workout_duration" ? (
+              <View style={[styles.workoutPanel, { borderColor: colors.border }]}>
+                <Pressable
+                  accessibilityRole="checkbox"
+                  accessibilityState={{ checked: saveAsWorkout }}
+                  onPress={() => setSaveAsWorkout((value) => !value)}
+                  style={styles.autoLog}
+                >
+                  <Ionicons
+                    name={saveAsWorkout ? "checkbox" : "square-outline"}
+                    size={20}
+                    color={saveAsWorkout ? accent : colors.faint}
+                  />
+                  <View style={styles.grow}>
+                    <Text style={[styles.autoLogText, { color: colors.ink }]}>Also save to Workout</Text>
+                    <Text style={[styles.workoutHint, { color: colors.muted }]}>Syncs duration, distance and active energy into their trackers.</Text>
+                  </View>
+                </Pressable>
+                {saveAsWorkout ? (
+                  <View style={styles.workoutFields}>
+                    <SelectionMenu
+                      title="Workout activity"
+                      items={SESSION_ACTIVITY_EXERCISES.map((item) => ({
+                        id: item.key,
+                        label: item.name,
+                        icon: "fitness-outline",
+                        color: accent,
+                        group: EXERCISE_CATEGORY_LABELS[item.category],
+                        sublabel: `${item.met} MET${item.supportsDistance ? " · distance" : ""}`,
+                      }))}
+                      selectedIds={workoutActivityKey ? [workoutActivityKey] : []}
+                      onChange={(ids) => {
+                        const activityKey = ids[0] ?? "";
+                        const activity = catalogExercise(activityKey);
+                        setWorkoutActivityKey(activityKey);
+                        if (activity) setWorkoutName(activity.name);
+                      }}
+                      multiple={false}
+                      minimumSelected={1}
+                      emptyLabel="Choose activity"
+                    />
+                    <TextInput
+                      accessibilityLabel="Workout name"
+                      value={workoutName}
+                      onChangeText={setWorkoutName}
+                      placeholder="Custom workout name"
+                      placeholderTextColor={colors.faint}
+                      style={[styles.workoutNameInput, { color: colors.ink, borderColor: colors.border }]}
+                    />
+                    <View style={styles.wrap}>
+                      {(["light", "moderate", "vigorous"] as GymIntensity[]).map((intensity) => (
+                        <Chip
+                          key={intensity}
+                          label={intensity[0].toUpperCase() + intensity.slice(1)}
+                          selected={workoutIntensity === intensity}
+                          onPress={() => setWorkoutIntensity(intensity)}
+                        />
+                      ))}
+                    </View>
+                    {autoLog ? (
+                      <View style={styles.finishFields}>
+                        <TextInput
+                          accessibilityLabel="Optional workout distance in kilometres"
+                          value={workoutDistance}
+                          onChangeText={setWorkoutDistance}
+                          keyboardType="decimal-pad"
+                          placeholder="Distance km · optional"
+                          placeholderTextColor={colors.faint}
+                          style={[styles.finishInput, styles.finishField, { color: colors.ink, borderColor: colors.border }]}
+                        />
+                        <TextInput
+                          accessibilityLabel="Optional workout active calories"
+                          value={workoutCalories}
+                          onChangeText={setWorkoutCalories}
+                          keyboardType="decimal-pad"
+                          placeholder="Calories · estimate"
+                          placeholderTextColor={colors.faint}
+                          style={[styles.finishInput, styles.finishField, { color: colors.ink, borderColor: colors.border }]}
+                        />
+                      </View>
+                    ) : null}
+                  </View>
+                ) : null}
+              </View>
             ) : null}
             <Text style={[styles.label, { color: colors.ink }]}>Mode</Text>
             <View style={styles.wrap}>
@@ -602,6 +963,17 @@ const styles = StyleSheet.create({
   timerChoiceName: { fontSize: 8, fontWeight: "900" },
   timerChoiceTime: { fontSize: 8, fontWeight: "800", marginTop: 1 },
   setup: { gap: 10 },
+  workoutPanel: { borderWidth: 1, borderRadius: 14, padding: 10, gap: 9 },
+  workoutFields: { gap: 8 },
+  workoutHint: { fontSize: 8, lineHeight: 12, marginTop: 2 },
+  workoutNameInput: {
+    minHeight: 42,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 11,
+    fontSize: 10,
+    fontWeight: "800",
+  },
   label: { fontSize: 10, fontWeight: "900" },
   wrap: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
   link: { fontSize: 9, fontWeight: "900", textAlign: "center" },
@@ -646,6 +1018,7 @@ const styles = StyleSheet.create({
   startText: { color: "#FFFFFF", fontSize: 10, fontWeight: "900" },
   live: { alignItems: "center", gap: 6 },
   metric: { fontSize: 10, fontWeight: "900" },
+  workoutLiveName: { fontSize: 9, fontWeight: "800" },
   clock: { fontSize: 40, lineHeight: 48, fontWeight: "900", letterSpacing: 1 },
   status: { fontSize: 9, fontWeight: "800" },
   liveActions: { flexDirection: "row", gap: 13, marginTop: 9 },
@@ -657,6 +1030,35 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   laps: { gap: 5, marginTop: 8 },
+  finishCard: { alignItems: "center", gap: 10 },
+  finishIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  finishTitle: { fontSize: 16, fontWeight: "900" },
+  finishFields: { width: "100%", flexDirection: "row", gap: 8 },
+  finishField: { flex: 1, minWidth: 0 },
+  finishInput: {
+    minHeight: 42,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    fontSize: 10,
+    fontWeight: "800",
+  },
+  finishActions: { width: "100%", flexDirection: "row", gap: 8 },
+  finishButton: {
+    flex: 1,
+    minHeight: 44,
+    borderWidth: 1,
+    borderRadius: 13,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  finishButtonText: { fontSize: 9, fontWeight: "900" },
   lap: {
     minHeight: 32,
     flexDirection: "row",

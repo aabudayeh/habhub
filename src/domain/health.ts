@@ -496,6 +496,7 @@ export function mapHealthRecordsToEntries(
   sourcePreferences?: Record<string, HealthSourcePreference>,
   existingEntries: readonly MetricEntry[] = [],
   stepCoveragePreferences?: StepCoveragePreferences,
+  estimateUnrecordedSteps = true,
 ) {
   const entries: MetricEntry[] = [];
   const entryById = new Map<string, MetricEntry>();
@@ -723,6 +724,8 @@ export function mapHealthRecordsToEntries(
         pushNutritionEntry(metricId, value);
     }
   }
+  if (!estimateUnrecordedSteps)
+    return entries.filter((entry) => !isCalculatedStepFallback(entry));
   return appendStepFallbackEntries(
     entries,
     userId,

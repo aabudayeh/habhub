@@ -39,6 +39,7 @@ const targetsByFile = {
 };
 
 const guides = read("src/tutorial/guides.ts");
+const spotlight = read("src/components/TutorialSpotlight.tsx");
 let targetCount = 0;
 for (const [file, targets] of Object.entries(targetsByFile)) {
   const source = read(file);
@@ -101,6 +102,33 @@ const notes = read("app/note-editor.tsx");
 assert.match(notes, /toggleInline\("bold"\)[\s\S]{0,260}tutorial\.journal\.format/);
 assert.match(notes, /richNoteHasText\(body\.current\)/);
 assert.match(notes, /tutorialDrawing[\s\S]{0,180}setDrawingMode\(true\)/);
+
+const group = read("app/(tabs)/group.tsx");
+assert.match(
+  spotlight,
+  /tutorialActivatedRef\.current = true;[\s\S]{0,120}onTutorialActivateRef\.current\?\.\(\)/,
+  "Tutorial targets must remember when Watch mode opened transient UI.",
+);
+assert.match(
+  spotlight,
+  /if \(!tutorialActivatedRef\.current\) return;[\s\S]{0,140}onTutorialDeactivateRef\.current\?\.\(\)/,
+  "An activated target must clean up its transient UI when its step, route, or guide leaves.",
+);
+assert.match(
+  group,
+  /const closeChallengeEditor = useCallback\(\(\) => \{[\s\S]{0,140}setChallengeEditorOpen\(false\);[\s\S]{0,100}setEditingChallenge\(undefined\)/,
+  "Challenge tutorial cleanup must close the editor without saving or mutating challenge data.",
+);
+assert.match(
+  group,
+  /id="leaderboard-create-challenge"[\s\S]{0,180}onTutorialActivate=\{\(\) => openChallengeEditor\(\)\}[\s\S]{0,120}onTutorialDeactivate=\{closeChallengeEditor\}/,
+  "The Challenge lesson must own and release the modal it opens.",
+);
+assert.match(
+  group,
+  /if \(screenIsFocused\) return;[\s\S]{0,260}setShowPicker\(false\);[\s\S]{0,180}setShowHistoryOptions\(false\);[\s\S]{0,120}closeChallengeEditor\(\)/,
+  "A mounted Group tab must dismiss transient sheets and modals when its route loses focus.",
+);
 
 console.log(
   `Tutorial social/workout wiring validated: ${targetCount} real targets, ${actionCount} isolated practice actions.`,

@@ -90,7 +90,12 @@ assert.match(provider, /group:\$\{state\.group\.id\}:workspace/);
 assert.match(provider, /account:\$\{auth\.user\.id\}:chat/);
 assert.match(challenges, /subscribePrivateBroadcast/);
 assert.match(challenges, /group:\$\{groupId\}:challenges/);
-assert.match(notifications, /account:\$\{auth\.user\.id\}:group-notifications/);
+assert.match(
+  notifications,
+  /const accountId =\s*auth\.status === "signedIn" && auth\.user \? auth\.user\.id : undefined/,
+  "notification subscriptions must derive an authenticated account scope",
+);
+assert.match(notifications, /account:\$\{accountId\}:group-notifications/);
 assert.match(sharedBroadcast, /const subscriptions = new Map/);
 assert.match(sharedBroadcast, /config: \{ private: true, broadcast: \{ self: false \} \}/);
 
