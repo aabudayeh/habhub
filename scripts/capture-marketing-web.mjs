@@ -5,6 +5,13 @@ import process from "node:process";
 import { Buffer } from "node:buffer";
 import { fileURLToPath } from "node:url";
 import { assertMarketingCapture } from "./marketing-capture-quality.mjs";
+import {
+  captureEvidencePath,
+  guardedMarketingCaptures,
+  readFreshMarketingCapture,
+  sha256,
+  verifyFrozenMarketingRuntime,
+} from "./marketing-runtime-provenance.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const exportsRoot = path.join(repoRoot, "store", "exports");
@@ -159,10 +166,13 @@ if (promoteReviewed) {
     if (!fs.existsSync(source))
       throw new Error(`Missing reviewed capture candidate: ${source}`);
     assertMarketingCapture(fs.readFileSync(source), scene.file);
+    if (guardedMarketingCaptures[scene.file]) readFreshMarketingCapture(source);
   }
   for (const scene of captureScenes) {
     const source = path.join(candidateDirectory, scene.file);
     fs.copyFileSync(source, path.join(promotedDirectory, scene.file));
+    if (guardedMarketingCaptures[scene.file])
+      fs.copyFileSync(captureEvidencePath(source), captureEvidencePath(path.join(promotedDirectory, scene.file)));
   }
   console.log(`${captureScenes.length} reviewed captures promoted to ${promotedDirectory}`);
   process.exit(0);
@@ -472,6 +482,9 @@ async function captureSurface(client, label) {
 
 async function capture(client, scene) {
   console.log(`Capturing ${scene.file} (${scene.route})`);
+  const runtime = guardedMarketingCaptures[scene.file]
+    ? await verifyFrozenMarketingRuntime(baseUrl)
+    : undefined;
   if (scene.tutorialStep) {
     const now = new Date().toISOString();
     await evaluate(
@@ -592,8 +605,20 @@ async function capture(client, scene) {
   );
   await delay(850);
   const screenshot = await captureSurface(client, scene.file);
+  if (runtime) {
+    const after = await verifyFrozenMarketingRuntime(baseUrl);
+    if (JSON.stringify(after) !== JSON.stringify(runtime))
+      throw new Error(`${scene.file}: runtime changed during capture; discard this candidate and recapture.`);
+  }
   const destination = path.join(outputDirectory, scene.file);
   fs.writeFileSync(destination, screenshot);
+  if (runtime)
+    fs.writeFileSync(captureEvidencePath(destination), `${JSON.stringify({
+      capturedAt: new Date().toISOString(),
+      outputSha256: sha256(screenshot),
+      runtime,
+      route: scene.route,
+    }, null, 2)}\n`);
   if (scene.tutorialStep)
     await evaluate(
       client,
@@ -676,7 +701,7 @@ try {
   for (const scene of captureScenes) await capture(client, scene);
   console.log(`${captureScenes.length} real-app captures written to ${outputDirectory}`);
   if (!promote)
-    console.log("Review the candidates, then rerun with --promote to replace tracked source captures.");
+    console.log("Review the candidates, then rerun with --promote-reviewed to replace tracked source captures.");
 } finally {
   if (client) {
     await client.send("Browser.close").catch(() => undefined);

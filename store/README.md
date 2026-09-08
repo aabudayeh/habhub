@@ -58,13 +58,30 @@ compositions can be reproduced and audited without inventing feature UI.
 From the repository root on Windows:
 
 ```powershell
+$env:HABHUB_CAPTURE_URL = 'http://127.0.0.1:8091'
+# Keep preview:web serving this workspace's dist on port 8091.
+node scripts/marketing-runtime-provenance.mjs --export-web
 pnpm.cmd capture:marketing:web
 # Inspect store/exports/capture-candidates/web-420x911, then:
 pnpm.cmd capture:marketing:web -- --promote-reviewed
-& .\scripts\build-store-marketing-assets.ps1
+node scripts/marketing-runtime-provenance.mjs --render-marketing
 pnpm.cmd capture:interactive-guide:web
 pnpm.cmd validate:marketing
+& .\scripts\package-store-marketing.ps1 -Version 1.0.21
 ```
+
+Freeze app source and `dist` throughout capture. The export wrapper verifies
+source fingerprints and actual served files; avatar/menu captures receive
+matching `.capture.json` sidecars. Promotion and rendering reject missing or
+stale proof, and the complete guide records the same runtime identity. Include
+those sidecars and `changed-surfaces.render.json` in any handoff archive.
+`node scripts/marketing-runtime-provenance.mjs --self-test` exercises rejection
+of stale source, images, served bundles and generated videos.
+
+The **1.0.21** correction restores the original human avatar artwork and removes
+the Menu search/Explore directory. The **1.0.20** archive is an obsolete design
+snapshot, not the current promotional set. See
+`docs/AVATAR_RESTORATION_1.0.21.md` for current verification and release evidence.
 
 Set `HABHUB_FFMPEG` to an FFmpeg 6+ executable if `ffmpeg` is not on `PATH`.
 The capture harness uses bounded, surface-only retries and rejects wrong-size,

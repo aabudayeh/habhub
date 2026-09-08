@@ -8,6 +8,12 @@ import pngjs from "pngjs";
 import imageSizePackage from "image-size";
 import ts from "typescript";
 import { assertMarketingCapture } from "./marketing-capture-quality.mjs";
+import {
+  assertFreshCaptureEvidence,
+  assertFreshMarketingRender,
+  guardedMarketingCaptures,
+  readFreshMarketingCapture,
+} from "./marketing-runtime-provenance.mjs";
 
 const { PNG } = pngjs;
 const imageSize = imageSizePackage.imageSize ?? imageSizePackage;
@@ -222,6 +228,10 @@ const tourFrameNames = capturePlan.featureTourScenes.map(
 );
 
 const sourceImages = rawNames.map((name) => sourceImageMetadata(`store/source-captures/iphone-420x911/${name}`, 840, 1822));
+const changedSurfaceCaptureEvidence = Object.fromEntries(Object.keys(guardedMarketingCaptures).map((name) => [
+  name, readFreshMarketingCapture(absolute(`store/source-captures/iphone-420x911/${name}`)),
+]));
+const changedSurfaceRenderEvidence = assertFreshMarketingRender();
 const pngs = [
   ...appleNames.map((name) => pngMetadata(`store/exports/apple/iphone-6.9/en-US/${name}`, 1260, 2736)),
   ...googleNames.map((name) => pngMetadata(`store/exports/google/phone/en-US/${name}`, 1080, 1920)),
@@ -251,6 +261,7 @@ if (!staticMastersOnly) {
   const evidencePath = path.join(path.dirname(guidePath), "habhub-full-interactive-guide.capture.json");
   assert(fs.existsSync(evidencePath), "The full guide needs its successful live-capture evidence, not only an MP4.");
   const evidence = JSON.parse(fs.readFileSync(evidencePath, "utf8"));
+  assertFreshCaptureEvidence(evidence, fs.readFileSync(guidePath), ["avatar", "menu"], "The full interactive guide");
   const curriculumBytes = fs.readFileSync(absolute("src/tutorial/guides.ts"));
   const curriculum = ts.createSourceFile("guides.ts", curriculumBytes.toString("utf8"), ts.ScriptTarget.Latest, true);
   const expectedSteps = [];
@@ -317,6 +328,7 @@ if (!staticMastersOnly) {
     observedActionCount: evidence.observedActionCount,
     outputSha256: evidence.outputSha256,
     curriculumSha256: evidence.curriculumSha256,
+    runtime: evidence.runtime,
   };
 }
 
@@ -346,6 +358,8 @@ const manifest = {
   pngs,
   videos,
   interactiveGuideEvidence,
+  changedSurfaceCaptureEvidence,
+  changedSurfaceRenderEvidence,
 };
 fs.mkdirSync(exportsRoot, { recursive: true });
 const manifestPath = path.join(exportsRoot, staticMastersOnly ? "manifest-static-candidate.json" : "manifest.json");

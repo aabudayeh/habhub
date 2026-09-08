@@ -120,7 +120,7 @@ $tourScenes = @(
   [pscustomobject]@{ Id = "display"; Raw = "23-display-settings.jpg"; Headline = "Keep your app feeling like you."; Subline = "Tune your theme, page order and navigation." },
   [pscustomobject]@{ Id = "profile-behavior"; Raw = "24-profile-behavior.jpg"; Headline = "Understand your estimates."; Subline = "Explore the optional food-goal and unrecorded-step settings." },
   [pscustomobject]@{ Id = "quick-guides"; Raw = "12-quick-guide.jpg"; Headline = "Learn a little. Then explore."; Subline = "Watch a short guide, try it yourself or skip ahead." },
-  [pscustomobject]@{ Id = "menu"; Raw = "25-menu.jpg"; Headline = "Start simple. Add what you need."; Subline = "Find optional pages and advanced settings in the menu." }
+  [pscustomobject]@{ Id = "menu"; Raw = "25-menu.jpg"; Headline = "Your app. Your way."; Subline = "Your profile and settings, neatly in one place." }
 )
 
 function New-RoundedPath {

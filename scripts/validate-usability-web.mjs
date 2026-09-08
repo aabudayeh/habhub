@@ -171,17 +171,14 @@ try {
       await until(`!Boolean(${byText("Done")})`, "leave edit mode");
       return { ...target, trackerNames };
     });
-    await run("menu-search", async () => {
+    await run("compact-menu", async () => {
       await navigate("/", "Your day");
       await tap(byLabel("Open menu"), "Open menu", mobile);
-      await until(`Boolean(${byLabel("Find a page or setting")})`, "menu search");
+      await until(`Boolean(${byLabel("Cloud account & health sync")})`, "compact menu");
+      assert.equal(await browser.evaluate(`Boolean(${byLabel("Find a page or setting")})`), false, "Menu must not restore the unwanted search field");
+      assert.equal(await browser.evaluate(textPresent("Explore")), false, "Menu must not restore the unwanted Explore grid");
       await shot("menu", width);
-      const target = await tap(byLabel("Find a page or setting"), "menu search", mobile);
-      assert.equal(await browser.evaluate("document.activeElement?.getAttribute('aria-label')"), "Find a page or setting", "Search must receive focus");
-      await browser.send("Input.insertText", { text: "Notifications" });
-      await until(`Boolean(${byLabel("Notifications")}) && !Boolean(${byLabel("Workout")})`, "search filters destinations");
-      await shot("menu-search", width);
-      await tap(byLabel("Notifications"), "Notifications destination", mobile);
+      const target = await tap(byLabel("Notifications"), "Notifications destination", mobile);
       await until("location.pathname === '/notifications'", "Notifications destination route");
       await until(textPresent("Notifications"), "notification preferences");
       return target;

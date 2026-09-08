@@ -65,6 +65,9 @@ const clamp = (value: number, minimum: number, maximum: number) =>
  * Maps the two continuous inputs onto a dense, independent two-axis grid.
  * The renderer selects exactly one baked sprite: it never cross-fades whole
  * silhouettes, so progress fill and theme contour still have one clean edge.
+ * These are illustrative composition states, not per-unit anatomical scans.
+ * Keep the established artwork and proportions intact; a small measurement
+ * edit can remain within the same state rather than inventing a new contour.
  */
 export function statusAvatarAtlasBlend(
   sex: BiologicalSex,

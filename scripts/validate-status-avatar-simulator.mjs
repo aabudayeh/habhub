@@ -441,6 +441,16 @@ assert.match(
 );
 assert.match(
   componentSource,
+  /aria-disabled=\{[\s\S]{0,130}disabled && currentValue === undefined && recommendedValue === undefined[\s\S]{0,60}aria-valuemin=\{disabled \? undefined : minimumValue\}[\s\S]{0,30}aria-valuemax=\{disabled \? undefined : maximumValue\}[\s\S]{0,30}aria-valuenow=\{disabled \? undefined : value\}[\s\S]{0,30}aria-valuetext=\{disabled \? undefined : accessibleValue\}/,
+  "React Native Web must receive explicit supported ARIA range values without advertising disabled adjustments",
+);
+assert.match(
+  componentSource,
+  /accessibilityRole="switch"[\s\S]{0,90}accessibilityState=\{\{ checked: enabled \}\}[\s\S]{0,30}aria-checked=\{enabled\}/,
+  "Composition switches must expose the same checked state on native and web",
+);
+assert.match(
+  componentSource,
   /configurationRef\.current\.disabled[\s\S]*markerAtPointRef\.current[\s\S]*onPanResponderRelease[\s\S]*onMarkerPress/,
   "a disabled no-data slider must still claim an exact R-marker tap without enabling value adjustment",
 );

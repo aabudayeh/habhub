@@ -530,6 +530,15 @@ index uploader-scoped reset and profile-deletion cleanup. Its regression proves
 the ordinary PostgreSQL planner uses the index across 2,000 unrelated visuals.
 See `ATTACHMENT_OWNERSHIP_009.md` for migration behavior and regression evidence.
 
+### Avatar and Menu correction 1.0.21
+
+This is a client/media-only correction on top of 1.0.20. No database migration
+or Edge Function redeployment is required. Preserve the existing backend
+migrations and privacy/reset fences. The prior human avatar artwork replaces
+the rejected vector outline, and Menu no longer contains Find/Explore controls.
+Follow `docs/AVATAR_RESTORATION_1.0.21.md` and the provenance-checked capture
+workflow in `store/README.md`; the 1.0.20 marketing archive is superseded.
+
 ## 7. Store-launch responsibilities
 
 Before public release:

@@ -17,6 +17,12 @@ const groupSettings = read("app", "group-settings.tsx");
 const leaderboard = read("app", "(tabs)", "group.tsx");
 const workout = read("app", "(tabs)", "gym.tsx");
 const publicProfile = read("app", "member-profile", "[id].tsx");
+const menu = read("app", "menu.tsx");
+
+assert.doesNotMatch(menu, /AppTextInput|Find a page or setting|visibleDestinations|styles\.destinations/,
+  "Menu must remain a compact settings list without the rejected search or Explore directory");
+for (const destination of ["/settings", "/notifications", "/display-settings", "/groups", "/legal-support", "/quick-guide", "/customize"])
+  assert.ok(menu.includes(destination), `Compact Menu must preserve ${destination}`);
 
 const seededToday = seed.indexOf('"index"');
 const seededStatus = seed.indexOf('"status"');

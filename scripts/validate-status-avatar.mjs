@@ -1004,4 +1004,4 @@ process.stdout.write(
 );
 
 
-await import("./validate-status-avatar-continuity.mjs");
+await import("./validate-status-avatar-artwork.mjs");

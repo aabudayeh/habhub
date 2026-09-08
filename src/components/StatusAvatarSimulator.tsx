@@ -365,6 +365,13 @@ function SimulationSlider({
         disabled:
           disabled && currentValue === undefined && recommendedValue === undefined,
       }}
+      aria-disabled={
+        disabled && currentValue === undefined && recommendedValue === undefined
+      }
+      aria-valuemin={disabled ? undefined : minimumValue}
+      aria-valuemax={disabled ? undefined : maximumValue}
+      aria-valuenow={disabled ? undefined : value}
+      aria-valuetext={disabled ? undefined : accessibleValue}
       accessibilityValue={
         disabled
           ? undefined
@@ -518,6 +525,7 @@ function MetricToggle({
       accessibilityLabel={label}
       accessibilityRole="switch"
       accessibilityState={{ checked: enabled }}
+      aria-checked={enabled}
       hitSlop={6}
       onPress={() => onChange(!enabled)}
       style={({ pressed }) => [

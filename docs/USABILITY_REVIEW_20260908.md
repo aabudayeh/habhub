@@ -2,6 +2,12 @@
 
 Base: `b4a19cf`, branch `codex/usability-polish-20260908`.
 
+**Design correction:** This is the historical 1.0.20 release record. The user
+subsequently rejected its generated vector avatar and searchable Explore menu.
+Those two changes are superseded by the original-artwork restoration and compact
+menu in [AVATAR_RESTORATION_1.0.21.md](AVATAR_RESTORATION_1.0.21.md), including
+replacement media. Do not use the 1.0.20 marketing archive for the current app.
+
 ## Delivered candidate
 
 - App version **1.0.20**, runtime commit `632bdffe3d61d67e3c57e64e002cdc403dbfb351`.

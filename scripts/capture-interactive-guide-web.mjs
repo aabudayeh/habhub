@@ -7,6 +7,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
+import { verifyFrozenMarketingRuntime } from "./marketing-runtime-provenance.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const exportsRoot = path.join(repoRoot, "store", "exports");
@@ -44,6 +45,9 @@ const finalGuideStepMarker = "Save into the tutorial preview";
 const continuityProbe = process.argv.includes("--probe-today");
 const actionProbe = process.argv.includes("--probe-actions");
 const recording = !continuityProbe && !actionProbe;
+// Probes remain usable against a development preview. Release recordings must
+// instead prove that the currently reviewed avatar/menu ran in a frozen export.
+const capturedRuntime = recording ? await verifyFrozenMarketingRuntime(baseUrl) : undefined;
 // Read literal curriculum metadata with the TypeScript parser, without
 // executing app modules or maintaining a duplicate list of expected actions.
 const expectedActions = new Map();
@@ -849,6 +853,9 @@ try {
     const encoder = encodeGuide(ffmpeg, concatPath, durationSeconds);
     if (await fileSha256(curriculumPath) !== curriculumSha256)
       throw new Error("Tutorial curriculum changed during recording; export and record the final curriculum again.");
+    const finishedRuntime = await verifyFrozenMarketingRuntime(baseUrl);
+    if (JSON.stringify(finishedRuntime) !== JSON.stringify(capturedRuntime))
+      throw new Error("Avatar/menu runtime changed during recording; export and record the final app again.");
     const outputSha256 = await fileSha256(outputPath);
     fs.writeFileSync(
       path.join(outputDirectory, "habhub-full-interactive-guide.capture.json"),
@@ -856,6 +863,7 @@ try {
         capturedAt: new Date().toISOString(),
         outputSha256,
         curriculumSha256,
+        runtime: capturedRuntime,
         baseUrl,
         durationSeconds,
         captureWidth,
