@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -123,7 +123,7 @@ const scenes = [
     ready: "Group recap",
     action: openStoryComments(),
   },
-  { file: "20-group-schedule.jpg", route: "/group-schedule", ready: "Group Schedule" },
+  { file: "20-group-schedule.jpg", route: "/group-schedule", ready: "Group Schedule", action: openGroupScheduleDay(), after: "Sunrise group walk" },
   { file: "21-group-notes.jpg", route: "/group-notes", ready: "Group Notes" },
   { file: "22-notifications.jpg", route: "/notifications", ready: "Notifications" },
   { file: "23-display-settings.jpg", route: "/display-settings", ready: "Display" },
@@ -207,6 +207,35 @@ function clickHref(href) {
     const node = document.querySelector(${JSON.stringify(`a[href="${href}"]`)});
     if (!node) return false;
     node.click();
+    return true;
+  })()`;
+}
+
+function openGroupScheduleDay() {
+  return `(async () => {
+    const visibleControl = (label) => [...document.querySelectorAll('[aria-label]')]
+      .find((node) => node.getAttribute('aria-label') === label &&
+        node.getBoundingClientRect().width > 0 && getComputedStyle(node).visibility !== 'hidden');
+    const waitForControl = async (label) => {
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline) {
+        const node = visibleControl(label);
+        if (node) return node;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      return null;
+    };
+    // This capture is 420px wide, where the real calendar defaults to Week.
+    // Select Day explicitly; choosing a view also closes the options sheet.
+    const options = await waitForControl('Schedule view');
+    if (!options) return false;
+    options.click();
+    const day = await waitForControl('Day calendar view');
+    if (!day) return false;
+    day.click();
+    const next = await waitForControl('Next day');
+    if (!next) return false;
+    next.click();
     return true;
   })()`;
 }
@@ -362,6 +391,7 @@ class CdpClient {
     this.url = url;
     this.sequence = 0;
     this.pending = new Map();
+    this.disconnected = false;
   }
 
   async connect() {
@@ -376,20 +406,26 @@ class CdpClient {
       if (message.error) pending.reject(new Error(message.error.message));
       else pending.resolve(message.result);
     });
-    this.socket.addEventListener("close", () => {
+    const disconnect = () => {
+      this.disconnected = true;
       for (const pending of this.pending.values()) {
         clearTimeout(pending.timeout);
         pending.reject(new Error("Capture browser disconnected"));
       }
       this.pending.clear();
-    });
+    };
+    this.socket.addEventListener("close", disconnect);
+    this.socket.addEventListener("error", disconnect);
     await new Promise((resolve, reject) => {
       this.socket.addEventListener("open", resolve, { once: true });
       this.socket.addEventListener("error", reject, { once: true });
+      this.socket.addEventListener("close", () => reject(new Error("Capture browser disconnected")), { once: true });
     });
   }
 
   send(method, params = {}) {
+    if (this.disconnected || this.socket?.readyState !== WebSocket.OPEN)
+      return Promise.reject(new Error("Capture browser disconnected"));
     const id = ++this.sequence;
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
@@ -397,7 +433,13 @@ class CdpClient {
         reject(new Error(`Capture browser timed out: ${method}`));
       }, method === "Page.captureScreenshot" ? 10_000 : method === "Browser.close" ? 5_000 : 30_000);
       this.pending.set(id, { resolve, reject, timeout });
-      this.socket.send(JSON.stringify({ id, method, params }));
+      try {
+        this.socket.send(JSON.stringify({ id, method, params }));
+      } catch (error) {
+        clearTimeout(timeout);
+        this.pending.delete(id);
+        reject(error);
+      }
     });
   }
 
@@ -503,8 +545,24 @@ async function capture(client, scene) {
       )})`,
     );
   }
-  await navigate(client, scene.route);
-  await waitForText(client, scene.ready);
+  let setupSeedHook;
+  if (scene.liveSetup) {
+    if (!["localhost", "127.0.0.1"].includes(new URL(baseUrl).hostname))
+      throw new Error("Clean onboarding capture fixtures are local-only.");
+    // Use the real account-creation boundary's clean snapshot, not the populated
+    // demo account. This is a labelled local fixture, not a remote signup.
+    const cleanFixture = JSON.parse(execFileSync(process.execPath, ["--no-warnings", "--experimental-strip-types", "--experimental-loader", "./scripts/typescript-resolver-loader.mjs", "scripts/validate-onboarding-account.mjs", "--emit-clean-fixture"], { cwd: repoRoot, encoding: "utf8" }));
+    await client.send("Page.navigate", { url: "about:blank" });
+    await client.send("Storage.clearDataForOrigin", { origin: new URL(baseUrl).origin, storageTypes: "all" });
+    setupSeedHook = await client.send("Page.addScriptToEvaluateOnNewDocument", { source:
+      `if (location.origin === ${JSON.stringify(new URL(baseUrl).origin)}) localStorage.setItem('paceboard-state-v1', ${JSON.stringify(JSON.stringify(cleanFixture))});` });
+  }
+  try {
+    await navigate(client, scene.route);
+    await waitForText(client, scene.ready);
+  } finally {
+    if (setupSeedHook) await client.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: setupSeedHook.identifier });
+  }
   if (scene.liveSetup) {
     if (!await evaluate(client, clickText("Guided setup"))) throw new Error("Guided setup control missing.");
     await waitForText(client, "What matters to you?");
@@ -518,7 +576,7 @@ async function capture(client, scene) {
     await evaluate(client, clickLabel("Do it with friends"));
     await delay(350);
     if (!await evaluate(client, clickLabel("Make Today mine"))) throw new Error("Live setup entry control missing.");
-    await waitForText(client, "Make Today yours");
+    await waitForText(client, "Add your first tracker");
     if (await evaluate(client, `document.body.innerText.includes('AhmadAhmad')`)) throw new Error("Live setup capture duplicated the demo name.");
   }
   if (scene.tutorialReady) await waitForText(client, scene.tutorialReady);

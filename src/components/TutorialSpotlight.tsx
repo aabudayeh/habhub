@@ -31,7 +31,7 @@ import { AppText as Text } from "@/src/components/AppText";
 import { useLocalization } from "@/src/i18n";
 import { localizedTutorialGuide } from "@/src/i18n/tutorial";
 import { useApp } from "@/src/state/AppProvider";
-import { activeLiveSetupStep, skipAllTutorialsSettings, tutorialPageAlreadyLearned, tutorialReadingTimeMs, tutorialWatchTiming } from "@/src/domain/tutorialUsability";
+import { activeLiveSetupStep, tutorialPageAlreadyLearned, tutorialReadingTimeMs, tutorialWatchTiming } from "@/src/domain/tutorialUsability";
 import { readableTextColor } from "@/src/domain/colors";
 import {
   calloutLayout,
@@ -317,7 +317,7 @@ function TutorialSpotlightSurface() {
 }
 
 function TutorialFirstVisitPrompt() {
-  const { state, updateSettings } = useApp();
+  const { state, finishGuidedSetup } = useApp();
   const { guides, hydrated, progressByGuide, startGuide } = useTutorial();
   const pathname = usePathname();
   const segments = useSegments();
@@ -482,7 +482,7 @@ function TutorialFirstVisitPrompt() {
           </View>
           <Pressable
             accessibilityRole="button"
-            onPress={() => { rememberPrompt(); updateSettings(skipAllTutorialsSettings()); }}
+            onPress={() => { rememberPrompt(); finishGuidedSetup(true); }}
             style={styles.firstVisitSkipAll}
           >
             <Text style={[styles.firstVisitSkipText, { color: colors.muted }]}>{t("Skip all tutorials")}</Text>

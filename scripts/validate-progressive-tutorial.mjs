@@ -32,10 +32,14 @@ const liveCoach = fs.readFileSync("src/components/LiveSetupCoach.tsx", "utf8");
 assert.doesNotMatch(liveCoach, /\b(logMetric|deleteMetric|configurePersonalMetrics|startGuide)\s*\(/,
   "Live setup must not fabricate entries, delete history or start isolated preview automatically");
 assert.match(liveCoach, /if \(!step \|\| sandbox \|\| tutorial\?\.activeSession\) return null/);
-assert.match(liveCoach, /updateMetric\(existing.id, \{ sections: \{ \.\.\.existing.sections, today:/,
-  "Hiding a suggestion changes only visibility and preserves the definition/history");
-assert.match(liveCoach, /trackGoal: false, addToToday: true/,
-  "Adding a suggested tracker must not silently rewrite daily goal history");
+assert.match(liveCoach, /router.push\("\/metric-editor\?id=new" as never\)/,
+  "Guided setup must use the real ready-made/custom tracker picker");
+assert.match(liveCoach, /label="Edit Today"[\s\S]{0,80}onPress=\{onEditToday\}/,
+  "Guided layout teaches the actual Today edit controls");
+assert.doesNotMatch(liveCoach, /\b(addMetric|addMetrics|updateMetric)\s*\(|<Switch|live-setup-tracker-/,
+  "The coach must not replicate the tracker picker or display settings");
+assert.match(liveCoach, /live-setup-skip-all[\s\S]{0,200}finishGuidedSetup\(true\)/,
+  "Skipping all tutorials applies empty-guide defaults through the same atomic finish action");
 assert.match(launcher, /onPress=\{\(\) => launch\(guide, false, "practice"\)\}/,
   "Manual guide replay remains available after global automatic prompts are disabled");
 assert.match(launcher, /guidedSetupStep: activeLiveSetupStep\(state.settings\) \?\? "trackers"/,

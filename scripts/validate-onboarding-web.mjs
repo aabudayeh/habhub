@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { Buffer } from "node:buffer";
 
 const root = path.resolve(import.meta.dirname, "..");
 const baseUrl = process.env.HABHUB_USABILITY_URL ?? "http://127.0.0.1:8091";
+assert.ok(["localhost", "127.0.0.1"].includes(new URL(baseUrl).hostname), "Snapshot fixtures must never run against a live account origin");
+const cleanAccountFixture = JSON.parse(execFileSync(process.execPath, ["--no-warnings", "--experimental-strip-types", "--experimental-loader", "./scripts/typescript-resolver-loader.mjs", "scripts/validate-onboarding-account.mjs", "--emit-clean-fixture"], { cwd: root, encoding: "utf8" }));
+assert.equal(cleanAccountFixture.settings.onboardingComplete, false);
+assert.equal(cleanAccountFixture.todos.length, 0);
 const port = Number(process.env.HABHUB_ONBOARDING_PORT ?? 9344);
 const output = path.join(root, "store", "exports", "onboarding-web");
 const profiles = path.join(output, "profiles");
@@ -14,6 +18,7 @@ const profile = fs.mkdtempSync(path.join(profiles, "edge-"));
 const edgePath = process.env.HABHUB_EDGE_PATH ?? "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe";
 const results = [];
 const runtimeErrors = [];
+const screenshots = [];
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 class Browser {
@@ -90,7 +95,8 @@ async function savedSnapshot(predicate, label) {
     if (predicate(value)) return value;
     await delay(200);
   }
-  throw new Error(`Timed out waiting for durable settings: ${label}`);
+  const observed = await snapshot();
+  throw new Error(`Timed out waiting for durable settings: ${label}; observed ${JSON.stringify(observed ? { currentUserId: observed.currentUserId, metrics: observed.metrics?.length, entries: observed.entries?.length, todos: observed.todos?.length, completed: observed.settings?.onboardingComplete, skipped: observed.settings?.tutorialPromptsDisabled } : null)}`);
 }
 
 async function tap(expression, label, mobile, holdMs = 0) {
@@ -121,17 +127,25 @@ async function shot(name, width) {
   await browser.send("Page.bringToFront");
   await browser.evaluate("Promise.race([new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))), new Promise(resolve => setTimeout(resolve, 500))])");
   const image = await browser.send("Page.captureScreenshot", { format: "png", fromSurface: true, captureBeyondViewport: false });
-  fs.writeFileSync(path.join(output, `${width}-${name}.png`), Buffer.from(image.data, "base64"));
+  const screenshot = path.join(output, `${width}-${name}.png`);
+  fs.writeFileSync(screenshot, Buffer.from(image.data, "base64"));
+  screenshots.push(screenshot);
   assert.ok(layout.scrollWidth <= layout.width + 1, `${name}: horizontal overflow ${JSON.stringify(layout)}`);
   return layout;
 }
 
-async function navigate(route, ready) {
+async function navigate(route, ready, fixture = "demo") {
   await browser.send("Page.navigate", { url: "about:blank" });
   await until("location.href === 'about:blank'", "Fresh isolated document");
   await browser.send("Storage.clearDataForOrigin", { origin: new URL(baseUrl).origin, storageTypes: "all" });
-  await browser.send("Page.navigate", { url: `${baseUrl}${route}` });
-  await until(textPresent(ready), ready);
+  const seedHook = fixture === "clean-account" ? await browser.send("Page.addScriptToEvaluateOnNewDocument", { source:
+    `if (location.origin === ${JSON.stringify(new URL(baseUrl).origin)}) localStorage.setItem('paceboard-state-v1', ${JSON.stringify(JSON.stringify(cleanAccountFixture))});` }) : null;
+  try {
+    await browser.send("Page.navigate", { url: `${baseUrl}${route}` });
+    await until(textPresent(ready), ready);
+  } finally {
+    if (seedHook) await browser.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: seedHook.identifier });
+  }
   await delay(500);
 }
 
@@ -157,6 +171,7 @@ try {
     await browser.send("Emulation.setDeviceMetricsOverride",{width,height:mobile?844:1000,deviceScaleFactor:1,mobile:false});
     await browser.send("Emulation.setTouchEmulationEnabled",{enabled:mobile});
     const run=async(name,work)=>{
+      if (process.env.HABHUB_ONBOARDING_SCENARIOS && !process.env.HABHUB_ONBOARDING_SCENARIOS.split(",").includes(name)) return;
       try { const detail=await work(); results.push({width,name,passed:true,detail}); console.log("PASS "+width+" "+name); }
       catch(error) { results.push({width,name,passed:false,error:String(error)}); await shot("failure-"+name,width).catch(()=>undefined); console.error("FAIL "+width+" "+name+": "+error.message); }
     };
@@ -180,8 +195,8 @@ try {
       await shot("quick-guide-starts-onboarding",width);
       return {route:"/onboarding",welcomeChoicesVisible:true};
     });
-    await run("guided-live-personalization",async()=>{
-      await navigate("/onboarding","Build a Today page that works for you");
+    await run("clean-account-guided-live-personalization",async()=>{
+      await navigate("/onboarding","Build a Today page that works for you","clean-account");
       await shot("welcome",width);
       assert.equal(await browser.evaluate(textPresent("Classic setup")),true,"Classic choice remains available");
       const guided = await tap(byText("Guided setup"),"Guided setup",mobile);
@@ -202,59 +217,126 @@ try {
       await shot("guided-goals",width);
       await tap(byText("Make Today mine"),"Enter actual Today",mobile);
       await until("location.pathname === '/'", "Guided welcome enters Today directly");
-      await until(textPresent("Make Today yours"),"Live tracker choices");
+      await until(textPresent("Add your first tracker"),"Compact live tracker guidance");
       const route=await browser.evaluate("location.pathname");
       assert.equal(await browser.evaluate(textPresent("Your starter dashboard")),false,"No second setup form");
       assert.equal(await browser.evaluate(textPresent("Start with the navigation bar")),false,"Live setup is not an isolated example tour");
-      await delay(700);
-      const before = await snapshot();
+      const before = await savedSnapshot(value => value?.settings?.onboardingComplete && value.metrics.length === 0,"Empty guided account saved");
       assert.ok(before?.settings?.onboardingComplete, "Live setup uses the persisted app account");
-      const chip = byTestId("live-setup-tracker-steps");
-      const original = await browser.evaluate(chip+".getAttribute('aria-checked')");
-      await tap(chip,"Toggle real Steps tile",mobile);
-      await until(chip+".getAttribute('aria-checked') !== "+JSON.stringify(original),"Live tracker toggled");
-      const changed = await savedSnapshot(value =>
-        value?.metrics?.find(metric => metric.id === 'steps')?.sections.today === (original !== 'true'),
-      "Steps visibility changed");
-      assert.equal(changed.metrics.find(metric=>metric.id==='steps').sections.today, original !== 'true');
-      assert.deepEqual(changed.entries, before.entries, "Tracker selection must not add/delete/edit any real or demo history");
-      await tap(chip,"Restore Steps tile",mobile);
+      assert.equal(before.currentUserId, cleanAccountFixture.currentUserId,"Actual clean-account identity, not seeded demo persona");
+      assert.equal(before.settings.energyProfile.bodyFatPercent,undefined,"Unknown body fat stays unknown after hydration");
+      assert.equal(before.settings.energyProfile.leanBodyMassKg,undefined,"Unknown lean mass stays unknown after hydration");
+      for (const key of ["entries","photos","todos","journalNotes","calendarReminders","gymPlans","gymSessions"]) assert.deepEqual(before[key],[],key+" begins empty");
+      const coachHeight = await browser.evaluate(byTestId("live-setup-coach")+".getBoundingClientRect().height");
+      assert.ok(coachHeight <= 210,"The live coach must stay compact at "+width+"px: "+coachHeight);
+      assert.equal(await browser.evaluate(textPresent("Google Health for web")),false,"No health disclosure during guided Today (offline local fixture)");
+      assert.equal(await browser.evaluate("Boolean("+byTestId("today-featured-card")+")"),false,"An empty guided Today hides its zero-of-zero featured summary");
+      await shot("guided-empty-today",width);
+      await tap(byTestId("live-setup-add-trackers"),"Open actual ready-made/custom tracker editor",mobile);
+      await until(textPresent("Add something to track"),"Actual tracker editor");
+      assert.equal(await browser.evaluate("location.pathname"),"/metric-editor");
+      await tap(byLabel("Choose a ready-made tracker"),"Open real ready-made catalog",mobile);
+      await tap(byText("Steps"),"Select Steps preset",mobile);
+      await tap(byText("Water"),"Select Water preset",mobile);
+      await until(textPresent("2 ready-made trackers selected"),"Real multi-tracker selection");
+      await shot("guided-real-picker",width);
+      await tap(byText("Add selected trackers"),"Save selected trackers through the real editor",mobile);
+      await until("location.pathname === '/'","Picker save returns to Today");
+      await until(textPresent("Add your first tracker"),"Guide remains available after real picker return");
+      const chosen = await savedSnapshot(value=>value?.metrics?.some(metric=>metric.id==='water'),"Chosen real tracker persisted");
+      assert.deepEqual(chosen.metrics.map(metric=>metric.id).sort(),["steps","water"]);
+      assert.deepEqual(chosen.entries,[]); assert.deepEqual(chosen.todos,[]);
+      assert.equal(await browser.evaluate("Boolean("+byTestId("today-featured-card")+")"),true,"Featured summary returns when the user adds real trackers");
       await shot("guided-live-trackers",width);
       await tap(byLabel("Continue live setup"),"Live layout step",mobile);
-      await until(textPresent("Keep only what helps"),"Live layout choices");
-      const pref=byLabel("Show To-dos on Today");
-      const isChecked="(() => { const n="+pref+"; return n.matches('input')?n.checked:(n.querySelector('input')?.checked??n.getAttribute('aria-checked')==='true'); })()";
-      const prior=await browser.evaluate(isChecked);
-      await tap(pref,"Toggle live Today To-Dos",mobile);
-      await until("("+isChecked+") !== "+JSON.stringify(prior),"Live layout changed");
-      const layoutSaved = await savedSnapshot(value => value?.settings?.showTodosToday === !prior,
-        "Today To-Dos visibility changed");
-      assert.equal(layoutSaved.settings.showTodosToday,!prior);
+      await until(textPresent("Arrange Today"),"Live layout guidance");
+      await tap(byText("Edit Today"),"Enter actual Today edit mode",mobile);
+      await until(textPresent("Add existing"),"Actual edit tools visible");
+      assert.equal(await browser.evaluate(textPresent("Create tracker")),true);
+      assert.equal(await browser.evaluate(textPresent("Tracked goals")),true);
+      await tap(byLabel("Hide trackers"),"Use the actual Today visibility control",mobile);
+      await tap(byText("Done"),"Save actual Today layout",mobile);
+      const layoutSaved = await savedSnapshot(value => value?.settings?.showGoalsToday === false,"Today tracker visibility changed");
+      assert.equal(layoutSaved.settings.showGoalsToday,false);
       await browser.send("Page.reload");
-      await until(textPresent("Keep only what helps"),"Live setup resumes after refresh");
-      assert.equal((await snapshot()).settings.showTodosToday,!prior,"Layout survives refresh");
-      await tap(pref,"Restore To-Dos",mobile);
+      await until(textPresent("Arrange Today"),"Live setup resumes after refresh");
+      assert.equal((await snapshot()).settings.showGoalsToday,false,"Layout survives refresh");
+      await tap(byText("Edit Today"),"Reopen actual edit mode",mobile);
+      await tap(byLabel("Show trackers"),"Restore tracker visibility",mobile);
+      await tap(byText("Done"),"Finish real edit mode",mobile);
       await shot("guided-live-layout",width);
       await tap(byLabel("Continue live setup"),"First-log step",mobile);
-      await until(textPresent("Try your first real log"),"First real log prompt");
+      await until(textPresent("Build your own history"),"First real log prompt");
       await tap(byText("Open Log"),"Open actual Log page",mobile);
       await until(textPresent("Only log a real value"),"Contextual real-entry explanation");
       assert.equal(await browser.evaluate("location.pathname"),"/log");
       await shot("guided-live-log",width);
       await tap(byText("Continue setup on Today"),"Return without logging",mobile);
-      await until(textPresent("Your app is ready to explore"),"Explore step");
+      await until(textPresent("Ready to explore"),"Explore step");
       await tap(byLabel("Finish live setup"),"Finish nonblocking setup",mobile);
       await until("!"+byTestId("live-setup-coach"),"Live setup finished");
       await delay(500);
       const after=await savedSnapshot(value=>value?.settings?.guidedSetupStep === "complete", "Live setup completed");
       assert.deepEqual(after.entries,before.entries,"Finishing/skipping logging never manufactures an entry");
+      assert.deepEqual(after.todos,[],"No demo tasks inherited after real picker use");
+      assert.deepEqual(after.metrics.map(metric=>metric.id).sort(),["steps","water"],"Finishing preserves chosen trackers; no fallback To-Dos tracker is added");
       assert.equal(after.settings.guidedSetupStep,"complete");
       assert.equal(after.group.members.find(member=>member.id===after.currentUserId).name,"Jordan");
       await shot("guided-live-finished",width);
-      return {welcomeScreens:1,liveSteps:4,name:"Jordan",selected,route,historyPreserved:true,refreshResume:true};
+      return {fixture:"actual createCleanAccountState snapshot; offline explicit-demo auth, not remote sign-up",welcomeScreens:1,liveSteps:4,name:"Jordan",selected,route,coachHeight,emptyHistory:true,realPickerRoundTrip:true,realEditMode:true,refreshResume:true,selectedTrackersPreserved:true};
+    });
+    await run("intentional-demo-preserved",async()=>{
+      // Onboarding intentionally defers background snapshots until its explicit
+      // completion flush. Read the unchanged real demo from Quick Guide first.
+      await navigate("/quick-guide","Automatic tutorial prompts");
+      const before = await savedSnapshot(value=>value?.entries?.length>0 && value.todos?.length>0,"Intentional demo snapshot populated before onboarding");
+      await tap(byTestId("quick-guide-live-setup"),"Open setup from actual Quick Guide",mobile);
+      await until(textPresent("Build a Today page that works for you"),"Welcome opens");
+      await tap(byText("Guided setup"),"Guided setup in intentional demo",mobile);
+      await enterName();
+      await tap(byText("Make Today mine"),"Open demo Today guide",mobile);
+      await until(textPresent("Add your first tracker"),"Demo guide visible");
+      await tap(byTestId("live-setup-skip-all"),"Finish demo tips without changing data",mobile);
+      const after=await savedSnapshot(value=>value?.settings?.guidedSetupStep === "complete","Demo guide finished");
+      assert.deepEqual(after.entries,before.entries);
+      assert.deepEqual(after.todos,before.todos);
+      assert.deepEqual(after.metrics,before.metrics);
+      await shot("intentional-demo-preserved",width);
+      return {fixture:"credential-free demo",entriesPreserved:after.entries.length,todosPreserved:after.todos.length,catalogPreserved:after.metrics.length};
+    });
+    await run("empty-guide-use-defaults",async()=>{
+      await navigate("/onboarding","Build a Today page that works for you","clean-account");
+      await tap(byText("Guided setup"),"Guided setup",mobile); await enterName();
+      await tap(byText("Make Today mine"),"Begin empty guide",mobile);
+      await until(textPresent("Add your first tracker"),"Empty Today guide");
+      await tap(byText("Use defaults"),"Choose ordinary defaults without adding trackers",mobile);
+      const after=await savedSnapshot(value=>value?.settings?.guidedSetupStep === "complete","Defaults persisted");
+      assert.deepEqual(after.metrics.map(metric=>metric.id),["steps","water","todo_completion"]);
+      assert.deepEqual(after.entries,[]); assert.deepEqual(after.todos,[]);
+      assert.equal(after.settings.tutorialPromptsDisabled,false,"Use defaults finishes live setup without globally disabling page guides");
+      assert.equal(await browser.evaluate("Boolean("+byTestId("today-featured-card")+")"),true,"Ordinary defaults retain the featured summary");
+      await shot("empty-guide-defaults",width);
+      return {fixture:"actual clean-account local snapshot",defaultTrackers:after.metrics.map(metric=>metric.id),noSampleHistory:true,pageGuidesRemainAvailable:true};
+    });
+    await run("empty-guide-close-skips-all",async()=>{
+      await navigate("/onboarding","Build a Today page that works for you","clean-account");
+      await tap(byText("Guided setup"),"Guided setup",mobile); await enterName();
+      await tap(byText("Make Today mine"),"Begin empty live guide",mobile);
+      await until(textPresent("Add your first tracker"),"Empty Today guide");
+      const close = await tap(byTestId("live-setup-skip-all"),"Skip all tutorials from the live coach",mobile);
+      assert.ok(close.height >= 44 && close.width >= 44,"Coach close remains a full-size accessible target");
+      const after=await savedSnapshot(value=>value?.settings?.guidedSetupStep === "complete" && value.settings.tutorialPromptsDisabled,"Live global skip persisted");
+      assert.deepEqual(after.metrics.map(metric=>metric.id),["steps","water","todo_completion"]);
+      assert.deepEqual(after.entries,[]); assert.deepEqual(after.todos,[]);
+      await browser.send("Page.reload");
+      await until(textPresent("Your day"),"Today after skip-all refresh");
+      assert.equal(await browser.evaluate("Boolean("+byTestId("live-setup-coach")+")"),false);
+      assert.equal((await snapshot()).settings.tutorialPromptsDisabled,true);
+      await shot("empty-guide-close-skips-all",width);
+      return {fixture:"actual clean-account local snapshot",defaultTrackers:after.metrics.map(metric=>metric.id),noSampleHistory:true,globalOptOut:true,refreshPreserved:true,close};
     });
     await run("classic-five-stages",async()=>{
-      await navigate("/onboarding","Build a Today page that works for you");
+      await navigate("/onboarding","Build a Today page that works for you","clean-account");
       await tap(byText("Classic setup"),"Classic setup",mobile);
       await until(textPresent("Step 1 of 5"),"Classic stage one");
       await enterName();
@@ -269,11 +351,31 @@ try {
       await tap(byText("Start using HabHub"),"Finish classic setup",mobile);
       await until("location.pathname !== '/onboarding'","Classic enters app");
       assert.equal(await browser.evaluate(textPresent("Start with the navigation bar")),false,"Classic finish should not force basic guide");
+      const after=await savedSnapshot(value=>value?.settings?.onboardingComplete,"Classic clean account persisted");
+      assert.deepEqual(after.entries,[]); assert.deepEqual(after.todos,[]);
       await shot("classic-finished",width);
-      return {stages:5,route:await browser.evaluate("location.pathname")};
+      return {fixture:"actual clean-account local snapshot",stages:5,route:await browser.evaluate("location.pathname"),noSampleHistory:true};
+    });
+    await run("empty-guide-global-skip-from-quick-guide",async()=>{
+      await navigate("/onboarding","Build a Today page that works for you","clean-account");
+      await tap(byText("Guided setup"),"Guided setup",mobile); await enterName();
+      await tap(byText("Make Today mine"),"Begin empty live guide",mobile);
+      await until(textPresent("Add your first tracker"),"Empty Today guide");
+      await savedSnapshot(value=>value?.settings?.onboardingComplete && value.metrics.length === 0,"Empty live setup durable");
+      await browser.send("Page.navigate",{url:baseUrl+"/quick-guide"});
+      await until(textPresent("Automatic tutorial prompts"),"Quick Guide preference");
+      await tap(byTestId("tutorial-prompts-toggle"),"Turn off every automatic tutorial from Quick Guide",mobile);
+      const after=await savedSnapshot(value=>value?.settings?.guidedSetupStep === "complete" && value.settings.tutorialPromptsDisabled,"Quick Guide global skip persisted");
+      assert.deepEqual(after.metrics.map(metric=>metric.id),["steps","water","todo_completion"]);
+      assert.deepEqual(after.entries,[]); assert.deepEqual(after.todos,[]);
+      await browser.send("Page.reload");
+      await until(textPresent("Automatic tutorial prompts"),"Quick Guide refresh");
+      assert.equal((await snapshot()).settings.tutorialPromptsDisabled,true);
+      await shot("quick-guide-empty-account-skip",width);
+      return {fixture:"actual clean-account local snapshot",defaultTrackers:after.metrics.map(metric=>metric.id),noSampleHistory:true,globalOptOut:true,refreshPreserved:true};
     });
     await run("skip-all-tutorials-persists",async()=>{
-      await navigate("/onboarding","Build a Today page that works for you");
+      await navigate("/onboarding","Build a Today page that works for you","clean-account");
       await tap(byText("Guided setup"),"Guided setup",mobile);
       await until(textPresent("What matters to you?"),"Guided start");
       await enterName();
@@ -281,9 +383,11 @@ try {
       await until(byLabel("Skip all tutorials")+".getAttribute('aria-checked') === 'true'","Skip-all checked state");
       await tap(byText("Make Today mine"),"Enter without tips",mobile);
       await until("location.pathname === '/'", "Skip-all enters Today");
-      await delay(700);
+      const skipped = await savedSnapshot(value=>value?.settings?.onboardingComplete && value?.settings?.tutorialPromptsDisabled,"Skipped clean setup persisted");
       assert.equal(await browser.evaluate("Boolean("+byTestId("live-setup-coach")+")"),false);
-      assert.equal((await snapshot()).settings.tutorialPromptsDisabled,true);
+      assert.equal(skipped.settings.tutorialPromptsDisabled,true);
+      assert.deepEqual(skipped.metrics.map(metric=>metric.id),["steps","water","todo_completion"]);
+      assert.deepEqual(skipped.entries,[]); assert.deepEqual(skipped.todos,[]);
       await browser.send("Page.reload");
       await until(textPresent("Your day"),"Reload Today without tutorials");
       assert.equal((await snapshot()).settings.tutorialPromptsDisabled,true);
@@ -298,7 +402,7 @@ try {
       await tap(byTestId("quick-guide-full-course"),"Expand complete guide",mobile);
       await tap(byLabel("Watch Complete HabHub guide"),"Manually open a guide despite automatic opt-out",mobile);
       await until(textPresent("Start with the daily summary"),"Manual guide still opens");
-      return {globalOptOut:true,persistedAfterRefresh:true,newPagePromptSuppressed:true,manualGuideAvailable:true};
+      return {fixture:"actual clean-account local snapshot",defaultTrackers:skipped.metrics.map(metric=>metric.id),noSampleHistory:true,globalOptOut:true,persistedAfterRefresh:true,newPagePromptSuppressed:true,manualGuideAvailable:true};
     });
   }
 } finally {
@@ -308,7 +412,7 @@ try {
   const resolved=path.resolve(profile);
   assert.ok(resolved.startsWith(path.resolve(profiles)+path.sep),"Profile cleanup escaped dedicated test folder");
   fs.rmSync(resolved,{recursive:true,force:true,maxRetries:5,retryDelay:300});
-  fs.writeFileSync(path.join(output,"report.json"),JSON.stringify({baseUrl,testedAt:new Date().toISOString(),results,runtimeErrors:[...new Set(runtimeErrors)]},null,2));
+  fs.writeFileSync(path.join(output,"report.json"),JSON.stringify({baseUrl,testedAt:new Date().toISOString(),fixtureScope:"Local UI with explicit-demo auth; clean-account cases use the exact createCleanAccountState snapshot before onboarding. No remote authentication, cloud write, or native permission claim.",results,screenshots,runtimeErrors:[...new Set(runtimeErrors)]},null,2));
 }
 if(results.some(result=>!result.passed)||runtimeErrors.length) process.exitCode=1;
 console.log("Onboarding report: "+path.join(output,"report.json")+"; "+results.filter(result=>result.passed).length+"/"+results.length+" checks, "+runtimeErrors.length+" runtime errors.");

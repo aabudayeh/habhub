@@ -766,6 +766,10 @@ export type GroupNote = {
   creatorId: string;
   title?: string;
   body: string;
+  imageStoragePath?: string;
+  imageOwnerId?: string;
+  /** Transient signed/local preview URL, never persisted in the note row. */
+  imageUri?: string;
   revision: number;
   createdAt: string;
   updatedAt: string;
@@ -1323,6 +1327,8 @@ export type UserSettings = {
   tutorialPromptsDisabled?: boolean;
   /** Nonblocking setup on the person's real Today page; never a demo session. */
   guidedSetupStep?: "trackers" | "layout" | "first-log" | "explore" | "complete";
+  /** Only a fresh empty live guide may install ordinary defaults when skipped. */
+  guidedSetupStartedEmpty?: boolean;
   advancedTutorialComplete: boolean;
   /** Active basic-guide replay selected from Quick Guide. */
   tutorialGuideId?: string;

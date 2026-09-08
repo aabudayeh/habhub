@@ -1,10 +1,11 @@
 {
-  "version": 8,
+  "version": 9,
   "fixture": {
-    "source": "Fresh credential-free synthetic demo state from the release-candidate web app",
+    "source": "Fresh credential-free synthetic demo state, with the real clean-account boundary as a local fixture for live setup",
     "captureScript": "scripts/capture-marketing-web.mjs",
     "interactiveCaptureScript": "scripts/capture-interactive-guide-web.mjs",
-    "captureDate": "2026-09-08",
+    "captureDate": "2026-09-09",
+    "captureTimeZone": "Europe/Berlin",
     "viewport": "420x911",
     "deviceScaleFactor": 2,
     "sourcePixelSize": "840x1822",
@@ -79,7 +80,7 @@
     { "id": "display", "source": "23-display-settings.jpg", "route": "/display-settings", "covers": ["display settings", "page order", "navigation"] },
     { "id": "profile-behavior", "source": "24-profile-behavior.jpg", "route": "/profile", "covers": ["food-goal behavior", "unrecorded-step estimate"] },
     { "id": "quick-guides", "source": "12-quick-guide.jpg", "route": "/quick-guide", "covers": ["page tutorials", "watch mode", "practice mode"] },
-    { "id": "menu", "source": "25-menu.jpg", "route": "/menu", "covers": ["optional pages", "settings", "legal and support"] }
+    { "id": "menu", "source": "25-menu.jpg", "route": "/menu", "covers": ["profile", "settings", "legal and support"] }
   ],
   "featureGraphic": {
     "platform": "google",

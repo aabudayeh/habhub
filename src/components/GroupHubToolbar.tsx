@@ -4,7 +4,7 @@ import React, { useState } from "react";
 import { Modal, Pressable, StyleSheet, View } from "react-native";
 
 import { AppText as Text } from "@/src/components/AppText";
-import { IconButton } from "@/src/components/ui";
+import { HeaderIconButton } from "@/src/components/ui";
 import { useAppColors, useGroupAccent } from "@/src/theme";
 import type { GroupHubAction } from "@/src/types";
 
@@ -78,7 +78,7 @@ export function GroupHubToolbar({
         const detail = DETAILS[action];
         return (
           <View key={action} style={styles.iconWrap}>
-            <IconButton icon={detail.icon} label={detail.label} onPress={() => go(action)} />
+            <HeaderIconButton icon={detail.icon} label={detail.label} onPress={() => go(action)} />
             {action === "notifications" && notificationBadgeCount > 0 ? (
               <View style={[styles.badge, { backgroundColor: accent }]}>
                 <Text translate={false} style={styles.badgeText}>{Math.min(9, notificationBadgeCount)}</Text>
@@ -88,7 +88,7 @@ export function GroupHubToolbar({
         );
       })}
       {overflow.length ? (
-        <IconButton
+        <HeaderIconButton
           icon="grid-outline"
           label="More group pages"
           onPress={() => setOpen(true)}

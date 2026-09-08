@@ -1242,10 +1242,13 @@ function LogScreen() {
       contentContainerStyle={{ paddingBottom: 14 }}
     >
       <PageHeader
-        title={selected ? "Log" : "What are you adding?"}
+        title="Log"
         tutorialId="log-header"
         action={
           <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Open timer"
+            hitSlop={2}
             onPress={() =>
               openLogChild(() => router.navigate("/timer" as never))
             }
@@ -2412,9 +2415,9 @@ const styles = StyleSheet.create({
   unsavedPromptPrimaryText: { color: palette.white, fontSize: 11, fontWeight: "900" },
   unsavedPromptPressed: { opacity: 0.78 },
   timerShortcut: {
-    minHeight: 34,
+    minHeight: 40,
     borderWidth: 1,
-    borderRadius: 11,
+    borderRadius: 13,
     paddingHorizontal: 9,
     flexDirection: "row",
     alignItems: "center",

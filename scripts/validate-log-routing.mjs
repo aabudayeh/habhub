@@ -167,7 +167,8 @@ const logDraftGuard = fs.readFileSync(
 );
 const detail = fs.readFileSync("app/metric-detail.tsx", "utf8");
 const metricSelector = fs.readFileSync("src/components/MetricSelector.tsx", "utf8");
-assert.match(log, /title=\{selected \? "Log" : "What are you adding\?"\}/);
+assert.match(log, /<PageHeader\s+title="Log"/);
+assert.match(log, /title=\{selected \? "Change tracker" : "What are you adding\?"\}/);
 assert.match(
   log,
   /emptyLabel="Choose a tracker"[\s\S]*?openWhenEmpty/,

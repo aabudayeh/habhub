@@ -6,6 +6,8 @@ import { Platform, Pressable, StyleSheet, View } from "react-native";
 import { useAuth } from "@/src/auth/AuthProvider";
 import { AppText as Text } from "@/src/components/AppText";
 import { googleHealthNormalUseDisclosureKey } from "@/src/domain/googleHealthSetup";
+import { activeLiveSetupStep } from "@/src/domain/tutorialUsability";
+import { useApp } from "@/src/state/AppProvider";
 import { useTranslation } from "@/src/i18n";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 
@@ -16,6 +18,8 @@ type DisclosureMarker = {
 
 export function GoogleHealthTodayDisclosure({ hidden = false }: { hidden?: boolean }) {
   const auth = useAuth();
+  const { state } = useApp();
+  hidden = hidden || !state.settings.onboardingComplete || Boolean(activeLiveSetupStep(state.settings));
   const colors = useAppColors();
   const accent = useGroupAccent();
   const t = useTranslation();

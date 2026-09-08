@@ -29,18 +29,23 @@ release candidate and checked against the final signed binaries.
 
 ## Capture fixture
 
-Use the deterministic tutorial sandbox as the source dataset, but hide tutorial
-spotlights, controls, and debug labels during marketing capture. Freeze the
-clock and locale, reset the fixture before every run, disable network-dependent
-content, and use only synthetic names/photos. Do not capture an aged local demo
-or a real account.
+Use a fresh synthetic demo for stills and the isolated tutorial sandbox for the
+continuous guide. Hide tutorial spotlights and debug labels except in the
+deliberate Quick Guide and live setup scenes. Reset the fixture before every
+run, use the declared locale, and record the actual local capture date/time
+zone. Keep dates internally consistent; start a fresh run if its fixture date
+changes. Do not capture an aged local demo or a real account.
+
+The live setup scene uses the actual clean-account boundary as a local fixture:
+no sample personal history, fabricated auth token or remote signup. Real name,
+interest and Guided setup controls then open the first inline Today tip.
 
 Recommended first capture configuration:
 
 - locale: `en-US`
 - theme: dark navy
 - phone: 6.9-inch iPhone class and 1080 × 1920 Android portrait
-- date/time: fixed and internally consistent across every screen
+- date/time: declared capture date/time zone, internally consistent fixtures
 - motion: reduced for screenshots; normal, deliberate pacing for video
 - status bar: sanitized carrier/time/battery, with no personal notifications
 
@@ -49,18 +54,31 @@ lives in `video/storyboard.md`, and `video/capture-runbook.md` separates
 repeatable web capture from signed-device evidence. The source captures in
 `source-captures/iphone-420x911/` are 840 × 1822 JPEGs: the directory names the
 420 × 911 CSS viewport, captured at 2× density for crisp store artwork. They
-come from the real running web app with the synthetic Ahmad demo profile and
+come from the real running web app with the synthetic Ahmad demo profile
+(or the clean local onboarding fixture for live setup) and
 are tracked so the store
 compositions can be reproduced and audited without inventing feature UI.
 
 ## Generated deliverables
 
-From the repository root on Windows:
+After final runtime checks, export from the repository root on Windows:
+
+```powershell
+node scripts/marketing-runtime-provenance.mjs --export-web
+```
+
+Keep that `dist` served in a separate terminal:
+
+```powershell
+$env:PORT = '8091'
+pnpm.cmd preview:web
+```
+
+Then capture and validate without changing app source or exporting again:
 
 ```powershell
 $env:HABHUB_CAPTURE_URL = 'http://127.0.0.1:8091'
-# Keep preview:web serving this workspace's dist on port 8091.
-node scripts/marketing-runtime-provenance.mjs --export-web
+pnpm.cmd capture:interactive-guide:web -- --probe-today
 pnpm.cmd capture:marketing:web
 # Inspect store/exports/capture-candidates/web-420x911, then:
 pnpm.cmd capture:marketing:web -- --promote-reviewed
@@ -137,7 +155,8 @@ native behavior, notification delivery, background execution, or claim
 substantiation. Re-run it after any capture, caption, audio, timing, or release
 commit changes.
 
-The full 98-step Watch course uses readable pacing; the verified master is 19 minutes 24 seconds.
+The full 98-step Watch course uses readable pacing. Its current duration and
+19-action coverage are recorded in the successful capture proof beside the MP4.
 Its 30-minute recording watchdog is deliberately bounded: enough room for normal
 route transitions, but not permission to record indefinitely if a step stalls.
 This long support walkthrough is separate from the 30-second Apple preview.

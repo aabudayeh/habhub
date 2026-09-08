@@ -39,6 +39,9 @@ const requestsByScope = {
 const scheduleRequestControllers = new Map<string, AbortController>();
 const scheduleWriteVersions = new Map<string, number>();
 const schedulePendingWrites = new Set<string>();
+const noteWriteVersions = new Map<string, number>();
+const notePendingWrites = new Set<string>();
+const noteRequestControllers = new Map<string, AbortController>();
 
 function accountGroupScopeKey(currentUserId: string, groupId: string) {
   return `${currentUserId}\u0000${groupId}`;
@@ -221,8 +224,13 @@ function useGroupHubRows<K extends HubKind>(
         (row) =>
           row.creatorId === state.currentUserId ||
           (safety.hydrated && !safety.blockedUserIds.has(row.creatorId)),
-      ),
-    [groupRows, safety.blockedUserIds, safety.hydrated, state.currentUserId],
+      ).map((row) => {
+        if (kind !== "notes") return row;
+        const note = row as GroupNote;
+        return note.imageOwnerId && note.imageOwnerId !== state.currentUserId && (!safety.hydrated || safety.blockedUserIds.has(note.imageOwnerId))
+          ? { ...row, imageUri: undefined } : row;
+      }),
+    [groupRows, kind, safety.blockedUserIds, safety.hydrated, state.currentUserId],
   );
   const scopeRef = useRef(scopeKey);
   scopeRef.current = scopeKey;
@@ -230,6 +238,7 @@ function useGroupHubRows<K extends HubKind>(
 
   const refresh = useCallback(() => {
     if (kind === "schedule" && schedulePendingWrites.has(scopeKey)) return Promise.resolve();
+    if (kind === "notes" && notePendingWrites.has(scopeKey)) return Promise.resolve();
     if (!cloudEnabled) {
       setRows(
         localSeed(kind, scopeKey, groupId, state.currentUserId, memberIds),
@@ -248,12 +257,14 @@ function useGroupHubRows<K extends HubKind>(
         () => undefined,
       );
     setLoading(true);
-    const version = scheduleWriteVersions.get(scopeKey) ?? 0;
-    const controller = kind === "schedule" ? new AbortController() : undefined;
-    if (controller) scheduleRequestControllers.set(scopeKey, controller);
+    const versions = kind === "schedule" ? scheduleWriteVersions : noteWriteVersions;
+    const controllers = kind === "schedule" ? scheduleRequestControllers : noteRequestControllers;
+    const version = versions.get(scopeKey) ?? 0;
+    const controller = new AbortController();
+    controllers.set(scopeKey, controller);
     const request = (
       kind === "notes"
-        ? loadGroupNotes(groupId)
+        ? loadGroupNotes(groupId, controller.signal)
         : loadGroupSchedule(groupId, range, controller?.signal)
     ) as Promise<HubRows[K][]>;
     requestsByScope[kind].set(scopeKey, request as never);
@@ -261,8 +272,7 @@ function useGroupHubRows<K extends HubKind>(
       .then((next) => {
         if (
           controller?.signal.aborted ||
-          (kind === "schedule" &&
-            version !== (scheduleWriteVersions.get(scopeKey) ?? 0))
+          version !== (versions.get(scopeKey) ?? 0)
         )
           return;
         emit(kind, scopeKey, next);
@@ -281,14 +291,12 @@ function useGroupHubRows<K extends HubKind>(
       .finally(() => {
         if (requestsByScope[kind].get(scopeKey) === request)
           requestsByScope[kind].delete(scopeKey);
-        if (scheduleRequestControllers.get(scopeKey) === controller)
-          scheduleRequestControllers.delete(scopeKey);
+        if (controllers.get(scopeKey) === controller) controllers.delete(scopeKey);
         if (!controller?.signal.aborted && scopeRef.current === scopeKey)
           setLoading(false);
         if (
           !controller?.signal.aborted &&
-          kind === "schedule" &&
-          version !== (scheduleWriteVersions.get(scopeKey) ?? 0) &&
+          version !== (versions.get(scopeKey) ?? 0) &&
           scopeRef.current === scopeKey
         )
           void refreshRef.current();
@@ -322,6 +330,13 @@ function useGroupHubRows<K extends HubKind>(
       listeners.delete(listener);
       if (!listeners.size) {
         map.delete(scopeKey);
+        if (kind === "notes") {
+          noteRequestControllers.get(scopeKey)?.abort();
+          noteRequestControllers.delete(scopeKey);
+          requestsByScope.notes.delete(scopeKey);
+          if (cloudEnabled) rowsByScope.notes.delete(scopeKey);
+          noteWriteVersions.delete(scopeKey);
+        }
         if (kind === "schedule") {
           scheduleRequestControllers.get(scopeKey)?.abort();
           scheduleRequestControllers.delete(scopeKey);
@@ -348,6 +363,7 @@ function useGroupHubRows<K extends HubKind>(
             scopeKey,
             (scheduleWriteVersions.get(scopeKey) ?? 0) + 1,
           );
+        else noteWriteVersions.set(scopeKey, (noteWriteVersions.get(scopeKey) ?? 0) + 1);
         if (timer) return;
         timer = setTimeout(() => {
           timer = undefined;
@@ -368,6 +384,7 @@ function useGroupHubRows<K extends HubKind>(
           scopeKey,
           (scheduleWriteVersions.get(scopeKey) ?? 0) + 1,
         );
+      else noteWriteVersions.set(scopeKey, (noteWriteVersions.get(scopeKey) ?? 0) + 1);
       emit(kind, scopeKey, next);
     },
     [kind, scopeKey],
@@ -384,6 +401,18 @@ function useGroupHubRows<K extends HubKind>(
     schedulePendingWrites.delete(scopeKey);
     if (scopeRef.current === scopeKey && listenersByScope.schedule.get(scopeKey)?.size) void refreshRef.current();
   }, [scopeKey]);
+  const beginNoteWrite = useCallback(() => {
+    if (notePendingWrites.has(scopeKey)) throw new Error("Wait for the current note update to finish.");
+    notePendingWrites.add(scopeKey);
+    noteRequestControllers.get(scopeKey)?.abort();
+    noteRequestControllers.delete(scopeKey);
+    requestsByScope.notes.delete(scopeKey);
+    setLoading(false);
+  }, [scopeKey]);
+  const finishNoteWrite = useCallback(() => {
+    notePendingWrites.delete(scopeKey);
+    if (scopeRef.current === scopeKey && listenersByScope.notes.get(scopeKey)?.size) void refreshRef.current();
+  }, [scopeKey]);
   return {
     rows: scopedRows,
     loading:
@@ -396,6 +425,8 @@ function useGroupHubRows<K extends HubKind>(
     cloudEnabled,
     beginScheduleWrite,
     finishScheduleWrite,
+    beginNoteWrite,
+    finishNoteWrite,
   };
 }
 
@@ -404,6 +435,7 @@ export function useGroupNotes(groupId: string) {
   const model = useGroupHubRows("notes", groupId);
   const save = useCallback(
     async (input: SaveGroupNoteInput) => {
+      model.beginNoteWrite();
       const before = model.cachedRows;
       const now = new Date().toISOString();
       const prior = input.id
@@ -415,6 +447,9 @@ export function useGroupNotes(groupId: string) {
         creatorId: prior?.creatorId ?? state.currentUserId,
         title: input.title?.trim() || undefined,
         body: input.body.trim(),
+        imageStoragePath: input.imageStoragePath,
+        imageUri: input.imagePreviewUri,
+        imageOwnerId: input.imageUploadUri ? state.currentUserId : prior?.imageOwnerId,
         revision: (prior?.revision ?? 0) + 1,
         createdAt: prior?.createdAt ?? now,
         updatedAt: now,
@@ -423,7 +458,7 @@ export function useGroupNotes(groupId: string) {
         optimistic,
         ...before.filter((item) => item.id !== optimistic.id),
       ]);
-      if (!model.cloudEnabled) return optimistic;
+      if (!model.cloudEnabled) { model.finishNoteWrite(); return optimistic; }
       try {
         const saved = await saveGroupNote(input);
         model.replace([
@@ -435,24 +470,29 @@ export function useGroupNotes(groupId: string) {
         model.replace(before);
         void model.refresh();
         throw reason;
+      } finally {
+        model.finishNoteWrite();
       }
     },
     [groupId, model, state.currentUserId],
   );
   const remove = useCallback(
     async (note: GroupNote) => {
+      model.beginNoteWrite();
       const before = model.cachedRows;
       model.replace(before.filter((item) => item.id !== note.id));
-      if (!model.cloudEnabled) return;
+      if (!model.cloudEnabled) { model.finishNoteWrite(); return; }
       try {
-        await deleteGroupNote(note.id, note.revision);
+        await deleteGroupNote(note.id, note.revision, groupId);
       } catch (reason) {
         model.replace(before);
         void model.refresh();
         throw reason;
+      } finally {
+        model.finishNoteWrite();
       }
     },
-    [model],
+    [groupId, model],
   );
   return {
     rows: model.rows,

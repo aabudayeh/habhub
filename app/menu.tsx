@@ -50,10 +50,10 @@ const items = [
     path: "/groups" as const,
   },
   {
-    label: "Legal & support",
-    detail: "Policies, community safety, account help and support",
-    icon: "shield-checkmark-outline" as const,
-    path: "/legal-support" as const,
+    label: "Customize trackers",
+    detail: "Trackers, calculations, layouts and scoring",
+    icon: "options-outline" as const,
+    path: "/customize" as const,
   },
   {
     label: "Quick guide",
@@ -62,10 +62,10 @@ const items = [
     path: "/quick-guide" as const,
   },
   {
-    label: "Customize trackers",
-    detail: "Trackers, calculations, layouts and scoring",
-    icon: "options-outline" as const,
-    path: "/customize" as const,
+    label: "Legal & support",
+    detail: "Policies, community safety, account help and support",
+    icon: "shield-checkmark-outline" as const,
+    path: "/legal-support" as const,
   },
 ];
 

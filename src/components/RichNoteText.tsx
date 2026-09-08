@@ -3,6 +3,7 @@ import React from "react";
 import { Linking, Pressable, StyleSheet, TextStyle, View } from "react-native";
 
 import { AppText as Text } from "@/src/components/AppText";
+import { safeRichNoteLink } from "@/src/domain/richNoteValue";
 import { useAppColors, useGroupAccent } from "@/src/theme";
 
 export function RichNoteText({
@@ -169,14 +170,14 @@ function renderInlineParts(value: string): React.ReactNode[] {
         </Text>
       );
     const link = part.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
-    if (link)
+    if (link && safeRichNoteLink(link[2]))
       return (
         <Text
           key={index}
           translate={false}
           selectable
           accessibilityRole="link"
-          onPress={() => void Linking.openURL(link[2])}
+          onPress={() => void Linking.openURL(safeRichNoteLink(link[2])!).catch(() => undefined)}
           style={styles.link}
         >
           {link[1]}

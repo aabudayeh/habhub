@@ -33,7 +33,7 @@ export const shadow = {
  * scale from page to page.
  */
 export const typography = {
-  pageTitle: { fontSize: 23, lineHeight: 29, fontWeight: "800" as const },
+  pageTitle: { fontSize: 21, lineHeight: 26, fontWeight: "700" as const },
   sectionTitle: { fontSize: 16, lineHeight: 22, fontWeight: "700" as const },
   cardTitle: { fontSize: 14, lineHeight: 19, fontWeight: "700" as const },
   body: { fontSize: 13, lineHeight: 20, fontWeight: "400" as const },

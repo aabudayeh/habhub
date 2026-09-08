@@ -1,18 +1,22 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Modal, Pressable, StyleSheet, View } from "react-native";
+import { ActivityIndicator, Pressable, StyleSheet, View } from "react-native";
+import { Image } from "expo-image";
 
 import { useGroupNotes } from "@/src/cloud/useGroupHubContent";
 import { useCloudSyncActions } from "@/src/cloud/CloudSyncProvider";
 import type { GroupSocialComment } from "@/src/cloud/groupSocial";
 import { useGroupSocialEngagement } from "@/src/cloud/useGroupSocialEngagement";
-import { AppText as Text, AppTextInput as TextInput } from "@/src/components/AppText";
+import { AppText as Text } from "@/src/components/AppText";
+import { GroupNoteEditorSheet } from "@/src/components/GroupNoteEditorSheet";
+import { RichNoteText } from "@/src/components/RichNoteText";
 import { GroupSocialActionBar } from "@/src/components/GroupSocialActionBar";
 import { SafetyReportSheet } from "@/src/components/SafetyReportSheet";
-import { Card, IconButton, PageHeader, Screen } from "@/src/components/ui";
+import { Card, HeaderIconButton, IconButton, PageHeader, Screen } from "@/src/components/ui";
 import { relativeTime } from "@/src/domain/date";
 import { memberDisplayName } from "@/src/domain/members";
+import { richNotePlainText } from "@/src/domain/richNoteValue";
 import { LocalizedAlert as Alert } from "@/src/i18n";
 import { shareText } from "@/src/lib/shareText";
 import { useUserSafety } from "@/src/safety/userSafety";
@@ -48,9 +52,7 @@ export default function GroupNotesScreen() {
   );
   const social = useGroupSocialEngagement(state.group.id, targets, "group_notes");
   const [editing, setEditing] = useState<GroupNote | null>();
-  const [title, setTitle] = useState("");
-  const [body, setBody] = useState("");
-  const [saving, setSaving] = useState(false);
+  const editingGroupId = useRef(state.group.id);
   const [commentReport, setCommentReport] = useState<{
     comment: GroupSocialComment;
     displayName: string;
@@ -120,28 +122,8 @@ export default function GroupNotesScreen() {
   }
 
   function openEditor(note?: GroupNote) {
+    editingGroupId.current = state.group.id;
     setEditing(note ?? null);
-    setTitle(note?.title ?? "");
-    setBody(note?.body ?? "");
-  }
-
-  async function save() {
-    if (!body.trim()) return Alert.alert("Write a note", "A group note needs some text.");
-    setSaving(true);
-    try {
-      await notes.save({
-        id: editing?.id,
-        groupId: state.group.id,
-        title,
-        body,
-        expectedRevision: editing?.revision,
-      });
-      setEditing(undefined);
-    } catch (reason) {
-      Alert.alert("Note not saved", reason instanceof Error ? reason.message : "Refresh and try again.");
-    } finally {
-      setSaving(false);
-    }
   }
 
   function confirmDelete(note: GroupNote) {
@@ -159,7 +141,7 @@ export default function GroupNotesScreen() {
         title="Group Notes"
         subtitle="Shared ideas with one linked conversation."
         showMenu={false}
-        action={<View style={styles.headerActions}><IconButton icon="add" label="Add group note" onPress={() => openEditor()} /><IconButton icon="close" label="Close" onPress={() => router.back()} /></View>}
+        action={<View style={styles.headerActions}><HeaderIconButton icon="add" label="Add group note" onPress={() => openEditor()} /><HeaderIconButton icon="close" label="Close" onPress={() => router.back()} /></View>}
       />
       {notes.error || social.error ? (
         <Pressable onPress={() => void Promise.all([notes.refresh(), social.refresh()])} style={[styles.notice, { borderColor: colors.border }]}>
@@ -190,7 +172,8 @@ export default function GroupNotesScreen() {
                 </View>
                 {editable ? <View style={styles.noteActions}><IconButton icon="create-outline" label="Edit note" onPress={() => openEditor(note)} /><IconButton icon="trash-outline" label="Delete note" onPress={() => confirmDelete(note)} /></View> : null}
               </View>
-              <Text translate={false} selectable style={[styles.body, { color: colors.muted }]}>{note.body}</Text>
+              <View style={styles.noteContent}><RichNoteText body={note.body} /></View>
+              {note.imageUri ? <Image source={note.imageUri} contentFit="contain" style={[styles.noteImage, { backgroundColor: colors.canvas }]} /> : null}
               <GroupSocialActionBar
                 currentUserId={state.currentUserId}
                 members={state.group.members}
@@ -223,7 +206,7 @@ export default function GroupNotesScreen() {
                       : "Member",
                   });
                 }}
-                onShare={() => void shareText(`${note.title || "Group note"}\n\n${note.body}`)}
+                onShare={() => void shareText(`${note.title || "Group note"}\n\n${richNotePlainText(note.body)}`)}
               />
             </Card>
           );
@@ -236,16 +219,7 @@ export default function GroupNotesScreen() {
           </Pressable>
         ) : null}
       </View>
-      <Modal transparent animationType="fade" visible={editing !== undefined} onRequestClose={() => !saving && setEditing(undefined)}>
-        <View style={styles.backdrop}>
-          <View style={[styles.sheet, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <View style={styles.sheetHeader}><Text style={[styles.sheetTitle, { color: colors.ink }]}>{editing ? "Edit group note" : "New group note"}</Text><IconButton icon="close" label="Close editor" onPress={() => setEditing(undefined)} /></View>
-            <TextInput value={title} onChangeText={setTitle} maxLength={160} placeholder="Title (optional)" placeholderTextColor={colors.faint} style={[styles.input, { color: colors.ink, borderColor: colors.border, backgroundColor: colors.canvas }]} />
-            <TextInput value={body} onChangeText={setBody} maxLength={8000} multiline autoFocus placeholder="Write something useful for the group…" placeholderTextColor={colors.faint} style={[styles.input, styles.bodyInput, { color: colors.ink, borderColor: colors.border, backgroundColor: colors.canvas }]} />
-            <View style={styles.sheetButtons}><Pressable disabled={saving} onPress={() => setEditing(undefined)} style={[styles.button, { borderColor: colors.border }]}><Text style={[styles.buttonText, { color: colors.muted }]}>Cancel</Text></Pressable><Pressable disabled={saving} onPress={() => void save()} style={[styles.button, { backgroundColor: accent }]}><Text style={[styles.buttonText, { color: "#FFFFFF" }]}>{saving ? "Saving…" : "Save"}</Text></Pressable></View>
-          </View>
-        </View>
-      </Modal>
+      {editing !== undefined && editingGroupId.current === state.group.id ? <GroupNoteEditorSheet key={`${state.group.id}:${editing?.id ?? "new"}`} note={editing} groupId={state.group.id} tutorialSandbox={tutorialSandbox} onClose={() => setEditing(undefined)} onSave={notes.save} /> : null}
       <SafetyReportSheet
         visible={Boolean(commentReport)}
         title="Report comment"
@@ -294,14 +268,15 @@ export default function GroupNotesScreen() {
 
 const styles = StyleSheet.create({
   headerActions: { flexDirection: "row", alignItems: "center", gap: 4 },
-  list: { gap: 9 },
-  card: { padding: 12 },
+  list: { gap: 12 },
+  card: { padding: 14 },
   noteHeader: { flexDirection: "row", alignItems: "flex-start", gap: 8 },
   copy: { flex: 1, minWidth: 0 },
-  title: { fontSize: 13, lineHeight: 17, fontWeight: "900" },
-  meta: { fontSize: 8, lineHeight: 11, fontWeight: "700", marginTop: 2 },
-  focusedLabel: { fontSize: 8, lineHeight: 11, fontWeight: "900", marginTop: 3 },
-  body: { fontSize: 10, lineHeight: 16, marginTop: 10 },
+  title: { fontSize: 13, lineHeight: 18, fontWeight: "700" },
+  meta: { fontSize: 11, lineHeight: 16, fontWeight: "600", marginTop: 2 },
+  focusedLabel: { fontSize: 11, lineHeight: 16, fontWeight: "700", marginTop: 3 },
+  noteContent: { marginTop: 10 },
+  noteImage: { width: "100%", height: 240, borderRadius: 12, marginTop: 10 },
   noteActions: { flexDirection: "row", alignItems: "center" },
   notice: { minHeight: 44, borderWidth: 1, borderRadius: 14, paddingHorizontal: 11, marginBottom: 9, flexDirection: "row", alignItems: "center", gap: 7 },
   noticeText: { flex: 1, fontSize: 8, fontWeight: "700" },

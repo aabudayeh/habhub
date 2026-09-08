@@ -15,7 +15,7 @@ import {
 import { GestureDetector } from "react-native-gesture-handler";
 import Reanimated from "react-native-reanimated";
 import { AppText as Text } from "@/src/components/AppText";
-import { useLocale, useTranslation } from "@/src/i18n";
+import { useLocale } from "@/src/i18n";
 import { setCloudSyncPaused } from "@/src/cloud/syncGate";
 import { useFocusedCloudSyncPause } from "@/src/cloud/useFocusedCloudSyncPause";
 import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
@@ -38,6 +38,7 @@ import {
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import {
   Card,
+  HeaderIconButton,
   PageHeader,
   Screen,
   SectionHeader,
@@ -181,7 +182,6 @@ function holdProgressCloudSync(tutorialSandbox: boolean) {
 function Insights() {
   const { state, updateSettings } = useApp();
   const locale = useLocale();
-  const t = useTranslation();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const tutorial = useTutorial();
@@ -661,17 +661,16 @@ function Insights() {
         action={
           editing ? (
             <View style={styles.headerEditActions}>
-            <Pressable
+            <HeaderIconButton
+              icon="settings-outline"
+              label="Customize Progress"
               onPress={() =>
                 router.navigate({
                   pathname: "/customize",
                   params: { tab: "insights" },
                 } as never)
               }
-              style={[styles.headerEditIcon, { borderColor: colors.border }]}
-            >
-              <Ionicons name="settings-outline" size={17} color={accent} />
-            </Pressable>
+            />
             <Pressable
               onPress={finishEditing}
               style={[styles.done, { backgroundColor: accent }]}
@@ -681,22 +680,18 @@ function Insights() {
             </View>
           ) : (
             <View style={styles.headerEditActions}>
-              <Pressable
-                accessibilityLabel={t("Open recap")}
+              <HeaderIconButton
+                icon="sparkles-outline"
+                label="Open recap"
                 onPress={() =>
                   router.navigate("/recap?scope=personal" as never)
                 }
-                style={[styles.headerEditIcon, { borderColor: colors.border }]}
-              >
-                <Ionicons name="sparkles-outline" size={17} color={accent} />
-              </Pressable>
-              <Pressable
-                accessibilityLabel={t("Open performance")}
+              />
+              <HeaderIconButton
+                icon="speedometer-outline"
+                label="Open performance"
                 onPress={() => router.push("/performance" as never)}
-                style={[styles.headerEditIcon, { borderColor: colors.border }]}
-              >
-                <Ionicons name="speedometer-outline" size={17} color={accent} />
-              </Pressable>
+              />
             </View>
           )
         }
@@ -1206,7 +1201,6 @@ function GoalMapProgress({
   orderedIds: string[];
 }) {
   const locale = useLocale();
-  const t = useTranslation();
   const { updateSettings } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
@@ -1271,31 +1265,23 @@ function GoalMapProgress({
         action={
           editing ? (
             <View style={styles.headerEditActions}>
-              <Pressable
-                accessibilityLabel="Customize Progress"
+              <HeaderIconButton
+                icon="settings-outline"
+                label="Customize Progress"
                 onPress={() =>
                   router.navigate({
                     pathname: "/customize",
                     params: { tab: "insights" },
                   } as never)
                 }
-                style={[styles.headerEditIcon, { borderColor: colors.border }]}
-              >
-                <Ionicons name="settings-outline" size={17} color={accent} />
-              </Pressable>
-              <Pressable
-                accessibilityLabel="Toggle compact grid"
+              />
+              <HeaderIconButton
+                icon={compact ? "grid" : "grid-outline"}
+                label="Toggle compact grid"
                 onPress={() =>
                   updateSettings({ compactProgressGrid: !compact })
                 }
-                style={[styles.headerEditIcon, { borderColor: colors.border }]}
-              >
-                <Ionicons
-                  name={compact ? "grid" : "grid-outline"}
-                  size={17}
-                  color={accent}
-                />
-              </Pressable>
+              />
               <Pressable
                 onPress={onDoneEditing}
                 style={[styles.done, { backgroundColor: accent }]}
@@ -1305,39 +1291,25 @@ function GoalMapProgress({
             </View>
           ) : (
             <View style={styles.headerEditActions}>
-              <Pressable
-                accessibilityLabel="Toggle compact grid"
+              <HeaderIconButton
+                icon={compact ? "grid" : "grid-outline"}
+                label="Toggle compact grid"
                 onPress={() =>
                   updateSettings({ compactProgressGrid: !compact })
                 }
-                style={[styles.headerEditIcon, { borderColor: colors.border }]}
-              >
-                <Ionicons
-                  name={compact ? "grid" : "grid-outline"}
-                  size={17}
-                  color={accent}
-                />
-              </Pressable>
-              <Pressable
-                accessibilityLabel={t("Open recap")}
+              />
+              <HeaderIconButton
+                icon="sparkles-outline"
+                label="Open recap"
                 onPress={() =>
                   router.navigate("/recap?scope=personal" as never)
                 }
-                style={[styles.headerEditIcon, { borderColor: colors.border }]}
-              >
-                <Ionicons name="sparkles-outline" size={17} color={accent} />
-              </Pressable>
-              <Pressable
-                accessibilityLabel={t("Open performance")}
+              />
+              <HeaderIconButton
+                icon="speedometer-outline"
+                label="Open performance"
                 onPress={() => router.push("/performance" as never)}
-                style={[styles.headerEditIcon, { borderColor: colors.border }]}
-              >
-                <Ionicons
-                  name="speedometer-outline"
-                  size={17}
-                  color={accent}
-                />
-              </Pressable>
+              />
             </View>
           )
         }
@@ -2659,14 +2631,6 @@ const styles = StyleSheet.create({
   },
   mapStreakText: { fontSize: 8, fontWeight: "900" },
   headerEditActions: { flexDirection: "row", alignItems: "center", gap: 6 },
-  headerEditIcon: {
-    width: 34,
-    height: 34,
-    borderWidth: 1,
-    borderRadius: 11,
-    alignItems: "center",
-    justifyContent: "center",
-  },
   done: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 12 },
   doneText: { color: palette.white, fontSize: 10, fontWeight: "900" },
   addExisting: { minHeight: 42, borderWidth: 1, borderStyle: "dashed", borderRadius: 14, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 8 },

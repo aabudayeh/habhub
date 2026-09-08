@@ -1,5 +1,17 @@
 export const EMPTY_RICH_NOTE_RUN = "\u200B";
 
+/** Shared notes are untrusted content: never launch script or app-intent URLs. */
+export function safeRichNoteLink(value: string, addScheme = false) {
+  const raw = value.trim();
+  if (!raw || /[\u0000-\u0020\u007f]/.test(raw)) return undefined;
+  const candidate = addScheme && !/^[a-z][a-z0-9+.-]*:/i.test(raw) ? `https://${raw}` : raw;
+  try {
+    const url = new URL(candidate);
+    return (url.protocol === "https:" || url.protocol === "http:") && url.hostname && !url.username && !url.password
+      ? url.href : undefined;
+  } catch { return undefined; }
+}
+
 function normalizedRichNoteLines(value: string) {
   return value
     .replaceAll("\r\n", "\n")
@@ -37,4 +49,9 @@ export function richNoteHasText(value: string) {
   return normalizedRichNoteLines(value).some(
     (rawLine) => visibleRichNoteLine(rawLine).length > 0,
   );
+}
+
+/** Compact external-share/search excerpt, without editor formatting markers. */
+export function richNotePlainText(value: string) {
+  return normalizedRichNoteLines(value).map(visibleRichNoteLine).join("\n").trim();
 }

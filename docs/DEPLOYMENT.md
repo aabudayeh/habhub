@@ -530,11 +530,17 @@ index uploader-scoped reset and profile-deletion cleanup. Its regression proves
 the ordinary PostgreSQL planner uses the index across 2,000 unrelated visuals.
 See `ATTACHMENT_OWNERSHIP_009.md` for migration behavior and regression evidence.
 
-### Avatar and Menu correction 1.0.21
+### Avatar, live setup and shared tools correction 1.0.21
 
-This is a client/media-only correction on top of 1.0.20. No database migration
-or Edge Function redeployment is required. Preserve the existing backend
-migrations and privacy/reset fences. The prior human avatar artwork replaces
+The initial avatar/Menu correction was client-only, but the added Group Notes
+image feature requires migration `202609080011_group_note_images.sql` and the
+authenticated `group-note-media` cleanup Edge Function. Review and test the SQL,
+apply it, deploy that function, and verify migration parity before deploying
+the new client. Preserve the existing backend privacy/reset fences. Private
+image paths stay uploader-bound, signed URLs require group authorization, and
+the old five-argument note save API remains compatible.
+
+The prior human avatar artwork replaces
 the rejected vector outline, and Menu no longer contains Find/Explore controls.
 Follow `docs/AVATAR_RESTORATION_1.0.21.md` and the provenance-checked capture
 workflow in `store/README.md`; the 1.0.20 marketing archive is superseded.

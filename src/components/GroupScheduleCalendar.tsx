@@ -10,7 +10,9 @@ import {
 
 import { AppText as Text } from "@/src/components/AppText";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
-import { Card } from "@/src/components/ui";
+import { InfoPopover } from "@/src/components/InfoPopover";
+import { TutorialModal as Modal } from "@/src/components/TutorialModal";
+import { Card, IconButton } from "@/src/components/ui";
 import { scheduleEventsForHourSlot } from "@/src/domain/calendar";
 import {
   calendarWeekRange,
@@ -32,6 +34,10 @@ export function GroupScheduleCalendar({
   eventsByDate,
   onOpenSlot,
   onCreate,
+  optionsOpen,
+  onCloseOptions,
+  optionsFooter,
+  actions,
 }: {
   anchor: string;
   onSelectDate: (date: string) => void;
@@ -42,6 +48,10 @@ export function GroupScheduleCalendar({
     hour?: number,
   ) => void;
   onCreate: (date: string, hour?: number) => void;
+  optionsOpen: boolean;
+  onCloseOptions: () => void;
+  optionsFooter?: React.ReactNode;
+  actions?: React.ReactNode;
 }) {
   const colors = useAppColors();
   const accent = useGroupAccent();
@@ -93,7 +103,19 @@ export function GroupScheduleCalendar({
     <Pressable
       key={date}
       accessibilityRole="button"
-      accessibilityLabel={t("{date}, {time}, {count} items").replace("{date}", shortDate(date)).replace("{time}", hour === undefined ? t("All items") : formatClockTime(`${String(hour).padStart(2, "0")}:00`, state.settings.timeFormat, locale)).replace("{count}", String(events.length))}
+      accessibilityLabel={t("{date}, {time}, {count} items")
+        .replace("{date}", shortDate(date))
+        .replace(
+          "{time}",
+          hour === undefined
+            ? t("All items")
+            : formatClockTime(
+                `${String(hour).padStart(2, "0")}:00`,
+                state.settings.timeFormat,
+                locale,
+              ),
+        )
+        .replace("{count}", String(events.length))}
       accessibilityHint={t("Open this slot; long press to add a group event")}
       onPress={() => onOpenSlot(date, events, hour)}
       onLongPress={() => onCreate(date, hour)}
@@ -143,51 +165,163 @@ export function GroupScheduleCalendar({
   );
   return (
     <View style={styles.wrap}>
-      <View style={styles.toolbar}>
-        <View
-          style={[
-            styles.segments,
-            { backgroundColor: colors.canvas, borderColor: colors.border },
-          ]}
-        >
-          {(["week", "day", "month"] as const).map((option) => (
-            <Pressable
-              key={option}
-              accessibilityRole="button"
-              accessibilityLabel={option === "week" ? t("Week calendar view") : option === "day" ? t("Day calendar view") : t("Month calendar view")}
-              accessibilityState={{ selected: option === view }}
-              onPress={() => {
-                setView(option);
-                setMonthOpen(false);
-              }}
-              style={[
-                styles.segment,
-                option === view && { backgroundColor: colors.card },
-              ]}
-            >
-              <Text
-                style={[
-                  styles.controlText,
-                  { color: view === option ? colors.ink : colors.muted },
-                ]}
-              >
-                {option === "week"
-                  ? "Week"
-                  : option === "day"
-                    ? "Day"
-                    : "Month"}
+      <Modal
+        transparent
+        animationType="fade"
+        visible={optionsOpen}
+        onRequestClose={onCloseOptions}
+      >
+        <Pressable style={styles.optionsBackdrop} onPress={onCloseOptions}>
+          <Pressable
+            onPress={(event) => event.stopPropagation()}
+            style={[
+              styles.optionsSheet,
+              { backgroundColor: colors.card, borderColor: colors.border },
+            ]}
+          >
+            <View style={styles.optionsHeader}>
+              <Text style={[styles.optionsTitle, { color: colors.ink }]}>
+                Schedule view
               </Text>
-            </Pressable>
-          ))}
-        </View>
-        <Pressable
-          accessibilityRole="button"
-          onPress={() => onSelectDate(dateKey())}
-          style={[styles.today, { borderColor: colors.border }]}
-        >
-          <Text style={[styles.controlText, { color: colors.ink }]}>Today</Text>
+              <InfoPopover
+                label={t("Explain Schedule")}
+                message="Tap a slot to see its items. Hold an empty slot to plan something together."
+              />
+              <IconButton icon="close" label="Close" onPress={onCloseOptions} />
+            </View>
+            <ScrollView
+              style={styles.optionsScroll}
+              contentContainerStyle={styles.optionsContent}
+            >
+              <View style={styles.toolbar}>
+                <View
+                  style={[
+                    styles.segments,
+                    {
+                      backgroundColor: colors.canvas,
+                      borderColor: colors.border,
+                    },
+                  ]}
+                >
+                  {(["week", "day", "month"] as const).map((option) => (
+                    <Pressable
+                      key={option}
+                      accessibilityRole="button"
+                      accessibilityLabel={
+                        option === "week"
+                          ? t("Week calendar view")
+                          : option === "day"
+                            ? t("Day calendar view")
+                            : t("Month calendar view")
+                      }
+                      accessibilityState={{ selected: option === view }}
+                      onPress={() => {
+                        setView(option);
+                        setMonthOpen(false);
+                        onCloseOptions();
+                      }}
+                      style={[
+                        styles.segment,
+                        option === view && { backgroundColor: colors.card },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.controlText,
+                          {
+                            color: view === option ? colors.ink : colors.muted,
+                          },
+                        ]}
+                      >
+                        {option === "week"
+                          ? "Week"
+                          : option === "day"
+                            ? "Day"
+                            : "Month"}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => {
+                    onSelectDate(dateKey());
+                    onCloseOptions();
+                  }}
+                  style={[styles.today, { borderColor: colors.border }]}
+                >
+                  <Text style={[styles.controlText, { color: colors.ink }]}>
+                    Today
+                  </Text>
+                </Pressable>
+              </View>
+              <View style={styles.filters}>
+                {(
+                  [
+                    { id: "event", title: "Events", icon: "calendar-outline" },
+                    { id: "task", title: "To-dos", icon: "checkbox-outline" },
+                    {
+                      id: "reminder",
+                      title: "Reminders",
+                      icon: "notifications-outline",
+                    },
+                  ] as const
+                ).map((filter) => (
+                  <Pressable
+                    key={filter.id}
+                    accessibilityRole="checkbox"
+                    accessibilityLabel={t(filter.title)}
+                    accessibilityState={{ checked: filters[filter.id] }}
+                    onPress={() =>
+                      setFilters((current) => ({
+                        ...current,
+                        [filter.id]: !current[filter.id],
+                      }))
+                    }
+                    style={[
+                      styles.filter,
+                      {
+                        borderColor: filters[filter.id]
+                          ? accent
+                          : colors.border,
+                        backgroundColor: filters[filter.id]
+                          ? `${accent}12`
+                          : colors.card,
+                      },
+                    ]}
+                  >
+                    <Ionicons
+                      name={filter.icon}
+                      size={15}
+                      color={filters[filter.id] ? accent : colors.muted}
+                    />
+                    <Text
+                      style={[
+                        styles.filterText,
+                        {
+                          color: filters[filter.id] ? colors.ink : colors.muted,
+                        },
+                      ]}
+                    >
+                      {filter.title}
+                    </Text>
+                    <Ionicons
+                      name={
+                        filters[filter.id]
+                          ? "checkmark-circle"
+                          : "ellipse-outline"
+                      }
+                      size={17}
+                      color={filters[filter.id] ? accent : colors.muted}
+                    />
+                  </Pressable>
+                ))}
+              </View>
+              {optionsFooter}
+            </ScrollView>
+          </Pressable>
         </Pressable>
-      </View>
+      </Modal>
       {view !== "month" ? (
         <Card style={styles.weekNav}>
           <Pressable
@@ -221,7 +355,9 @@ export function GroupScheduleCalendar({
           </Pressable>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={view === "week" ? t("Next week") : t("Next day")}
+            accessibilityLabel={
+              view === "week" ? t("Next week") : t("Next day")
+            }
             onPress={() => shift(1)}
             style={styles.navButton}
           >
@@ -243,54 +379,7 @@ export function GroupScheduleCalendar({
           />
         </Card>
       ) : null}
-      <View style={styles.filters}>
-        {(
-          [
-            { id: "event", title: "Events", icon: "calendar-outline" },
-            { id: "task", title: "To-dos", icon: "checkbox-outline" },
-            {
-              id: "reminder",
-              title: "Reminders",
-              icon: "notifications-outline",
-            },
-          ] as const
-        ).map((filter) => (
-          <Pressable
-            key={filter.id}
-            accessibilityRole="checkbox"
-            accessibilityState={{ checked: filters[filter.id] }}
-            onPress={() =>
-              setFilters((current) => ({
-                ...current,
-                [filter.id]: !current[filter.id],
-              }))
-            }
-            style={[
-              styles.filter,
-              {
-                borderColor: filters[filter.id] ? accent : colors.border,
-                backgroundColor: filters[filter.id]
-                  ? `${accent}12`
-                  : colors.card,
-              },
-            ]}
-          >
-            <Ionicons
-              name={filter.icon}
-              size={14}
-              color={filters[filter.id] ? accent : colors.muted}
-            />
-            <Text
-              style={[
-                styles.filterText,
-                { color: filters[filter.id] ? colors.ink : colors.muted },
-              ]}
-            >
-              {filter.title}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
+      {actions}
       {view === "month" ? (
         <Card style={styles.agenda}>
           <View style={styles.agendaHeader}>
@@ -362,9 +451,18 @@ export function GroupScheduleCalendar({
         <Card style={styles.gridCard}>
           <ScrollView
             horizontal
-            onLayout={(event) => setGridViewportWidth(event.nativeEvent.layout.width)}
-            contentContainerStyle={[styles.gridScroller, { width: Math.max(view === "week" ? 350 : 100, gridViewportWidth) }]}
-            showsHorizontalScrollIndicator={view === "week" && gridViewportWidth < 350}
+            onLayout={(event) =>
+              setGridViewportWidth(event.nativeEvent.layout.width)
+            }
+            contentContainerStyle={[
+              styles.gridScroller,
+              {
+                width: Math.max(view === "week" ? 350 : 100, gridViewportWidth),
+              },
+            ]}
+            showsHorizontalScrollIndicator={
+              view === "week" && gridViewportWidth < 350
+            }
           >
             <View style={[styles.grid, view === "week" && styles.weekGrid]}>
               <View
@@ -377,7 +475,10 @@ export function GroupScheduleCalendar({
                     <Pressable
                       key={date}
                       accessibilityRole="button"
-                      accessibilityLabel={t("Show {date}").replace("{date}", shortDate(date))}
+                      accessibilityLabel={t("Show {date}").replace(
+                        "{date}",
+                        shortDate(date),
+                      )}
                       onPress={() => {
                         onSelectDate(date);
                         setView("day");
@@ -454,16 +555,37 @@ export function GroupScheduleCalendar({
           </ScrollView>
         </Card>
       )}
-      <Text style={[styles.hint, { color: colors.muted }]}>
-        Tap a slot to see its items. Hold an empty slot to plan something
-        together.
-      </Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   wrap: { gap: 8 },
+  optionsBackdrop: {
+    flex: 1,
+    padding: 12,
+    justifyContent: "flex-end",
+    backgroundColor: "rgba(0,0,0,.46)",
+  },
+  optionsSheet: {
+    width: "100%",
+    maxWidth: 520,
+    maxHeight: "80%",
+    alignSelf: "center",
+    borderWidth: 1,
+    borderRadius: 21,
+    padding: 14,
+    gap: 10,
+  },
+  optionsHeader: {
+    minHeight: 44,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  optionsTitle: { flex: 1, minWidth: 0, fontSize: 16, fontWeight: "800" },
+  optionsScroll: { flexGrow: 0 },
+  optionsContent: { gap: 12, paddingBottom: 2 },
   toolbar: { flexDirection: "row", gap: 8 },
   segments: {
     flex: 1,
@@ -474,7 +596,7 @@ const styles = StyleSheet.create({
   },
   segment: {
     flex: 1,
-    minHeight: 40,
+    minHeight: 44,
     borderRadius: 10,
     alignItems: "center",
     justifyContent: "center",
@@ -510,25 +632,24 @@ const styles = StyleSheet.create({
     gap: 5,
   },
   weekTitle: { fontSize: 12, fontWeight: "900" },
-  filters: { flexDirection: "row", gap: 6 },
+  filters: { gap: 6 },
   filter: {
-    flex: 1,
     minHeight: 44,
     borderWidth: 1,
     borderRadius: 12,
     flexDirection: "row",
     gap: 4,
     alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 4,
+    justifyContent: "flex-start",
+    paddingHorizontal: 10,
   },
-  filterText: { fontSize: 11, fontWeight: "700" },
+  filterText: { flex: 1, fontSize: 12, fontWeight: "700" },
   gridCard: { padding: 0, overflow: "hidden" },
   gridScroller: { flexGrow: 1 },
   grid: { flex: 1 },
   weekGrid: { minWidth: 350 },
   headerRow: {
-    minHeight: 54,
+    minHeight: 48,
     borderBottomWidth: StyleSheet.hairlineWidth,
     flexDirection: "row",
   },
@@ -541,15 +662,15 @@ const styles = StyleSheet.create({
   },
   dayName: { fontSize: 8, fontWeight: "900" },
   dayBadge: {
-    width: 27,
-    height: 27,
+    width: 24,
+    height: 24,
     borderRadius: 9,
     alignItems: "center",
     justifyContent: "center",
   },
   dayNumber: { fontSize: 10, fontWeight: "900" },
   hourRow: {
-    minHeight: 52,
+    minHeight: 48,
     borderBottomWidth: StyleSheet.hairlineWidth,
     flexDirection: "row",
   },
@@ -563,18 +684,17 @@ const styles = StyleSheet.create({
   cell: {
     flex: 1,
     minWidth: 44,
-    minHeight: 52,
+    minHeight: 48,
     borderLeftWidth: StyleSheet.hairlineWidth,
     padding: 3,
     gap: 3,
   },
   event: { borderRadius: 5, paddingHorizontal: 3, paddingVertical: 3 },
-  eventText: { fontSize: 7, lineHeight: 10, fontWeight: "900" },
+  eventText: { fontSize: 8, lineHeight: 11, fontWeight: "800" },
   dayEventText: { fontSize: 11, lineHeight: 16 },
   completed: { textDecorationLine: "line-through", opacity: 0.7 },
   more: { fontSize: 8, fontWeight: "900", textAlign: "center" },
   emptyPlus: { alignSelf: "center", marginTop: 12 },
-  hint: { fontSize: 11, lineHeight: 16 },
   agenda: { padding: 12 },
   agendaHeader: {
     flexDirection: "row",

@@ -1,14 +1,14 @@
 {
-  "capturedAt": "2026-09-08T21:21:54.946Z",
-  "outputSha256": "5009969413a4d05c28913439b42de19e150eeb58da6e789b51c95530c35f9a6e",
+  "capturedAt": "2026-09-08T22:44:30.090Z",
+  "outputSha256": "c35b30406315fe385a8ed87f2a10fd6d25598617bfcfa771d48abe3086670eb9",
   "runtime": {
     "schemaVersion": 1,
     "sourceHashes": {
       "avatar": "101db7ab7a73b6da9a16bcac19e98792042fe84280594b4edcd8b0df0c62a38b",
-      "menu": "c0cbde394eca121a2ed1a7790e6b2eff8c84e492a7eba07bcdedb20d9b367c15"
+      "menu": "5bd7bffd15112f80e87231d499c18484cb3aabb541b3e7aeebb2b489d0a48768"
     },
-    "exportSha256": "5a76dd9dd18958d8d5a67f574b7e14efa19710a1ac771563527cd6a4d69db099",
-    "exportedAt": "2026-09-08T21:21:14.553Z"
+    "exportSha256": "f10a446adf0361d0d69ac27e189990591d0465bcda37c1ad4e8ad0a9f39d8e5a",
+    "exportedAt": "2026-09-08T22:43:29.052Z"
   },
   "route": "/"
 }

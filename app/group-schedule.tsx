@@ -84,6 +84,7 @@ export default function GroupScheduleScreen() {
   const tutorialGuide = useTutorial();
   const safety = useUserSafety(state.currentUserId, tutorial.active);
   const [anchor, setAnchor] = useState(dateKey());
+  const [calendarOptionsOpen, setCalendarOptionsOpen] = useState(false);
   const schedule = useGroupSchedule(state.group.id, anchor);
   const groupTodos = useGroupTodos(
     state.group.id,
@@ -152,6 +153,7 @@ export default function GroupScheduleScreen() {
     setSlot(undefined);
     setFocusedItem(undefined);
     setFocusError(undefined);
+    setCalendarOptionsOpen(false);
   }, [state.group.id, state.currentUserId]);
 
   useEffect(() => {
@@ -512,17 +514,14 @@ export default function GroupScheduleScreen() {
   return (
     <Screen>
       <PageHeader
-        eyebrow={state.group.name}
-        translateEyebrow={false}
         title="Group Schedule"
-        subtitle="Your shared week. Plan, coordinate, and show up together."
         showMenu={false}
         action={
           <View style={styles.headerActions}>
             <IconButton
-              icon="add"
-              label="Add group event"
-              onPress={() => openEditor()}
+              icon="options-outline"
+              label="Schedule view"
+              onPress={() => setCalendarOptionsOpen(true)}
             />
             <IconButton
               icon="close"
@@ -581,90 +580,6 @@ export default function GroupScheduleScreen() {
           </Pressable>
         </Card>
       ) : null}
-      <Card style={styles.reminderCard}>
-        <Ionicons name="notifications-outline" size={20} color={accent} />
-        <View style={styles.copy}>
-          <Text style={[styles.title, { color: colors.ink }]}>
-            Group event reminders
-          </Text>
-          {remindersEnabled && (groupPreferences?.enabled === false ||
-          state.settings.notifications.pushEnabled === false ||
-          state.settings.notifications.mutedGroupIds?.includes(
-            state.group.id,
-          )) ? (
-            <Text style={[styles.meta, { color: colors.muted }]}>
-              Delivery is paused by your notification settings.
-            </Text>
-          ) : null}
-        </View>
-        <InfoPopover
-          label={t("About group event reminders")}
-          message="Notify me for reminders set on shared events. Off by default; group mute and notification settings still apply."
-        />
-        <Switch
-          accessibilityLabel="Group event reminders"
-          value={remindersEnabled}
-          onValueChange={(scheduleReminders) =>
-            updateSettings({
-              notifications: {
-                ...state.settings.notifications,
-                groupPreferencesByGroup: {
-                  ...state.settings.notifications.groupPreferencesByGroup,
-                  [state.group.id]: { ...groupPreferences, scheduleReminders },
-                },
-              },
-            })
-          }
-          trackColor={{ false: colors.border, true: `${accent}66` }}
-          thumbColor={remindersEnabled ? accent : colors.faint}
-        />
-      </Card>
-      <View style={styles.quickActions}>
-        <TutorialTarget
-          id="group-schedule-create"
-          style={styles.quickTarget}
-          onTutorialActivate={() => {
-            if (!tutorial.active) return;
-            openEditor();
-            setTitle("Evening group walk");
-            setNotes("Meet at the park entrance. Everyone is welcome.");
-            setStartTime("18:00");
-            setEndTime("19:00");
-            setReminderMinutes(15);
-            tutorialGuide.reportEvent({
-              actionId: "tutorial.group-schedule.open-editor",
-              scope: "isolated-preview",
-            });
-          }}
-          onTutorialDeactivate={() => setEditing(undefined)}
-        >
-        <Pressable
-          accessibilityRole="button"
-          onPress={() => openEditor()}
-          style={[styles.quick, { borderColor: colors.border }]}
-        >
-          <Ionicons name="add" size={18} color={accent} />
-          <Text style={[styles.buttonText, { color: colors.ink }]}>New event</Text>
-        </Pressable>
-        </TutorialTarget>
-        {state.group.groupTodosEnabled ? (
-          <Pressable
-            accessibilityRole="button"
-            onPress={() =>
-              router.push({
-                pathname: "/group-todo-editor",
-                params: { groupId: state.group.id, date: anchor },
-              })
-            }
-            style={[styles.quick, { borderColor: colors.border }]}
-          >
-            <Ionicons name="checkbox-outline" size={17} color={accent} />
-            <Text style={[styles.buttonText, { color: accent }]}>
-              New to-do
-            </Text>
-          </Pressable>
-        ) : null}
-      </View>
       {schedule.loading ? (
         <View accessibilityLiveRegion="polite" style={styles.loading}>
           <ActivityIndicator size="small" color={accent} />
@@ -674,13 +589,115 @@ export default function GroupScheduleScreen() {
         </View>
       ) : null}
       <TutorialTarget id="group-schedule-calendar">
-      <GroupScheduleCalendar
-        anchor={anchor}
-        onSelectDate={setAnchor}
-        eventsByDate={projected}
-        onOpenSlot={(date, events, hour) => setSlot({ date, events, hour })}
-        onCreate={(date, hour) => openEditor(undefined, date, hour)}
-      />
+        <GroupScheduleCalendar
+          anchor={anchor}
+          onSelectDate={setAnchor}
+          eventsByDate={projected}
+          onOpenSlot={(date, events, hour) => setSlot({ date, events, hour })}
+          onCreate={(date, hour) => openEditor(undefined, date, hour)}
+          optionsOpen={calendarOptionsOpen}
+          onCloseOptions={() => setCalendarOptionsOpen(false)}
+          optionsFooter={
+            <Card style={styles.reminderCard}>
+              <Ionicons name="notifications-outline" size={20} color={accent} />
+              <View style={styles.copy}>
+                <Text
+                  translate={false}
+                  style={[styles.meta, { color: colors.muted }]}
+                >
+                  {state.group.name}
+                </Text>
+                <Text style={[styles.title, { color: colors.ink }]}>
+                  Group event reminders
+                </Text>
+                {remindersEnabled &&
+                (groupPreferences?.enabled === false ||
+                  state.settings.notifications.pushEnabled === false ||
+                  state.settings.notifications.mutedGroupIds?.includes(
+                    state.group.id,
+                  )) ? (
+                  <Text style={[styles.meta, { color: colors.muted }]}>
+                    Delivery is paused by your notification settings.
+                  </Text>
+                ) : null}
+              </View>
+              <InfoPopover
+                label={t("About group event reminders")}
+                message="Notify me for reminders set on shared events. Off by default; group mute and notification settings still apply."
+              />
+              <Switch
+                accessibilityLabel="Group event reminders"
+                value={remindersEnabled}
+                onValueChange={(scheduleReminders) =>
+                  updateSettings({
+                    notifications: {
+                      ...state.settings.notifications,
+                      groupPreferencesByGroup: {
+                        ...state.settings.notifications.groupPreferencesByGroup,
+                        [state.group.id]: {
+                          ...groupPreferences,
+                          scheduleReminders,
+                        },
+                      },
+                    },
+                  })
+                }
+                trackColor={{ false: colors.border, true: `${accent}66` }}
+                thumbColor={remindersEnabled ? accent : colors.faint}
+              />
+            </Card>
+          }
+          actions={
+            <View style={styles.quickActions}>
+              <TutorialTarget
+                id="group-schedule-create"
+                style={styles.quickTarget}
+                onTutorialActivate={() => {
+                  if (!tutorial.active) return;
+                  openEditor();
+                  setTitle("Evening group walk");
+                  setNotes("Meet at the park entrance. Everyone is welcome.");
+                  setStartTime("18:00");
+                  setEndTime("19:00");
+                  setReminderMinutes(15);
+                  tutorialGuide.reportEvent({
+                    actionId: "tutorial.group-schedule.open-editor",
+                    scope: "isolated-preview",
+                  });
+                }}
+                onTutorialDeactivate={() => setEditing(undefined)}
+              >
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => openEditor()}
+                  style={[styles.quick, { borderColor: colors.border }]}
+                >
+                  <Ionicons name="add" size={18} color={accent} />
+                  <Text style={[styles.buttonText, { color: colors.ink }]}>
+                    New event
+                  </Text>
+                </Pressable>
+              </TutorialTarget>
+              {state.group.groupTodosEnabled ? (
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() =>
+                    router.push({
+                      pathname: "/group-todo-editor",
+                      params: { groupId: state.group.id, date: anchor },
+                    })
+                  }
+                  style={[styles.quick, { borderColor: colors.border }]}
+                >
+                  <Ionicons name="checkbox-outline" size={17} color={accent} />
+                  <Text style={[styles.buttonText, { color: accent }]}>
+                    New to-do
+                  </Text>
+                </Pressable>
+              ) : null}
+            </View>
+          }
+        />
       </TutorialTarget>
 
       <Modal
@@ -803,7 +820,7 @@ export default function GroupScheduleScreen() {
       <Modal
         transparent
         animationType="fade"
-      visible={editing !== undefined && editorGroupId === state.group.id}
+        visible={editing !== undefined && editorGroupId === state.group.id}
         onRequestClose={() => !saving && setEditing(undefined)}
       >
         <KeyboardAvoidingView
@@ -1142,14 +1159,13 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    padding: 12,
-    marginBottom: 8,
+    padding: 10,
   },
-  quickActions: { flexDirection: "row", gap: 8, marginBottom: 10 },
+  quickActions: { flexDirection: "row", gap: 6 },
   quickTarget: { flex: 1, minWidth: 0 },
   quick: {
     flex: 1,
-    minHeight: 46,
+    minHeight: 44,
     borderWidth: 1,
     borderRadius: 12,
     flexDirection: "row",

@@ -5,7 +5,7 @@ import { Pressable, StyleSheet, Switch, View } from "react-native";
 
 import { AppText as Text } from "@/src/components/AppText";
 import { useApp } from "@/src/state/AppProvider";
-import { activeLiveSetupStep, skipAllTutorialsSettings } from "@/src/domain/tutorialUsability";
+import { activeLiveSetupStep } from "@/src/domain/tutorialUsability";
 import { readableTextColor } from "@/src/domain/colors";
 import { IconButton, PageHeader, Screen } from "@/src/components/ui";
 import { useLocalization } from "@/src/i18n";
@@ -77,7 +77,7 @@ const GUIDE_GROUPS = [
 ] as const;
 
 export default function QuickGuideScreen() {
-  const { state, updateSettings } = useApp();
+  const { state, updateSettings, finishGuidedSetup } = useApp();
   const {
     guides,
     progressByGuide,
@@ -217,7 +217,7 @@ export default function QuickGuideScreen() {
           <Text style={[styles.collectionTitle, { color: colors.ink }]}>{t("Automatic tutorial prompts")}</Text>
           <Text style={[styles.collectionDetail, { color: colors.muted }]}>{t("Turn off to skip all automatic tutorials. You can still start any guide below.")}</Text>
         </View>
-        <Switch testID="tutorial-prompts-toggle" accessibilityLabel={t("Automatic tutorial prompts")} value={!state.settings.tutorialPromptsDisabled} onValueChange={(enabled) => updateSettings(enabled ? { tutorialPromptsDisabled: false } : skipAllTutorialsSettings())} trackColor={{ false: colors.border, true: accent }} />
+        <Switch testID="tutorial-prompts-toggle" accessibilityLabel={t("Automatic tutorial prompts")} value={!state.settings.tutorialPromptsDisabled} onValueChange={(enabled) => enabled ? updateSettings({ tutorialPromptsDisabled: false }) : finishGuidedSetup(true)} trackColor={{ false: colors.border, true: accent }} />
       </View>
 
       {!activeSession ? (

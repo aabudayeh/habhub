@@ -29,7 +29,7 @@ import { useSmoothReorderGesture } from "@/src/components/useSmoothReorderGestur
 import { usePageSwipeGesture } from "@/src/components/usePageSwipeGesture";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import { SelectionMenu } from "@/src/components/SelectionMenu";
-import { Button, Card, Chip, PageHeader, ProgressBar, Screen, SectionHeader } from "@/src/components/ui";
+import { Button, Card, Chip, HeaderIconButton, PageHeader, ProgressBar, Screen, SectionHeader } from "@/src/components/ui";
 import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import {
   dateKey,
@@ -3638,21 +3638,12 @@ function GymScreen() {
             action={
               <View style={styles.headerTools}>
                 {gymReminderMetric ? (
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={`${t("Reminders")}: ${gymReminderMetric.name}`}
+                  <HeaderIconButton
+                    icon="alarm-outline"
+                    label={`${t("Reminders")}: ${gymReminderMetric.name}`}
+                    translate={false}
                     onPress={openGymReminders}
-                    style={({ pressed }) => [
-                      styles.reminderShortcut,
-                      {
-                        backgroundColor: colors.card,
-                        borderColor: colors.border,
-                      },
-                      pressed && styles.modeChoicePressed,
-                    ]}
-                  >
-                    <Ionicons name="alarm-outline" size={15} color={accent} />
-                  </Pressable>
+                  />
                 ) : null}
               </View>
             }
@@ -5997,14 +5988,6 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   headerTools: { flexDirection: "row", alignItems: "center", gap: 4 },
-  reminderShortcut: {
-    width: 30,
-    height: 34,
-    borderWidth: 1,
-    borderRadius: 10,
-    alignItems: "center",
-    justifyContent: "center",
-  },
   modeSegment: {
     width: "100%",
     height: 34,

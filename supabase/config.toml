@@ -51,6 +51,10 @@ verify_jwt = false
 [functions.group-invite]
 verify_jwt = false
 
+[functions.group-note-media]
+# Verifies auth.getUser and obtains bounded cleanup paths through caller RLS.
+verify_jwt = false
+
 [functions.send-push]
 # The function performs membership authorization with auth.getUser.
 verify_jwt = false

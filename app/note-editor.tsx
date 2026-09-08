@@ -18,6 +18,8 @@ import {
 import { LocalizedAlert as Alert, useTranslation } from "@/src/i18n";
 import { InfoPopover } from "@/src/components/InfoPopover";
 import { NoteDrawingCanvas } from "@/src/components/NoteDrawingCanvas";
+import { RichNoteFormattingToolbar } from "@/src/components/RichNoteFormattingToolbar";
+import { safeRichNoteLink } from "@/src/domain/richNoteValue";
 import { SelectionMenu } from "@/src/components/SelectionMenu";
 import {
   cleanRichNoteValue,
@@ -344,29 +346,9 @@ export default function NoteEditor() {
   );
 
   const toolbar = (
-    <View
-      style={[
-        styles.toolbar,
-        {
-          borderColor: colors.border,
-          backgroundColor: colors.card,
-        },
-      ]}
-    >
-      <Tool
-        icon="arrow-undo"
-        onPress={() => composer.current?.undo()}
-      />
-      <Tool
-        icon="arrow-redo"
-        onPress={() => composer.current?.redo()}
-      />
-      <Tool text="H1" onPress={() => composer.current?.setBlock("h1")} />
-      <Tool text="H2" onPress={() => composer.current?.setBlock("h2")} />
-      <Tool
-        text="B"
-        onPress={() => {
-          composer.current?.toggleInline("bold");
+    <RichNoteFormattingToolbar
+        composer={composer}
+        onFormat={() => {
           if (richNoteHasText(body.current)) {
             tutorial.reportEvent({
               actionId: "tutorial.journal.format",
@@ -374,35 +356,15 @@ export default function NoteEditor() {
             });
           }
         }}
-      />
-      <Tool text="I" onPress={() => composer.current?.toggleInline("italic")} />
-      <Tool text="S" onPress={() => composer.current?.toggleInline("strike")} />
-      <Tool
-        icon="color-palette-outline"
-        onPress={() => setTextColorOpen((open) => !open)}
-      />
-      <Tool icon="list" onPress={() => composer.current?.setBlock("bullet")} />
-      <Tool
-        icon="checkbox-outline"
-        onPress={() => composer.current?.setBlock("check")}
-      />
-      <Tool
-        icon="chatbox-outline"
-        onPress={() => composer.current?.setBlock("quote")}
-      />
-      <Tool icon="link-outline" onPress={() => setLinkOpen(true)} />
-      <Tool
-        icon="brush-outline"
-        accessibilityLabel="Draw on note"
-        active={drawingMode}
-        onPress={() => {
+        onColor={() => setTextColorOpen((open) => !open)}
+        onLink={() => setLinkOpen(true)}
+        onDraw={() => {
           setTextColorOpen(false);
           setDrawingMode(true);
           setComposerFocused(false);
           Keyboard.dismiss();
         }}
-      />
-    </View>
+    />
   );
   const hasInk = journalDrawingHasInk(drawing);
   const drawingColors = [accent, ...DRAWING_COLORS].filter(
@@ -783,9 +745,8 @@ export default function NoteEditor() {
                   const text = linkText.trim();
                   const rawUrl = linkUrl.trim();
                   if (!text || !rawUrl) return;
-                  const url = /^[a-z][a-z0-9+.-]*:/i.test(rawUrl)
-                    ? rawUrl
-                    : `https://${rawUrl}`;
+                  const url = safeRichNoteLink(rawUrl, true);
+                  if (!url) return Alert.alert("Check the link", "Use a complete http or https website address.");
                   composer.current?.insertLink(text, url);
                   setLinkText("");
                   setLinkUrl("https://");

@@ -67,6 +67,12 @@ async function until(expression, label) {
 const textPresent = (text) => `document.body?.innerText?.includes(${JSON.stringify(text)})`;
 const byLabel = (label) => `document.querySelector('[aria-label="' + CSS.escape(${JSON.stringify(label)}) + '"]')`;
 const byText = (text) => `Array.from(document.querySelectorAll('div,span,button,a')).find((node) => node.textContent === ${JSON.stringify(text)} && !Array.from(node.children).some((child) => child.textContent === ${JSON.stringify(text)}))?.closest('[role="button"],[tabindex="0"],button,a')`;
+const closeOptions = "Array.from(document.querySelectorAll('[aria-label=\"Close\"]')).filter(node => node.getBoundingClientRect().width > 0).at(-1)";
+
+async function openCalendarOptions(mobile) {
+  await tap(byLabel("Schedule view"), "Open schedule view", mobile);
+  await until(`Boolean(${byLabel("Day calendar view")})`, "Calendar view options");
+}
 
 async function tap(expression, label, mobile, holdMs = 0) {
   const rect = await browser.evaluate(`(() => {
@@ -143,23 +149,31 @@ try {
     };
     await run("calendar-views", async () => {
       await navigate("/group-schedule", "Group Schedule");
-      await until(`Boolean(${byLabel("Day calendar view")})`, "New calendar");
+      await until(`Boolean(${byLabel("Schedule view")})`, "Compact calendar header");
+      const compactGridTop = await browser.evaluate("document.querySelector('[aria-label$=\" items\"]')?.getBoundingClientRect().top");
+      assert(Number.isFinite(compactGridTop) && compactGridTop < 300, `Calendar is buried below expanded controls: ${compactGridTop}px`);
+      assert.equal(await browser.evaluate(`Boolean(${byLabel("Day calendar view")})`), false, "Advanced calendar controls must start collapsed");
       await shot("calendar-default", width);
+      await openCalendarOptions(mobile);
+      await shot("calendar-options", width);
       const day = await tap(byLabel("Day calendar view"), "Day calendar view", mobile);
-      assert(day.width >= 44 && day.height >= 40);
+      assert(day.width >= 44 && day.height >= 44);
       await tap(byLabel("Next day"), "Next day", mobile);
       const nextDay = await browser.evaluate(`${byLabel("Choose a calendar date")}?.textContent`);
       await tap(byLabel("Previous day"), "Previous day", mobile);
       assert.notEqual(await browser.evaluate(`${byLabel("Choose a calendar date")}?.textContent`), nextDay);
+      await openCalendarOptions(mobile);
       await tap(byLabel("Week calendar view"), "Week calendar view", mobile);
       await shot("calendar-week", width);
       const cells = await browser.evaluate("Array.from(document.querySelectorAll('[aria-label$=\" items\"]')).map(n=>n.getBoundingClientRect()).map(r=>({width:r.width,height:r.height}))");
       assert(cells.length >= 168);
       assert(cells.every(cell => cell.width >= 43.5 && cell.height >= 44));
+      await openCalendarOptions(mobile);
       await tap(byLabel("Month calendar view"), "Month calendar view", mobile);
       await shot("calendar-month", width);
+      await openCalendarOptions(mobile);
       await tap(byLabel("Day calendar view"), "Return to day", mobile);
-      return {day,cells:cells.length,nextDay};
+      return {day,cells:cells.length,nextDay,compactGridTop};
     });
     await run("event-create-reminder-edit", async () => {
       // Stay in this document: demo group rows are intentionally memory-only.
@@ -195,11 +209,14 @@ try {
       return {created:true,editedAllDay:true,reminderCleared:true};
     });
     await run("reminder-preference-and-empty-slot", async () => {
+      await openCalendarOptions(mobile);
       const checkedState = `(() => { const node = ${byLabel("Group event reminders")}; const input = node?.matches('input') ? node : node?.querySelector('input'); return input ? input.checked : node?.getAttribute('aria-checked') === 'true'; })()`;
       const checked = await browser.evaluate(checkedState);
       await tap(byLabel("Group event reminders"), "Toggle reminder opt-in", mobile);
       await until(`(${checkedState}) !== ${JSON.stringify(checked)}`, "Reminder preference changed");
       await tap(byLabel("Group event reminders"), "Restore reminder opt-in", mobile);
+      await tap(closeOptions, "Close calendar options", mobile);
+      await until(`!Boolean(${byLabel("Day calendar view")})`, "Calendar options closed");
       const empty = "Array.from(document.querySelectorAll('[aria-label$=\"0 items\"]')).find(node => node.getBoundingClientRect().width > 50)";
       await tap(empty,"Hold empty calendar slot",mobile,650);
       await until(`Boolean(${byLabel("Event title")})`,"Slot creates event");
@@ -208,6 +225,20 @@ try {
       await until(`!Boolean(${byLabel("Event title")})`,"Canceled editor");
       await shot("calendar-finished",width);
       return {initialOptIn:checked,longPress:true};
+    });
+    await run("calendar-event-filter", async () => {
+      const title = "QA shared plan " + width;
+      await openCalendarOptions(mobile);
+      const eventToggle = await tap(byLabel("Events"), "Hide shared events", mobile);
+      assert(eventToggle.width >= 44 && eventToggle.height >= 44);
+      await tap(closeOptions, "Close filter options", mobile);
+      await until(`!(${textPresent(title)})`, "Event filter hides shared event");
+      await openCalendarOptions(mobile);
+      await tap(byLabel("Events"), "Restore shared events", mobile);
+      await tap(closeOptions, "Close restored filter options", mobile);
+      await until(textPresent(title), "Event filter restores shared event");
+      await shot("calendar-filter-restored", width);
+      return {eventToggle,restored:true};
     });
   }
 } finally {

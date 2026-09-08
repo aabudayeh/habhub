@@ -22,6 +22,7 @@ import {
   TextInput as NativeTextInput,
   StyleProp,
   StyleSheet,
+  useWindowDimensions,
   View,
   ViewStyle,
 } from "react-native";
@@ -304,6 +305,7 @@ export function PageHeader({
   translateTitle = true,
   translateEyebrow = true,
   translateSubtitle = true,
+  narrowActionRow = false,
 }: {
   eyebrow?: string;
   title: string;
@@ -314,14 +316,17 @@ export function PageHeader({
   translateTitle?: boolean;
   translateEyebrow?: boolean;
   translateSubtitle?: boolean;
+  narrowActionRow?: boolean;
 }) {
   const tutorial = useOptionalTutorial();
   const accent = useGroupAccent();
   const colors = useAppColors();
   const compact = useCompactMode();
+  const { width: viewportWidth } = useWindowDimensions();
+  const stackActions = narrowActionRow && viewportWidth < 360;
   const header = (
-    <View style={[styles.header, compact && styles.headerCompact]}>
-      <View style={styles.headerCopy}>
+    <View testID="page-header" style={[styles.header, compact && styles.headerCompact, stackActions && styles.headerStacked]}>
+      <View style={[styles.headerCopy, stackActions && styles.headerStackedCopy]}>
         {eyebrow ? (
           <Text
             translate={translateEyebrow}
@@ -331,13 +336,12 @@ export function PageHeader({
           </Text>
         ) : null}
         <Text
+          testID="page-header-title"
           translate={translateTitle}
-          numberOfLines={1}
-          adjustsFontSizeToFit
-          minimumFontScale={0.78}
           style={[
             styles.title,
             compact && styles.titleCompact,
+            viewportWidth < 360 && styles.titleNarrow,
             { color: colors.ink },
           ]}
         >
@@ -356,11 +360,11 @@ export function PageHeader({
           </Text>
         ) : null}
       </View>
-      <View style={styles.headerActions}>
+      <View testID="page-header-actions" style={[styles.headerActions, stackActions && styles.headerStackedActions]}>
         {action}
         {showMenu ? (
           <TutorialTarget id="menu-button">
-          <IconButton
+          <HeaderIconButton
             icon="menu-outline"
             label="Open menu"
             onPress={() => {
@@ -473,37 +477,52 @@ export function IconButton({
   label,
   filled = false,
   translate = true,
+  size = "default",
+  disabled = false,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
   onPress: () => void;
   label: string;
   filled?: boolean;
   translate?: boolean;
+  size?: "default" | "header";
+  disabled?: boolean;
 }) {
   const accent = useGroupAccent();
   const colors = useAppColors();
   const t = useTranslation();
   return (
     <Pressable
+      testID={size === "header" ? "header-icon" : undefined}
       accessibilityLabel={translate ? t(label) : label}
       accessibilityRole="button"
+      accessibilityState={{ disabled }}
+      aria-disabled={disabled}
+      disabled={disabled}
       hitSlop={2}
       onPress={onPress}
       style={({ pressed }) => [
         styles.iconButton,
+        size === "header" && styles.headerIconButton,
         { backgroundColor: colors.card, borderColor: colors.border },
         filled && styles.iconButtonFilled,
         filled && { backgroundColor: accent, borderColor: accent },
+        disabled && styles.disabled,
         pressed && styles.pressed,
       ]}
     >
       <Ionicons
         name={icon}
-        size={20}
-        color={filled ? palette.white : colors.ink}
+        size={size === "header" ? 18 : 20}
+        color={filled ? palette.white : size === "header" ? accent : colors.ink}
       />
     </Pressable>
   );
+}
+
+/** Match Today's compact icon surface while retaining a 44px touch area. */
+export function HeaderIconButton(props: Omit<React.ComponentProps<typeof IconButton>, "size">) {
+  return <IconButton {...props} size="header" />;
 }
 
 export function Button({
@@ -790,13 +809,16 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    gap: 10,
+    gap: 8,
     paddingTop: 8,
     marginBottom: 14,
   },
   headerCompact: { paddingTop: 5, marginBottom: 9 },
-  headerCopy: { flex: 1 },
-  headerActions: { flexDirection: "row", alignItems: "center", gap: 8 },
+  headerCopy: { flex: 1, minWidth: 0 },
+  headerActions: { flexDirection: "row", flexShrink: 0, alignItems: "center", gap: 6 },
+  headerStacked: { flexDirection: "column", alignItems: "stretch", gap: 6 },
+  headerStackedCopy: { flex: 0 },
+  headerStackedActions: { justifyContent: "flex-end" },
   eyebrow: {
     color: palette.primary,
     textTransform: "uppercase",
@@ -809,6 +831,7 @@ const styles = StyleSheet.create({
     letterSpacing: -0.35,
   },
   titleCompact: { fontSize: 20, lineHeight: 25, letterSpacing: -0.25 },
+  titleNarrow: { fontSize: 18, lineHeight: 23, letterSpacing: -0.3 },
   subtitle: {
     color: palette.muted,
     fontSize: 13,
@@ -852,6 +875,7 @@ const styles = StyleSheet.create({
     backgroundColor: palette.primary,
     borderColor: palette.primary,
   },
+  headerIconButton: { width: 40, height: 40, borderRadius: 13 },
   button: {
     minHeight: 48,
     paddingHorizontal: 18,

@@ -72,7 +72,7 @@ assert.match(
   "The tracked-goals card itself must keep its existing day-detail route",
 );
 assert.ok(
-  (progressSource.match(/accessibilityLabel=\{t\("Open recap"\)\}/g) ?? [])
+  (progressSource.match(/<HeaderIconButton\s+icon="sparkles-outline"\s+label="Open recap"/g) ?? [])
     .length >= 2,
   "Recap must remain available in both Progress layouts",
 );

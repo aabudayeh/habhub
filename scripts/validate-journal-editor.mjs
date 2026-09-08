@@ -8,6 +8,7 @@ const domEditor = fs.readFileSync(
 );
 const valueDomain = fs.readFileSync("src/domain/richNoteValue.ts", "utf8");
 const editor = fs.readFileSync("app/note-editor.tsx", "utf8");
+const formattingToolbar = fs.readFileSync("src/components/RichNoteFormattingToolbar.tsx", "utf8");
 const drawingCanvas = fs.readFileSync(
   "src/components/NoteDrawingCanvas.tsx",
   "utf8",
@@ -81,11 +82,12 @@ assert.doesNotMatch(
   "Text color selection must keep the palette open",
 );
 assert.match(
-  editor,
+  formattingToolbar,
   /composer\.current\?\.undo\(\)/,
   "Toolbar undo must use the editor's own history",
 );
-assert.match(editor, /composer\.current\?\.redo\(\)/);
+assert.match(formattingToolbar, /composer\.current\?\.redo\(\)/);
+assert.match(editor, /<RichNoteFormattingToolbar/);
 assert.match(editor, /handleComposerEditingChange/);
 assert.match(
   editor,

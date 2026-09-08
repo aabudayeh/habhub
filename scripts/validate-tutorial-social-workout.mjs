@@ -99,7 +99,8 @@ assert.match(gym, /activeTutorialTarget === "workout-templates"[\s\S]{0,180}setT
 assert.match(gym, /activeTutorialTarget === "workout-exercises"[\s\S]{0,180}setOpenExerciseId/);
 
 const notes = read("app/note-editor.tsx");
-assert.match(notes, /toggleInline\("bold"\)[\s\S]{0,260}tutorial\.journal\.format/);
+assert.match(notes, /<RichNoteFormattingToolbar[\s\S]{0,260}onFormat=[\s\S]{0,260}tutorial\.journal\.format/);
+assert.match(read("src/components/RichNoteFormattingToolbar.tsx"), /toggleInline\("bold"\); onFormat\?\.\(\)/);
 assert.match(notes, /richNoteHasText\(body\.current\)/);
 assert.match(notes, /tutorialDrawing[\s\S]{0,180}setDrawingMode\(true\)/);
 

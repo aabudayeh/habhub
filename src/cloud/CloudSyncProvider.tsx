@@ -42,6 +42,7 @@ import {
   pushCloudMessagesNow,
 } from "@/src/cloud/groupCloud";
 import { createInitialState } from "@/src/data/seed";
+import { emptyAccountEnergyProfile, emptyPersonalAccountContent, withoutUnchangedDemoAccountFixtures } from "@/src/domain/onboardingAccount";
 import { dateKey, dateWithOffsetFrom } from "@/src/domain/date";
 import {
   accountMemberProfile,
@@ -758,15 +759,7 @@ function createCleanAccountState(user: AccountIdentity): AppState {
     ...metric,
     activeFrom: today,
   }));
-  const energyProfile = {
-    age: 30,
-    sex: "unspecified" as const,
-    heightCm: 170,
-    weightKg: 70,
-    targetWeightKg: 70,
-    activityLevel: "sedentary" as const,
-    desiredWeeklyLossKg: 0.25,
-  };
+  const energyProfile = emptyAccountEnergyProfile();
   // Onboarding fills the starter shell with only the goals the user chooses.
   // Keeping it empty here avoids leaking every catalog preset into Leaderboard.
   const group = createPersonalSetupGroup({
@@ -784,6 +777,7 @@ function createCleanAccountState(user: AccountIdentity): AppState {
   });
   return {
     ...defaults,
+    ...emptyPersonalAccountContent(),
     currentUserId: user.id,
     group,
     groups: [group],
@@ -1026,6 +1020,7 @@ function bindStateToAccount(state: AppState, user: User): AppState {
   const sourceVersion = Number(state.version ?? 1);
   if (state.currentUserId !== user.id || isDemoBoundState(state))
     return createCleanAccountState(user);
+  state = withoutUnchangedDemoAccountFixtures(state, defaults);
   if (sourceVersion >= 20)
     return upgradeStateV21({
       ...state,

@@ -116,8 +116,10 @@ assert.match(source, /label=\{onboardingMode === "guided" \? "Make Today mine" :
 assert.match(source, /if \(onboardingMode === "guided"\) \{\s*await beginLiveSetup\(\);\s*return;/,
   "Guided welcome enters the live app directly, not the classic dashboard/profile forms");
 assert.match(source, /completeOnboarding\(false, "\/", \{ liveGuided: true, skipAllTutorials \}\)/);
-assert.match(source, /if \(preserveExisting\)[\s\S]{0,500}addMetrics\(missing\)/,
-  "Reopened guided setup must preserve existing catalogs and history");
+assert.match(source, /if \(options\?\.liveGuided\)[\s\S]{0,350}beginGuidedSetup\(options.skipAllTutorials\)[\s\S]{0,130}return;/,
+  "Guided welcome delegates fresh/existing-account safety atomically and never installs interest-based trackers");
+assert.match(providerSource, /case "beginGuidedSetup"[\s\S]{0,120}beginPersonalGuidedSetup\(state, DEFAULT_METRICS\)/,
+  "The live guide must decide against the latest reducer state, not a stale screen closure");
 assert.doesNotMatch(source, /label="Finish with this setup"/);
 assert.match(
   onboardingTranslationSource,
@@ -163,8 +165,8 @@ assert.match(
 );
 assert.match(
   source,
-  /if \(healthReady\)[\s\S]{0,100}health\.setHealthHistoryDays\(healthHistoryDays\)/,
-  "finishing onboarding must apply a selection changed after native connection",
+  /if \(healthReady && !options\?\.liveGuided\)[\s\S]{0,100}health\.setHealthHistoryDays\(healthHistoryDays\)/,
+  "Classic applies a changed native history preference; guided does not change health permissions or history",
 );
 assert.match(settingsSource, /\[0, "Today only"\]/);
 assert.match(

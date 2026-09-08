@@ -21,10 +21,6 @@ const outputPath = path.join(
   outputDirectory,
   "habhub-full-interactive-guide-1080x1920.mp4",
 );
-const profileDirectory = path.join(
-  os.tmpdir(),
-  "habhub-interactive-guide-edge-profile",
-);
 const baseUrl = (
   process.env.HABHUB_CAPTURE_URL ?? "http://127.0.0.1:8081"
 ).replace(/\/$/, "");
@@ -180,6 +176,7 @@ class CdpClient {
     this.sequence = 0;
     this.pending = new Map();
     this.listeners = new Map();
+    this.disconnected = false;
   }
 
   async connect() {
@@ -198,20 +195,26 @@ class CdpClient {
       for (const listener of this.listeners.get(message.method) ?? [])
         listener(message.params);
     });
-    this.socket.addEventListener("close", () => {
+    const disconnect = () => {
+      this.disconnected = true;
       for (const pending of this.pending.values()) {
         clearTimeout(pending.timeout);
         pending.reject(new Error("Edge debugging connection closed during capture."));
       }
       this.pending.clear();
-    });
+    };
+    this.socket.addEventListener("close", disconnect);
+    this.socket.addEventListener("error", disconnect);
     await new Promise((resolve, reject) => {
       this.socket.addEventListener("open", resolve, { once: true });
       this.socket.addEventListener("error", reject, { once: true });
+      this.socket.addEventListener("close", () => reject(new Error("Edge debugging connection closed during capture.")), { once: true });
     });
   }
 
   send(method, params = {}) {
+    if (this.disconnected || this.socket?.readyState !== WebSocket.OPEN)
+      return Promise.reject(new Error("Edge debugging connection closed during capture."));
     const id = ++this.sequence;
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
@@ -219,7 +222,13 @@ class CdpClient {
         reject(new Error(`Edge did not respond to ${method} within 30 seconds.`));
       }, 30_000);
       this.pending.set(id, { resolve, reject, timeout });
-      this.socket.send(JSON.stringify({ id, method, params }));
+      try {
+        this.socket.send(JSON.stringify({ id, method, params }));
+      } catch (error) {
+        clearTimeout(timeout);
+        this.pending.delete(id);
+        reject(error);
+      }
     });
   }
 
@@ -464,20 +473,16 @@ await fetch(baseUrl).catch((error) => {
   throw new Error(`HabHub web must already be running at ${baseUrl}: ${error.message}`);
 });
 
-assertInside(profileDirectory, os.tmpdir(), "capture-profile cleanup");
 assertInside(outputDirectory, exportsRoot, "interactive-guide output");
-fs.rmSync(profileDirectory, {
-  recursive: true,
-  force: true,
-  maxRetries: 8,
-  retryDelay: 250,
-});
-fs.mkdirSync(profileDirectory, { recursive: true });
 fs.mkdirSync(outputDirectory, { recursive: true });
 
 const temporaryRoot = fs.mkdtempSync(
   path.join(os.tmpdir(), "habhub-interactive-guide-"),
 );
+// Own a fresh profile for this recording. Never reuse or clean a previous run's
+// profile, which may still belong to a browser or interrupted recording.
+const profileDirectory = path.join(temporaryRoot, "edge-profile");
+fs.mkdirSync(profileDirectory);
 const framesDirectory = path.join(temporaryRoot, "frames");
 const concatPath = path.join(temporaryRoot, "frames.ffconcat");
 fs.mkdirSync(framesDirectory, { recursive: true });
@@ -893,12 +898,14 @@ try {
     client.close();
   }
   edge.kill();
-  if (!process.argv.includes("--keep-frames"))
+  if (!process.argv.includes("--keep-frames")) {
+    assertInside(temporaryRoot, os.tmpdir(), "owned capture cleanup");
     fs.rmSync(temporaryRoot, {
       recursive: true,
       force: true,
       maxRetries: 8,
       retryDelay: 250,
     });
+  }
   else console.log(`Kept capture frames at ${temporaryRoot}`);
 }

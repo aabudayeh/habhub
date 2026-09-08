@@ -25,6 +25,7 @@ import { createInitialState, DEFAULT_METRICS } from "@/src/data/seed";
 import { entriesForMetric } from "@/src/domain/dataIndex";
 import { accountOwnedCollections } from "@/src/domain/accountCollections";
 import { refreshDefaultDemoFixtures } from "@/src/domain/demoFixtures";
+import { beginPersonalGuidedSetup, emptyAccountEnergyProfile, finishPersonalGuidedSetup } from "@/src/domain/onboardingAccount";
 import {
   applyInheritedTrackerVisibility,
   purgeGoogleHealthAccountData,
@@ -518,6 +519,8 @@ type Action =
       trackedGoalIds: string[];
       historyMode: "today" | "history";
     }
+  | { type: "beginGuidedSetup"; skipAllTutorials: boolean }
+  | { type: "finishGuidedSetup"; skipAllTutorials: boolean }
   | {
       type: "updateGroupMetric";
       metricId: string;
@@ -2050,6 +2053,14 @@ function reducer(state: AppState, action: Action): AppState {
         },
       });
     }
+    case "beginGuidedSetup": {
+      const prepared = beginPersonalGuidedSetup(state, DEFAULT_METRICS);
+      return syncPersonalSetupGroup(action.skipAllTutorials
+        ? finishPersonalGuidedSetup(prepared, DEFAULT_METRICS, dateKey(), true)
+        : prepared);
+    }
+    case "finishGuidedSetup":
+      return syncPersonalSetupGroup(finishPersonalGuidedSetup(state, DEFAULT_METRICS, dateKey(), action.skipAllTutorials));
     case "configurePersonalMetrics": {
       const today = dateKey();
       const configuredState = { ...state, metrics: action.metrics };
@@ -3374,6 +3385,8 @@ type AppContextValue = {
     trackedGoalIds: string[],
     historyMode: "today" | "history",
   ) => void;
+  beginGuidedSetup: (skipAllTutorials?: boolean) => void;
+  finishGuidedSetup: (skipAllTutorials?: boolean) => void;
   updateGroupMetric: (
     metricId: string,
     changes: Partial<MetricDefinition>,
@@ -3747,6 +3760,12 @@ export function AppProvider({
           const restoredVersion = Number(restored.version ?? 1);
           const isDefaultDemo =
             (restored.group?.id ?? defaults.group.id) === defaults.group.id;
+          // An omitted optional body field must stay unknown in a real account.
+          // Only the deliberate demo may inherit its sample body's composition.
+          const restoredEnergyProfile = normalizeEnergyProfile({
+            ...(isDefaultDemo ? defaults.settings.energyProfile : emptyAccountEnergyProfile()),
+            ...restored.settings?.energyProfile,
+          });
           const restoredDemoStatusKeys = new Set(
             (restored.dailyMetricStatuses ?? []).map((status) =>
               [status.groupId, status.metricId, status.userId, status.localDate].join(
@@ -3913,10 +3932,7 @@ export function AppProvider({
                     defaults.settings.progressMetricIds),
               onboardingComplete:
                 restored.settings?.onboardingComplete ?? restoredVersion < 15,
-              energyProfile: normalizeEnergyProfile({
-                ...defaults.settings.energyProfile,
-                ...restored.settings?.energyProfile,
-              }),
+              energyProfile: restoredEnergyProfile,
               healthSync: {
                 ...defaults.settings.healthSync,
                 ...restored.settings?.healthSync,
@@ -4096,10 +4112,7 @@ export function AppProvider({
                   ...upgraded,
                   sections: { ...upgraded.sections, today: false },
                 };
-              const profile = {
-                ...defaults.settings.energyProfile,
-                ...restored.settings?.energyProfile,
-              };
+              const profile = restoredEnergyProfile;
               if (
                 restoredVersion < 4 &&
                 upgraded.id === "deficit" &&
@@ -4172,12 +4185,9 @@ export function AppProvider({
                 refreshedDemoFixtures
                   ? refreshedDemoFixtures.energyProfiles
                   : {
-                      ...defaults.energyProfiles,
+                      ...(isDefaultDemo ? defaults.energyProfiles : {}),
                       ...restored.energyProfiles,
-                      [restored.currentUserId ?? defaults.currentUserId]: {
-                        ...defaults.settings.energyProfile,
-                        ...restored.settings?.energyProfile,
-                      },
+                      [restored.currentUserId ?? defaults.currentUserId]: restoredEnergyProfile,
                     },
               ).map(([userId, profile]) => [
                 userId,
@@ -4799,6 +4809,10 @@ export function AppProvider({
           trackedGoalIds,
           historyMode,
         }),
+      beginGuidedSetup: (skipAllTutorials = false) =>
+        void commitAction({ type: "beginGuidedSetup", skipAllTutorials }),
+      finishGuidedSetup: (skipAllTutorials = false) =>
+        void commitAction({ type: "finishGuidedSetup", skipAllTutorials }),
       updateGroupMetric: (metricId, changes) =>
         void commitAction({ type: "updateGroupMetric", metricId, changes }),
       addGroupMetric: (metric) => void commitAction({ type: "addGroupMetric", metric }),

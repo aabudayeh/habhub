@@ -228,6 +228,7 @@ function Today() {
     state.settings.pinTodayHeaderAndFeaturedCard === true;
   const stickyTodaySummary =
     todaySummaryPinned && !tutorial.activeSession && !activeLiveSetupStep(state.settings);
+  const emptyLiveSetup = Boolean(activeLiveSetupStep(state.settings)) && state.metrics.length === 0;
   const heroLongPressRef = useRef(false);
   const [completionSortEnabled, setCompletionSortEnabled] = useState(true);
   const exitingEditMode = useRef(false);
@@ -1103,12 +1104,13 @@ function Today() {
               : undefined
           }
         >
-        <View style={styles.header}>
+        <View testID="page-header" style={styles.header}>
           <View style={styles.headerIdentity}>
             <Text style={[styles.eyebrow, { color: accent }]}>
               {compactDayDate(today, locale)}
             </Text>
             <Text
+              testID="page-header-title"
               numberOfLines={1}
               ellipsizeMode="tail"
               style={[styles.greeting, { color: colors.ink }]}
@@ -1118,7 +1120,7 @@ function Today() {
                 : `${t("Hi")}, ${memberDisplayName(state, user)}`}
             </Text>
           </View>
-          <View style={styles.headerActions}>
+          <View testID="page-header-actions" style={styles.headerActions}>
             {editing ? (
               <>
                 <HeaderIcon
@@ -1203,7 +1205,7 @@ function Today() {
           </View>
         </View>
         {!editing ? <LiveSetupCoach onEditToday={beginEditing} /> : null}
-        <TutorialTarget id="today-hero">
+        {!emptyLiveSetup ? <TutorialTarget id="today-hero">
         <AnimatedPressable
           testID="today-featured-card"
           accessibilityRole="button"
@@ -1394,7 +1396,7 @@ function Today() {
             </View>
           ) : null}
         </AnimatedPressable>
-        </TutorialTarget>
+        </TutorialTarget> : null}
         </View>
         <GoogleHealthTodayDisclosure
           hidden={
@@ -2475,7 +2477,10 @@ function HeaderIcon({
 }) {
   return (
     <Pressable
+      testID="header-icon"
       accessibilityLabel={label}
+      accessibilityRole="button"
+      hitSlop={2}
       onPress={onPress}
       style={[
         styles.headerIcon,

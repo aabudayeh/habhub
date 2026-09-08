@@ -177,11 +177,55 @@ try {
       await until(`Boolean(${byLabel("Cloud account & health sync")})`, "compact menu");
       assert.equal(await browser.evaluate(`Boolean(${byLabel("Find a page or setting")})`), false, "Menu must not restore the unwanted search field");
       assert.equal(await browser.evaluate(textPresent("Explore")), false, "Menu must not restore the unwanted Explore grid");
+      const orderedSettings = await browser.evaluate(`(() => {
+        const labels = ['Cloud account & health sync', 'Notifications', 'Display', 'Groups', 'Customize trackers', 'Quick guide', 'Legal & support'];
+        return [...document.querySelectorAll('[role="button"][aria-label]')]
+          .map(node => ({label: node.getAttribute('aria-label'), top: node.getBoundingClientRect().top}))
+          .filter(item => labels.includes(item.label)).sort((a, b) => a.top - b.top).map(item => item.label);
+      })()`);
+      assert.deepEqual(orderedSettings.slice(-2), ["Quick guide", "Legal & support"], "Help destinations stay last in the requested order");
       await shot("menu", width);
       const target = await tap(byLabel("Notifications"), "Notifications destination", mobile);
       await until("location.pathname === '/notifications'", "Notifications destination route");
       await until(textPresent("Notifications"), "notification preferences");
       return target;
+    });
+    await run("compact-page-headers", async () => {
+      const pages = [];
+      for (const [route, title] of [["/", "Your day"], ["/log", "What are you adding?"], ["/group", "Leaderboard"], ["/insights", "Progress"], ["/gym", "Workout"]]) {
+        await navigate(route, title);
+        if (route === "/group") {
+          await delay(1800);
+          if (await browser.evaluate(`Boolean(${byText("Dismiss")})`)) await tap(byText("Dismiss"), "Dismiss previous demo challenge result", mobile);
+        }
+        await until("Boolean(document.querySelector('[data-testid=\"page-header\"]'))", `Header on ${route}`);
+        const layout = await browser.evaluate(`(() => {
+          const header = document.querySelector('[data-testid="page-header"]');
+          const title = header.querySelector('[data-testid="page-header-title"]');
+          const actions = header.querySelector('[data-testid="page-header-actions"]');
+          const box = node => { const r = node.getBoundingClientRect(); return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height}; };
+          return {header:box(header),title:{...box(title),text:title.textContent,fontSize:getComputedStyle(title).fontSize,textOverflow:getComputedStyle(title).textOverflow,scrollWidth:title.scrollWidth,clientWidth:title.clientWidth},actions:box(actions),
+            icons:[...header.querySelectorAll('[data-testid="header-icon"]')].map(node=>({...box(node),label:node.getAttribute('aria-label'),radius:getComputedStyle(node).borderRadius})),viewport:document.documentElement.clientWidth};
+        })()`);
+        assert.ok(layout.icons.length > 0, `${route} must expose its actual header icons`);
+        for (const icon of layout.icons) {
+          assert.equal(icon.width, 40, `${route} ${icon.label} must match Today width`);
+          assert.equal(icon.height, 40, `${route} ${icon.label} must match Today height`);
+          assert.equal(icon.radius, "13px");
+          assert.ok(icon.left >= 0 && icon.right <= layout.viewport, `${route} ${icon.label} must stay onscreen`);
+        }
+        assert.ok(layout.title.right <= layout.actions.left + 1 || layout.title.bottom <= layout.actions.top, `${route} title must not overlap its actions`);
+        assert.ok(layout.title.scrollWidth <= layout.title.clientWidth + 1, `${route} title must not overflow its available width`);
+        assert.ok(layout.header.height <= 96, `${route} default header must stay compact`);
+        if (route === "/log") {
+          assert.equal(layout.title.text, "Log");
+          assert.ok(await browser.evaluate(textPresent("What are you adding?")), "Log retains its complete question in the tracker selector");
+        }
+        if (route === "/group" && width < 360) assert.ok(layout.title.height < 32, "Leaderboard must not break its name mid-word");
+        await shot(`header-${route === "/" ? "today" : route.slice(1)}`, width);
+        pages.push({route,...layout});
+      }
+      return pages;
     });
     await run("quick-guide", async () => {
       await navigate("/", "Your day");
@@ -195,6 +239,83 @@ try {
       await tap("document.querySelector('[data-testid=\"quick-guide-full-course\"]')", "Collapse complete course", mobile);
       await until(`!Boolean(${byLabel("Watch Complete HabHub guide")})`, "full course collapsed");
       return target;
+    });
+    await run("group-note-rich-editor", async () => {
+      await navigate("/group-notes", "Group Notes");
+      await tap(byLabel("Add group note"), "Create shared rich note", mobile);
+      await until("Boolean(document.querySelector('[contenteditable=\"true\"]'))", "Shared rich-text composer");
+      const controls = ["Undo", "Redo", "Heading 1", "Heading 2", "Bold", "Italic", "Strikethrough", "Text color", "Bullet list", "Checklist", "Quote", "Insert hyperlink"];
+      const sizes = await browser.evaluate(`(${JSON.stringify(controls)}).map(label => {
+        const node = document.querySelector('[aria-label="'+label+'"]'); const box = node?.getBoundingClientRect();
+        return {label, width:box?.width,height:box?.height,left:box?.left,right:box?.right};
+      })`);
+      for (const control of sizes) assert.ok(control.width >= 40 && control.height >= 40 && control.left >= 0 && control.right <= width, `Readable formatting toolbar: ${JSON.stringify(control)}`);
+      const title = `Shared rich note ${width}`;
+      await tap("document.querySelector('input[placeholder=\"Title (optional)\"]')", "Note title", mobile);
+      await browser.send("Input.insertText", { text: title });
+      await tap("document.querySelector('[contenteditable=\"true\"]')", "Note body", mobile);
+      await browser.send("Input.insertText", { text: "A shared plan" });
+      await browser.send("Input.dispatchKeyEvent", { type: "keyDown", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: 2 });
+      await browser.send("Input.dispatchKeyEvent", { type: "keyUp", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: 2 });
+      await tap(byLabel("Bold"), "Bold selected shared text", mobile);
+      await until("Boolean(document.querySelector('[contenteditable=\"true\"] strong, [contenteditable=\"true\"] b'))", "Bold editor markup");
+      await shot("group-note-editor", width);
+      await tap(byText("Save note"), "Save rich shared note", mobile);
+      await until(`!Boolean(document.querySelector('[contenteditable="true"]')) && ${textPresent(title)}`, "Shared note saved");
+      assert.equal(await browser.evaluate(textPresent("**A shared plan**")), false, "Cards render formatting rather than raw Markdown");
+      await tap("document.querySelector('[aria-label=\"Edit note\"]')", "Reopen saved note", mobile);
+      await until("Boolean(document.querySelector('[contenteditable=\"true\"] strong, [contenteditable=\"true\"] b'))", "Saved bold survives editor round trip");
+      await tap(byLabel("Close editor"), "Close unchanged note", mobile);
+      await until("!document.querySelector('[contenteditable=\"true\"]')", "Unchanged editor closes without prompt");
+      await shot("group-note-saved", width);
+      return {title, controls:sizes, mode:"credential-free local UI fixture; remote storage/RLS tested separately"};
+    });
+    await run("group-note-image-editor", async () => {
+      await tap(byLabel("Add group note"), "Create image note", mobile);
+      await until("Boolean(document.querySelector('[contenteditable=\"true\"]'))", "Image note editor");
+      await browser.send("Page.setInterceptFileChooserDialog", { enabled: true });
+      await tap(byText("Add image"), "Open real image picker", mobile);
+      await until("Boolean(document.querySelector('input[type=\"file\"]'))", "Image picker file input");
+      const { root: documentNode } = await browser.send("DOM.getDocument", { depth: -1, pierce: true });
+      const { nodeId } = await browser.send("DOM.querySelector", { nodeId: documentNode.nodeId, selector: "input[type=file]" });
+      const fixture = path.join(root, "assets", "images", "status-avatar-v2", "male", "m00-a00.png");
+      assert.ok(fs.existsSync(fixture), "Use an existing harmless image fixture");
+      await browser.send("DOM.setFileInputFiles", { nodeId, files: [fixture] });
+      await browser.send("Page.setInterceptFileChooserDialog", { enabled: false });
+      await until(`Boolean(${byLabel("Remove image")}) && !${textPresent("Opening…")}`, "Selected image preview");
+      await shot("group-note-image", width);
+      await tap(byText("Save note"), "Save image-only note", mobile);
+      await until("!document.querySelector('[contenteditable=\"true\"]')", "Image-only note saved");
+      await tap("document.querySelector('[aria-label=\"Edit note\"]')", "Reopen image-only note", mobile);
+      await until(`Boolean(${byLabel("Remove image")})`, "Image retained when reopening");
+      await tap(byLabel("Remove image"), "Remove attached image", mobile);
+      await tap("document.querySelector('[contenteditable=\"true\"]')", "Add text after removing image", mobile);
+      await browser.send("Input.insertText", { text: "Image removed; text retained." });
+      await tap(byText("Save note"), "Save image removal", mobile);
+      await until("!document.querySelector('[contenteditable=\"true\"]')", "Image removal saved");
+      await tap("document.querySelector('[aria-label=\"Edit note\"]')", "Verify removed image", mobile);
+      await until(textPresent("Image removed; text retained."), "Retained text");
+      assert.equal(await browser.evaluate(`Boolean(${byLabel("Remove image")})`), false, "Removed image must not return on edit");
+      await tap(byLabel("Close editor"), "Close verified note", mobile);
+      return {imagePicker:"actual browser file input", image:"existing local PNG fixture", scope:"local UI only; no external upload"};
+    });
+    await run("group-note-unsaved-guard", async () => {
+      await tap(byLabel("Add group note"), "Create unsaved note", mobile);
+      await until("Boolean(document.querySelector('[contenteditable=\"true\"]'))", "Unsaved composer");
+      await tap("document.querySelector('[contenteditable=\"true\"]')", "Unsaved text", mobile);
+      await browser.send("Input.insertText", { text: "Discard this draft only." });
+      await tap(byLabel("Close editor"), "Leave dirty note", mobile);
+      await until(textPresent("Save this note?"), "Shared note unsaved guard");
+      await shot("group-note-unsaved", width);
+      await tap(byText("Keep editing"), "Keep draft", mobile);
+      await until(`!${textPresent("Save this note?")}`, "Dismiss guard without losing draft");
+      assert.ok(await browser.evaluate(textPresent("Discard this draft only.")), "Keep editing preserves body");
+      await tap(byLabel("Close editor"), "Leave draft again", mobile);
+      await until(textPresent("Save this note?"), "Guard reopens");
+      await tap(byText("Discard"), "Discard unsaved shared draft", mobile);
+      await until("!document.querySelector('[contenteditable=\"true\"]')", "Draft discarded");
+      assert.equal(await browser.evaluate(textPresent("Discard this draft only.")), false, "Discard cannot publish the draft");
+      return {keptDraft:true,discardedWithoutPublishing:true};
     });
     await run("info-popover", async () => {
       await navigate("/metric-editor?id=water&duplicate=1", "Duplicate Water");

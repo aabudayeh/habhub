@@ -18,11 +18,29 @@ const leaderboard = read("app", "(tabs)", "group.tsx");
 const workout = read("app", "(tabs)", "gym.tsx");
 const publicProfile = read("app", "member-profile", "[id].tsx");
 const menu = read("app", "menu.tsx");
+const groupToolbar = read("src", "components", "GroupHubToolbar.tsx");
+const progress = read("app", "(tabs)", "insights.tsx");
 
 assert.doesNotMatch(menu, /AppTextInput|Find a page or setting|visibleDestinations|styles\.destinations/,
   "Menu must remain a compact settings list without the rejected search or Explore directory");
 for (const destination of ["/settings", "/notifications", "/display-settings", "/groups", "/legal-support", "/quick-guide", "/customize"])
   assert.ok(menu.includes(destination), `Compact Menu must preserve ${destination}`);
+const menuItems = menu.match(/const items = \[([\s\S]*?)\n\];/)?.[1] ?? "";
+const menuRoutes = [...menuItems.matchAll(/path: "([^"]+)"/g)].map((match) => match[1]);
+assert.deepEqual(menuRoutes.slice(-2), ["/quick-guide", "/legal-support"],
+  "Quick Guide is second-to-last; Legal & Support is the bottom settings destination");
+assert.match(log, /<PageHeader\s+title="Log"/,
+  "Log uses a short page title without clipping beside header actions");
+assert.match(log, /title=\{selected \? "Change tracker" : "What are you adding\?"\}/,
+  "The complete question stays in the tracker selector without duplicate guidance");
+assert.match(leaderboard, /title="Leaderboard"\s+narrowActionRow/,
+  "Narrow Leaderboard screens reserve a separate row for the compact icons");
+assert.match(ui, /headerCopy: \{ flex: 1, minWidth: 0 \}/);
+assert.match(ui, /headerIconButton: \{ width: 40, height: 40, borderRadius: 13 \}/);
+assert.match(ui, /hitSlop=\{2\}/, "40px header surfaces retain a 44px touch area");
+assert.match(ui, /size=\{size === "header" \? 18 : 20\}/);
+for (const source of [groupToolbar, leaderboard, progress, workout])
+  assert.match(source, /HeaderIconButton/, "Main page actions share Today's compact header icon geometry");
 
 const seededToday = seed.indexOf('"index"');
 const seededStatus = seed.indexOf('"status"');

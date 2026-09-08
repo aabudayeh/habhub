@@ -24,8 +24,8 @@ import { useAuth } from "@/src/auth/AuthProvider";
 import { setCloudSyncPaused } from "@/src/cloud/syncGate";
 import { dateKey } from "@/src/domain/date";
 import { ACTIVITY_LABELS } from "@/src/domain/energy";
+import { changedOnboardingProfile } from "@/src/domain/onboardingAccount";
 import {
-  guidedStarterTrackerIds,
   selectedOnboardingHealthDataTypes,
   syncOnboardingProfileBestEffort,
 } from "@/src/domain/onboarding";
@@ -194,7 +194,7 @@ export default function Onboarding() {
     updateSettings,
     updateEnergyProfile,
     configurePersonalMetrics,
-    addMetrics,
+    beginGuidedSetup,
     updateMemberName,
     flushLocalPersistence,
   } = useApp();
@@ -722,23 +722,21 @@ export default function Onboarding() {
       });
   }
 
-  function configure(options?: { keepLeaderboardVisible?: boolean; liveGuided?: boolean }) {
-    const metrics = metricDefinitions(options?.liveGuided ? guidedStarterTrackerIds(goals) : selected);
-    const preserveExisting = options?.liveGuided && (
-      state.settings.onboardingComplete ||
-      state.entries.some((entry) => entry.userId === state.currentUserId) ||
-      state.photos.some((photo) => photo.userId === state.currentUserId)
-    );
-    if (preserveExisting) {
-      // Reopening welcome must not replace a real catalog or goal history.
-      const missing = metrics.filter((metric) => !state.metrics.some((existing) => existing.id === metric.id));
-      if (missing.length) addMetrics(missing);
-    } else configurePersonalMetrics(
+  function configure(options?: { keepLeaderboardVisible?: boolean; liveGuided?: boolean; skipAllTutorials?: boolean }) {
+    if (options?.liveGuided) {
+      // The reducer decides against the latest state, protecting a concurrent
+      // import or existing catalog. Interests never silently install trackers.
+      beginGuidedSetup(options.skipAllTutorials);
+      updateSettings({ selectedGoals: goals, defaultLandingPage: "index" });
+      return;
+    }
+    const metrics = metricDefinitions(selected);
+    configurePersonalMetrics(
       metrics,
       metrics
         .filter((item) => trackedSelected.includes(item.id))
         .map((item) => item.id),
-      options?.liveGuided ? "today" : startHealthGoalsFromHistory ? "history" : "today",
+      startHealthGoalsFromHistory ? "history" : "today",
     );
     updateSettings({
       selectedGoals: goals,
@@ -757,7 +755,8 @@ export default function Onboarding() {
       showTodosToday,
       defaultLandingPage: landingPage,
     });
-    if (!options?.liveGuided) updateEnergyProfile(nextProfile);
+    const profileChanges = changedOnboardingProfile(profile, nextProfile);
+    if (Object.keys(profileChanges).length) updateEnergyProfile(profileChanges);
   }
 
   function saveDisplayNameLocally() {
@@ -800,21 +799,21 @@ export default function Onboarding() {
     route: string,
     options?: { keepLeaderboardVisible?: boolean; liveGuided?: boolean; skipAllTutorials?: boolean },
   ) {
-    if (healthReady)
+    if (healthReady && !options?.liveGuided)
       await health.setHealthHistoryDays(healthHistoryDays);
     configure(options);
     const name = saveDisplayNameLocally();
     const skipAllTutorials = options?.skipAllTutorials ?? state.settings.tutorialPromptsDisabled === true;
     const startPreview = shortTour && !skipAllTutorials && !options?.liveGuided;
     updateSettings({
-      healthHistoryDays,
+      healthHistoryDays: options?.liveGuided ? state.settings.healthHistoryDays : healthHistoryDays,
       onboardingVersion: ONBOARDING_FLOW_VERSION,
       tutorialComplete: !startPreview,
       tutorialGuideId: startPreview ? "essential" : undefined,
       tutorialGuideRunId: startPreview ? Date.now() : undefined,
       tutorialPromptsDisabled: skipAllTutorials,
       guidedSetupStep: options?.liveGuided && !skipAllTutorials ? "trackers" : "complete",
-      defaultLandingPage: landingPage,
+      defaultLandingPage: options?.liveGuided ? "index" : landingPage,
     });
     await flushLocalPersistence();
     await markOnboardingCompleted(accountId);
@@ -977,20 +976,20 @@ export default function Onboarding() {
         edges={["top", "bottom"]}
       >
         <ScrollView
-          contentContainerStyle={styles.welcomeContent}
+          contentContainerStyle={[styles.welcomeContent, styles.compactWelcomeContent]}
           showsVerticalScrollIndicator={false}
         >
           <View style={[styles.welcomeMark, { backgroundColor: accent }]}>
             <Ionicons name="navigate" size={30} color={palette.white} />
           </View>
           <Text style={[styles.welcomeEyebrow, { color: accent }]}>WELCOME TO HABHUB</Text>
-          <Text style={[styles.welcomeTitle, { color: colors.ink }]}>Build a Today page that works for you</Text>
-          <Text style={[styles.welcomeCopy, { color: colors.muted }]}>Pick your goals, make Today yours, and learn as you go. Personal details and connections can wait until you need them.</Text>
+          <Text style={[styles.welcomeTitle, styles.compactWelcomeTitle, { color: colors.ink }]}>Build a Today page that works for you</Text>
+          <Text style={[styles.welcomeCopy, styles.compactWelcomeCopy, { color: colors.muted }]}>Start small. Choose how you want to set up HabHub.</Text>
           <View style={styles.modeChoices}>
             <ModeChoice
               icon="sparkles-outline"
               title="Guided setup"
-              copy="Choose your interests, then build your real Today page as you explore. Small tips guide you inside the app."
+              copy="Name and interests first. Add your own trackers while learning Today."
               badge="RECOMMENDED"
               onPress={() => chooseOnboardingMode("guided")}
               colors={colors}
@@ -999,7 +998,7 @@ export default function Onboarding() {
             <ModeChoice
               icon="options-outline"
               title="Classic setup"
-              copy="Use the classic five-page setup. The interactive guide stays available if you want it later."
+              copy="Choose trackers and preferences in five short setup pages."
               badge="CLASSIC"
               onPress={() => chooseOnboardingMode("classic")}
               colors={colors}
@@ -1008,7 +1007,7 @@ export default function Onboarding() {
           </View>
           <View style={[styles.welcomeNote, { backgroundColor: colors.primarySoft }]}>
             <Ionicons name="shield-checkmark-outline" size={18} color={accent} />
-            <Text style={[styles.welcomeNoteText, { color: colors.muted }]}>Both paths save the same private, customizable setup. You can change everything later.</Text>
+            <Text style={[styles.welcomeNoteText, styles.compactWelcomeCopy, { color: colors.muted }]}>Change anything later. Connections and permissions are always optional.</Text>
           </View>
         </ScrollView>
       </SafeAreaView>
@@ -1055,7 +1054,7 @@ export default function Onboarding() {
               <>
                 <Title
                   title="What matters to you?"
-                  copy="Pick any priorities that feel useful. You can also continue with a balanced starter setup."
+                  copy={onboardingMode === "guided" ? "Choose a few interests. You will add trackers yourself on Today." : "Pick priorities to suggest a starter setup. Everything can be changed later."}
                   colors={colors}
                 />
                 <Text style={[styles.nameLabel, { color: colors.ink }]}>What should we call you?</Text>
@@ -1078,7 +1077,7 @@ export default function Onboarding() {
                     },
                   ]}
                 />
-                <View style={styles.goalGrid}>
+                <View style={[styles.goalGrid, onboardingMode === "guided" && styles.compactGoalGrid]}>
                   {GOALS.map((goal) => {
                     const chosen = goals.includes(goal.id);
                     return (
@@ -1091,6 +1090,7 @@ export default function Onboarding() {
                         onPress={() => toggleGoal(goal.id)}
                         style={({ pressed }) => [
                           styles.goalChoice,
+                          onboardingMode === "guided" && styles.compactGoalChoice,
                           {
                             backgroundColor: colors.card,
                             borderColor: chosen ? accent : colors.border,
@@ -1098,18 +1098,19 @@ export default function Onboarding() {
                           pressed && styles.pressed,
                         ]}
                       >
-                        <View style={[styles.goalIcon, { backgroundColor: `${accent}18` }]}>
-                          <Ionicons name={goal.icon} size={21} color={accent} />
+                        <View style={[styles.goalIcon, onboardingMode === "guided" && styles.compactGoalIcon, { backgroundColor: `${accent}18` }]}>
+                          <Ionicons name={goal.icon} size={onboardingMode === "guided" ? 18 : 21} color={accent} />
+                          {onboardingMode === "guided" && chosen ? <View style={[styles.compactGoalCheck, { backgroundColor: colors.card }]}><Ionicons name="checkmark-circle" size={14} color={accent} /></View> : null}
                         </View>
                         <View style={styles.grow}>
-                          <Text style={[styles.goalTitle, { color: colors.ink }]}>{goal.title}</Text>
-                          <Text style={[styles.goalCopy, { color: colors.muted }]}>{goal.copy}</Text>
+                          <Text style={[styles.goalTitle, onboardingMode === "guided" && styles.compactGoalTitle, { color: colors.ink }]}>{goal.title}</Text>
+                          {onboardingMode !== "guided" ? <Text style={[styles.goalCopy, { color: colors.muted }]}>{goal.copy}</Text> : null}
                         </View>
-                        <Ionicons
+                        {onboardingMode !== "guided" ? <Ionicons
                           name={chosen ? "checkmark-circle" : "ellipse-outline"}
                           size={21}
                           color={chosen ? accent : colors.faint}
-                        />
+                        /> : null}
                       </Pressable>
                     );
                   })}
@@ -1636,7 +1637,17 @@ function PermissionCard({ icon, title, copy, done, action, colors, accent }: { i
 }
 
 function ModeChoice({ icon, title, copy, badge, onPress, colors, accent }: { icon: keyof typeof Ionicons.glyphMap; title: string; copy: string; badge: string; onPress: () => void; colors: ReturnType<typeof useAppColors>; accent: string }) {
-  return <Pressable accessibilityRole="button" accessibilityLabel={`${title}. ${copy}`} onPress={onPress} style={({ pressed }) => [styles.modeChoice, { backgroundColor: colors.card, borderColor: badge === "RECOMMENDED" ? accent : colors.border }, pressed && styles.pressed]}><View style={styles.modeChoiceTop}><View style={[styles.modeChoiceIcon, { backgroundColor: `${accent}18` }]}><Ionicons name={icon} size={24} color={accent} /></View><View style={[styles.modeBadge, { backgroundColor: badge === "RECOMMENDED" ? accent : colors.primarySoft }]}><Text preserveColor={badge === "RECOMMENDED"} style={[styles.modeBadgeText, { color: badge === "RECOMMENDED" ? palette.white : accent }]}>{badge}</Text></View></View><Text style={[styles.modeChoiceTitle, { color: colors.ink }]}>{title}</Text><Text style={[styles.modeChoiceCopy, { color: colors.muted }]}>{copy}</Text><View style={styles.modeChoiceAction}><Text style={[styles.modeChoiceActionText, { color: accent }]}>Continue</Text><Ionicons name="arrow-forward" size={16} color={accent} /></View></Pressable>;
+  return (
+    <Pressable accessibilityRole="button" accessibilityLabel={`${title}. ${copy}`} onPress={onPress}
+      style={({ pressed }) => [styles.compactModeChoice, { backgroundColor: colors.card, borderColor: badge === "RECOMMENDED" ? accent : colors.border }, pressed && styles.pressed]}>
+      <View style={[styles.compactModeIcon, { backgroundColor: `${accent}18` }]}><Ionicons name={icon} size={21} color={accent} /></View>
+      <View style={styles.grow}>
+        <Text style={[styles.compactModeTitle, { color: colors.ink }]}>{title}</Text>
+        <Text style={[styles.compactModeCopy, { color: colors.muted }]}>{copy}</Text>
+      </View>
+      <Ionicons name="chevron-forward" size={18} color={accent} />
+    </Pressable>
+  );
 }
 
 function TodayPreference({ icon, title, copy, value, onValueChange, colors, accent }: { icon: keyof typeof Ionicons.glyphMap; title: string; copy: string; value: boolean; onValueChange: (value: boolean) => void; colors: ReturnType<typeof useAppColors>; accent: string }) {
@@ -1649,6 +1660,18 @@ function TourChoice({ selected, icon, title, copy, onPress }: { selected: boolea
 }
 
 const styles = StyleSheet.create({
+  compactWelcomeContent: { paddingVertical: 20, paddingHorizontal: 18, maxWidth: 620 },
+  compactWelcomeTitle: { fontSize: 25, lineHeight: 30 },
+  compactWelcomeCopy: { fontSize: 12, lineHeight: 17 },
+  compactModeChoice: { width: "100%", minHeight: 88, borderWidth: 1, borderRadius: 16, padding: 12, flexDirection: "row", alignItems: "center", gap: 10 },
+  compactModeIcon: { width: 36, height: 36, borderRadius: 12, alignItems: "center", justifyContent: "center" },
+  compactModeTitle: { fontSize: 14, lineHeight: 19, fontWeight: "800" },
+  compactModeCopy: { fontSize: 12, lineHeight: 17, marginTop: 3 },
+  compactGoalGrid: { flexDirection: "row", flexWrap: "wrap", gap: 7 },
+  compactGoalChoice: { flexGrow: 1, flexBasis: "46%", minHeight: 58, paddingHorizontal: 8, paddingVertical: 6, gap: 6, borderRadius: 12 },
+  compactGoalIcon: { width: 28, height: 28, borderRadius: 9 },
+  compactGoalCheck: { position: "absolute", right: -3, bottom: -3, width: 14, height: 14, borderRadius: 7 },
+  compactGoalTitle: { fontSize: 11, lineHeight: 15 },
   safe: { flex: 1 }, loading: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12 }, loadingText: { fontSize: 10, fontWeight: "800" }, welcomeContent: { width: "100%", maxWidth: 760, alignSelf: "center", flexGrow: 1, justifyContent: "center", paddingHorizontal: 20, paddingVertical: 32 }, welcomeMark: { width: 54, height: 54, borderRadius: 18, alignItems: "center", justifyContent: "center", marginBottom: 18 }, welcomeEyebrow: { fontSize: 10, fontWeight: "900", letterSpacing: 1.6, marginBottom: 7 }, welcomeTitle: { maxWidth: 620, fontSize: 31, lineHeight: 36, fontWeight: "900", letterSpacing: -0.9 }, welcomeCopy: { maxWidth: 620, fontSize: 14, lineHeight: 21, marginTop: 8 }, modeChoices: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 22 }, modeChoice: { flexGrow: 1, flexBasis: 260, minHeight: 178, borderWidth: 1, borderRadius: 22, padding: 16 }, modeChoiceTop: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }, modeChoiceIcon: { width: 44, height: 44, borderRadius: 14, alignItems: "center", justifyContent: "center" }, modeBadge: { borderRadius: 999, paddingHorizontal: 8, paddingVertical: 5 }, modeBadgeText: { fontSize: 9, fontWeight: "900", letterSpacing: 0.5 }, modeChoiceTitle: { fontSize: 17, lineHeight: 21, fontWeight: "900", marginTop: 14 }, modeChoiceCopy: { fontSize: 13, lineHeight: 19, marginTop: 4 }, modeChoiceAction: { marginTop: "auto", paddingTop: 13, flexDirection: "row", alignItems: "center", gap: 5 }, modeChoiceActionText: { fontSize: 12, fontWeight: "900" }, welcomeNote: { maxWidth: 620, borderRadius: 14, padding: 11, marginTop: 12, flexDirection: "row", alignItems: "center", gap: 8 }, welcomeNoteText: { flex: 1, fontSize: 12, lineHeight: 18, fontWeight: "700" }, page: { flex: 1, width: "100%", maxWidth: 760, alignSelf: "center", paddingHorizontal: 18, paddingBottom: 8 }, top: { minHeight: 58, flexDirection: "row", alignItems: "center", gap: 9 }, mark: { width: 30, height: 30, borderRadius: 10, alignItems: "center", justifyContent: "center" }, brand: { fontSize: 12, fontWeight: "900", letterSpacing: 1.5 }, step: { marginLeft: "auto", fontSize: 10, fontWeight: "800" }, modePill: { minHeight: 44, borderRadius: 999, paddingHorizontal: 8, alignItems: "center", justifyContent: "center" }, modePillText: { fontSize: 11, fontWeight: "900" }, body: { flex: 1 }, bodyContent: { paddingTop: 15, paddingBottom: 16 }, title: { fontSize: 25, lineHeight: 30, fontWeight: "900", letterSpacing: -0.6 }, subtitle: { fontSize: 13, lineHeight: 20, marginTop: 5, marginBottom: 13 }, nameLabel: { fontSize: 11, fontWeight: "900", marginBottom: 6 }, input: { minHeight: 48, borderWidth: 1, borderRadius: 11, paddingHorizontal: 10, fontSize: 14, fontWeight: "800", marginBottom: 8 }, defaultNotice: { flexDirection: "row", alignItems: "center", gap: 9, padding: 11, borderRadius: 15, marginBottom: 10 }, grow: { flex: 1, minWidth: 0 }, goalGrid: { gap: 9 }, goalChoice: { minHeight: 78, borderWidth: 1, borderRadius: 15, padding: 9, flexDirection: "row", alignItems: "center", gap: 9 }, goalIcon: { width: 37, height: 37, borderRadius: 12, alignItems: "center", justifyContent: "center" }, goalTitle: { fontSize: 13, lineHeight: 18, fontWeight: "900" }, goalCopy: { fontSize: 12, lineHeight: 17, marginTop: 2 }, pressed: { opacity: 0.72 }, legend: { flexDirection: "row", flexWrap: "wrap", gap: 13, marginBottom: 9 }, legendItem: { flexDirection: "row", alignItems: "center", gap: 5 }, legendText: { fontSize: 11, fontWeight: "800" }, setupStats: { minHeight: 65, borderWidth: 1, borderRadius: 16, flexDirection: "row", alignItems: "center", padding: 8, marginBottom: 12 }, setupStat: { flex: 1, alignItems: "center", gap: 2 }, setupValue: { fontSize: 19, fontWeight: "900" }, setupLabel: { fontSize: 11, fontWeight: "800" }, statDivider: { width: StyleSheet.hairlineWidth, height: 35 }, sectionLabel: { fontSize: 13, fontWeight: "900", marginTop: 8, marginBottom: 7 }, sectionHelp: { fontSize: 12, lineHeight: 18, marginTop: -3, marginBottom: 8 }, todayPreference: { minHeight: 66, borderWidth: 1, borderRadius: 15, paddingHorizontal: 11, paddingVertical: 9, flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 7 }, metricGroup: { marginBottom: 5 }, metricGroupLabel: { fontSize: 11, fontWeight: "900", letterSpacing: 0.4, marginBottom: 5 }, metricGrid: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", gap: 7, marginBottom: 9 }, metricCard: { minHeight: 70, borderWidth: 1, borderRadius: 14, padding: 8, flexDirection: "row", alignItems: "center", gap: 7 }, metricIcon: { width: 30, height: 30, borderRadius: 9, alignItems: "center", justifyContent: "center" }, metricName: { fontSize: 12, lineHeight: 17, fontWeight: "900", flexShrink: 1 }, metricState: { fontSize: 10, fontWeight: "700", marginTop: 2 }, trackerActions: { flexDirection: "row", alignItems: "center", gap: 2, flexShrink: 0 }, miniFlag: { width: 40, height: 44, borderRadius: 8, alignItems: "center", justifyContent: "center" }, metricCheck: { width: 40, height: 44, alignItems: "center", justifyContent: "center" }, profileCard: { borderWidth: 1, borderRadius: 17, padding: 12, marginBottom: 9 }, fields: { flexDirection: "row", gap: 8 }, fieldLabel: { fontSize: 11, fontWeight: "800", marginBottom: 4 }, fieldGroupLabel: { fontSize: 10, fontWeight: "900", marginTop: 3, marginBottom: 6 }, wrap: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 8 }, rateControls: { flexDirection: "row", alignItems: "center", gap: 7, marginBottom: 7 }, rateChips: { flex: 1, flexDirection: "row", flexWrap: "wrap", gap: 5 }, rateInputWrap: { width: 92, minHeight: 34, borderWidth: 1, borderRadius: 11, paddingHorizontal: 7, flexDirection: "row", alignItems: "center" }, rateInput: { flex: 1, minWidth: 0, paddingVertical: 5, fontSize: 10, fontWeight: "900", textAlign: "right" }, rateUnit: { marginLeft: 3, fontSize: 7, fontWeight: "800" }, weightEstimate: { minHeight: 32, borderRadius: 11, paddingHorizontal: 9, flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 7 }, weightEstimateText: { flex: 1, fontSize: 9, lineHeight: 12, fontWeight: "800" }, validation: { fontSize: 9, fontWeight: "800", marginBottom: 7 }, permission: { minHeight: 76, borderWidth: 1, borderRadius: 17, padding: 12, flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 9 }, done: { fontSize: 11, fontWeight: "900" }, importCard: { borderWidth: 1, borderRadius: 17, padding: 12, marginBottom: 9 }, switchRow: { minHeight: 48, borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 9, flexDirection: "row", alignItems: "center", gap: 10 }, readySummary: { flexDirection: "row", alignItems: "center", gap: 10, borderRadius: 16, padding: 13, marginBottom: 7 }, tourChoice: { minHeight: 76, borderWidth: 1, borderRadius: 17, padding: 11, flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 8 }, switchCard: { minHeight: 58, borderWidth: 1, borderRadius: 15, paddingHorizontal: 11, paddingVertical: 8, flexDirection: "row", alignItems: "center", gap: 10 }, infoOverlay: { flex: 1, padding: 20, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(8,14,24,.66)" }, infoCard: { width: "100%", maxWidth: 430, borderWidth: 1, borderRadius: 20, padding: 16, gap: 12 }, infoHeading: { flexDirection: "row", alignItems: "center", gap: 10 }, infoIcon: { width: 42, height: 42, borderRadius: 13, alignItems: "center", justifyContent: "center" }, infoTitle: { fontSize: 16, lineHeight: 20, fontWeight: "900" }, infoGroup: { fontSize: 9, lineHeight: 12, fontWeight: "800", marginTop: 2 }, infoClose: { width: 32, height: 32, borderRadius: 12, alignItems: "center", justifyContent: "center" }, infoDescription: { fontSize: 12, lineHeight: 18, fontWeight: "700" }, infoMetaRow: { flexDirection: "row", flexWrap: "wrap", gap: 6 }, infoMeta: { minHeight: 28, borderRadius: 10, paddingHorizontal: 8, flexDirection: "row", alignItems: "center", gap: 5 }, infoMetaText: { fontSize: 11, lineHeight: 16, fontWeight: "900" }, infoDone: { minHeight: 40, borderRadius: 12, alignItems: "center", justifyContent: "center" }, infoDoneText: { color: palette.white, fontSize: 11, fontWeight: "900" }, footer: { minHeight: 64, flexDirection: "row", alignItems: "center", gap: 8 }, back: { minHeight: 44, padding: 12, justifyContent: "center" }, backText: { fontSize: 11, fontWeight: "900" }, next: { flex: 1 },
   targetEditor: { borderWidth: 1, borderRadius: 16, marginTop: 4, overflow: "hidden" },
   optionalSetup: { marginTop: 8, marginBottom: 14 },

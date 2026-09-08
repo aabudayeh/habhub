@@ -53,7 +53,7 @@ import {
 import {
   Avatar,
   Card,
-  IconButton,
+  HeaderIconButton,
   PageHeader,
   ProgressBar,
   Screen,
@@ -1507,11 +1507,12 @@ function LeaderboardScreen() {
       <View style={styles.compactHeaderSpacing}>
         <PageHeader
           title="Leaderboard"
+          narrowActionRow
           tutorialId="leaderboard-header"
           action={
             editing ? (
               <View style={styles.headerActions}>
-                <IconButton
+                <HeaderIconButton
                   icon="settings-outline"
                   label={canManageGroup ? "Group settings" : "Tracker sharing"}
                   onPress={() => router.navigate("/group-settings" as never)}

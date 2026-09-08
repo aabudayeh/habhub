@@ -29,7 +29,7 @@ Thirteen 2.3-second beats keep the master inside Apple's 30-second limit.
 | 13.8–16.1s | Challenges | A little challenge. A shared goal. |
 | 16.1–18.4s | Recap | Every win has a story. |
 | 18.4–20.7s | Duplicate tracker | Track what matters to you. |
-| 20.7–23.0s | Quick Guide | Start simple. Learn as you go. |
+| 20.7–23.0s | Clean live setup on Today | Start simple. Learn as you go. |
 | 23.0–25.3s | Schedule | Make room for your routine. |
 | 25.3–27.6s | Journal | More than the numbers. |
 | 27.6–29.9s | HabHub outro | Make today feel like yours. |
@@ -81,7 +81,7 @@ being performed. Short captions support a sound-off viewing experience.
 30. Tune display, page order and navigation.
 31. Understand opt-in food-goal and unrecorded-step behavior.
 32. Learn page by page in Watch or Practice mode.
-33. Find optional power in the uncluttered menu.
+33. Open profile and settings from the compact Menu.
 34. HabHub outro.
 
 ## Full interactive Watch guide — continuous live capture
@@ -104,7 +104,9 @@ insert must be versioned as a derivative without replacing this uncut master.
 ## Truth gates
 
 - The Today capture must show the compact default navigation. Schedule,
-  Journal and Performance remain optional and are introduced through the menu.
+  Journal and Performance stay out of that default tab bar; contextual controls
+  and display customization keep them available. Menu contains profile and
+  settings, not the removed Find field or Explore directory.
 - Progress photos are always labelled as synthetic demo imagery.
 - Background health import, notification delivery/taps, Android widgets,
   Android progress-video export and Apple Health permission flows require
